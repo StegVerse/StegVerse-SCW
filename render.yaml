@@ -1,0 +1,48 @@
+---
+
+## `render.yaml`
+```yaml
+services:
+  - type: redis
+    name: scw-redis
+    ipAllowList: []
+
+  - type: web
+    name: scw-api
+    env: docker
+    dockerfilePath: api/Dockerfile
+    plan: starter
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          name: scw-redis
+          type: redis
+          property: connectionString
+      - key: API_PORT
+        value: "8080"
+    healthCheckPath: /healthz
+
+  - type: worker
+    name: scw-worker
+    env: docker
+    dockerfilePath: worker/Dockerfile
+    plan: starter
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          name: scw-redis
+          type: redis
+          property: connectionString
+
+  - type: web
+    name: scw-ui
+    env: static
+    buildCommand: npm install && npm run build && npx next export -o out
+    staticPublishPath: out
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: ""
