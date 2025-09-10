@@ -33,6 +33,7 @@ services:
   - type: web
     name: scw-ui
     env: static
+    rootDir: ui
     buildCommand: npm install && npm run build && npx next export -o out
     staticPublishPath: out
     routes:
