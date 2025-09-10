@@ -12,7 +12,7 @@ export default function Home() {
     const res = await fetch(`${apiUrl}/v1/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "My First Project" }),
+      body: JSON.stringify({ name: "My First Project" })
     });
     const data = await res.json();
     setProjectId(data.project_id || "");
@@ -23,7 +23,7 @@ export default function Home() {
     const res = await fetch(`${apiUrl}/v1/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project_id: projectId, language: "python", code }),
+      body: JSON.stringify({ project_id: projectId, language: "python", code })
     });
     const data = await res.json();
     setRunId(data.run_id || "");
@@ -74,8 +74,7 @@ export default function Home() {
         <div style={{ background: "#111", color: "#0f0", padding: 10, whiteSpace: "pre-wrap" }}>
           <strong>Status:</strong> {result.status}
           <br />
-          {Array.isArray(result.logs) &&
-            result.logs.map((line, i) => <div key={i}>{line}</div>)}
+          {Array.isArray(result.logs) && result.logs.map((line, i) => <div key={i}>{line}</div>)}
           {result.result && <div>Result: {result.result}</div>}
         </div>
       )}
