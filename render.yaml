@@ -1,7 +1,3 @@
----
-
-## `render.yaml`
-```yaml
 services:
   - type: redis
     name: scw-redis
