@@ -32,7 +32,7 @@ services:
     name: scw-ui
     env: static
     rootDir: ui
-    buildCommand: npm install && npm run build && npx next export
+    buildCommand: npm install && npm run build
     staticPublishPath: out
     routes:
       - type: rewrite
