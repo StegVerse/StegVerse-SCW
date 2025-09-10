@@ -30,16 +30,16 @@ services:
           type: redis
           property: connectionString
 
-  - type: web
-    name: scw-ui
-    env: static
-    rootDir: ui
-    buildCommand: npm install && npm run build && npx next export -o out
-    staticPublishPath: out
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
-    envVars:
-      - key: NEXT_PUBLIC_API_URL
-        value: ""
+- type: web
+  name: scw-ui
+  env: static
+  rootDir: ui
+  buildCommand: npm install && npm run build && npx next export
+  staticPublishPath: out
+  routes:
+    - type: rewrite
+      source: /*
+      destination: /index.html
+  envVars:
+    - key: NEXT_PUBLIC_API_URL
+      value: ""
