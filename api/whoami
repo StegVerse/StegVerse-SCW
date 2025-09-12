@@ -1,0 +1,9 @@
+# api/main.py (already present, keep it)
+from fastapi import Request
+
+@app.get("/whoami")
+def whoami(request: Request):
+    host = request.headers.get("x-forwarded-host") or request.url.hostname
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    base = f"{proto}://{host}"
+    return {"url": base, "service": "scw-api"}
