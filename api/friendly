@@ -1,0 +1,31 @@
+# api/main.py (add near the bottom)
+from fastapi.responses import HTMLResponse
+
+@app.get("/friendly", response_class=HTMLResponse)
+def friendly(request: Request):
+    host = request.headers.get("x-forwarded-host") or request.url.hostname
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    base = f"{proto}://{host}"
+    html = f"""
+    <html>
+      <head><meta name="viewport" content="width=device-width, initial-scale=1"/>
+      <title>SCW API Helper</title></head>
+      <body style="font-family: system-ui; max-width: 720px; margin: 24px auto;">
+        <h1>SCW API Helper</h1>
+        <p><strong>API Base:</strong> <code id="api">{base}</code></p>
+        <p>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('api').textContent)">Copy API URL</button>
+          <a href="{base}/healthz" target="_blank" style="margin-left:12px;">Open /healthz</a>
+          <a href="{base}/whoami" target="_blank" style="margin-left:12px;">Open /whoami</a>
+        </p>
+        <hr/>
+        <h3>Quick Start</h3>
+        <ol>
+          <li>Copy API URL (button above)</li>
+          <li>Paste it into the UI field (if not prefilled)</li>
+          <li>Create Project → Run</li>
+        </ol>
+      </body>
+    </html>
+    """
+    return HTMLResponse(content=html, status_code=200)
