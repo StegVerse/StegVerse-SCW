@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
-# Allow one or more UI origins via env (comma-separated). Example:
+# Allow one or more UI origins via env (comma-separated), e.g.:
 # UI_ORIGINS="https://scw-ui.onrender.com,https://dev-ui.example.com"
 UI_ORIGINS = [o.strip() for o in os.getenv("UI_ORIGINS", "").split(",") if o.strip()]
 # Quick toggle for testing: CORS_ALLOW_ALL=1
@@ -37,8 +37,6 @@ if CORS_ALLOW_ALL:
         allow_headers=["*"],
     )
 else:
-    # If UI_ORIGINS is empty, you can hardcode your UI here during first boot:
-    # UI_ORIGINS = ["https://scw-ui.onrender.com"]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=UI_ORIGINS or ["https://scw-ui.onrender.com"],
@@ -68,13 +66,26 @@ def ensure_project_exists(project_id: str):
     if not r.exists(f"project:{project_id}"):
         raise HTTPException(status_code=404, detail="Project not found")
 
+def _create_project_inner(name: str):
+    project_id = str(uuid.uuid4())
+    key = f"project:{project_id}"
+    r.hset(
+        key,
+        mapping={
+            "project_id": project_id,
+            "name": name or "Untitled",
+            "created_at": str(now_ts()),
+        },
+    )
+    r.sadd("projects", project_id)
+    return {"project_id": project_id, "name": name or "Untitled"}
+
 # --------------------------
 # System / Discovery
 # --------------------------
 @app.get("/healthz")
 def healthz():
     try:
-        # Light ping to Redis
         r.ping()
         return {"status": "ok"}
     except Exception as e:
@@ -82,7 +93,6 @@ def healthz():
 
 @app.get("/whoami")
 def whoami(request: Request):
-    # Respect reverse-proxy headers from Render/CF/etc
     host = request.headers.get("x-forwarded-host") or request.url.hostname
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     base = f"{proto}://{host}"
@@ -130,24 +140,16 @@ def friendly(request: Request):
 # --------------------------
 @app.post("/v1/projects")
 def create_project(body: ProjectCreate):
-    project_id = str(uuid.uuid4())
-    key = f"project:{project_id}"
-    r.hset(
-        key,
-        mapping={
-            "project_id": project_id,
-            "name": body.name,
-            "created_at": str(now_ts()),
-        },
-    )
-    # Keep an index for listing
-    r.sadd("projects", project_id)
-    return {"project_id": project_id, "name": body.name}
+    return _create_project_inner(body.name)
+
+# GET fallback for convenience (no JSON body required)
+@app.get("/v1/projects/create")
+def create_project_simple(name: str = "Auto Smoke"):
+    return _create_project_inner(name)
 
 @app.get("/v1/projects")
 def list_projects(limit: int = 50):
     ids = list(r.smembers("projects"))
-    # naive “recent first” by created_at; fetch and sort
     projects = []
     for pid in ids:
         data = r.hgetall(f"project:{pid}")
@@ -170,7 +172,6 @@ def create_run(body: RunCreate):
     run_id = str(uuid.uuid4())
     now = str(now_ts())
 
-    # Store run metadata
     run_key = f"run:{run_id}"
     r.hset(
         run_key,
@@ -183,10 +184,8 @@ def create_run(body: RunCreate):
             "updated_at": now,
         },
     )
-    # Optional index
     r.sadd("runs", run_id)
 
-    # Queue payload for the worker
     payload = {
         "run_id": run_id,
         "project_id": body.project_id,
@@ -204,13 +203,8 @@ def get_run(run_id: str):
         raise HTTPException(status_code=404, detail="Run not found")
 
     data = r.hgetall(run_key)
-
-    # Optional logs list (worker can push lines to this list)
-    # e.g., r.rpush(f"run:{run_id}:logs", "Started...", "Executing...", "Done")
     logs_key = f"run:{run_id}:logs"
     logs: List[str] = r.lrange(logs_key, 0, -1) if r.exists(logs_key) else []
-
-    # Optional final result string
     result_key = f"run:{run_id}:result"
     result: Optional[str] = r.get(result_key)
 
