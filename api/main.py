@@ -1,22 +1,28 @@
+# --- imports ---
 import os, json, uuid, time
 from typing import Optional
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 import redis
 
+# --- redis client ---
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+# --- app ---
+app = FastAPI(title="StegVerse SCW API", version="0.1.0")
+
+# --- CORS (must be AFTER app = FastAPI) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://scw-ui.onrender.com"],  # your UI origin
+    allow_origins=["https://scw-ui.onrender.com"],  # or ["*"] temporarily while testing
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-
-app = FastAPI(title="StegVerse SCW API", version="0.1.0")
+# ... your routes below (healthz, projects, runs, whoami, friendly, etc...(
 
 class Project(BaseModel):
     name: str
