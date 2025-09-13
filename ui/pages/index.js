@@ -1,9 +1,12 @@
+// ui/pages/index.js
 import { useState, useEffect } from "react";
 
 function heuristicFromRenderHost() {
   if (typeof window === "undefined") return "";
-  const m = window.location.hostname.match(/^scw-ui-(.+)\.onrender\.com$/);
-  return m && m[1] ? `https://scw-api-${m[1]}.onrender.com` : "";
+  const h = window.location.hostname;               // e.g. scw-ui.onrender.com (no hash)
+  // If you ever rename with a hash, you could map scw-ui-<hash> -> scw-api-<hash> here.
+  if (h === "scw-ui.onrender.com") return "https://scw-api.onrender.com";
+  return "";
 }
 
 function pickInitialApiUrl() {
@@ -19,7 +22,7 @@ function pickInitialApiUrl() {
   // 3) Render heuristic
   const guess = heuristicFromRenderHost();
   if (guess) return guess;
-  // 4) Else empty; we'll try same-origin /whoami after mount
+  // 4) Else empty; same-origin /whoami will try after mount
   return "";
 }
 
@@ -32,37 +35,25 @@ export default function Home() {
   const [statusMsg, setStatusMsg] = useState("");
   const [discoveryNotes, setDiscoveryNotes] = useState([]);
 
-  // Log how we’re deciding (for the “Discovery Guide” panel)
+  // Discovery guide (what we tried, in order)
   useEffect(() => {
     const notes = [];
-    notes.push("1) Look for NEXT_PUBLIC_API_URL at build time.");
-    if (process.env.NEXT_PUBLIC_API_URL) {
-      notes.push("→ Found build-time env var; using it.");
-    } else {
-      notes.push("→ Not set.");
-    }
-    notes.push("2) Look for saved value in localStorage.");
-    if (typeof window !== "undefined" && localStorage.getItem("apiUrl")) {
-      notes.push("→ Found saved value; will use it.");
-    } else {
-      notes.push("→ None saved.");
-    }
-    notes.push("3) If hosted on Render, map scw-ui-<hash>.onrender.com → scw-api-<hash>.onrender.com.");
-    if (heuristicFromRenderHost()) {
-      notes.push("→ Heuristic produced a candidate.");
-    } else {
-      notes.push("→ Not on Render or pattern not matched.");
-    }
-    notes.push("4) Probe same-origin /whoami (works if a reverse proxy routes API & UI together).");
+    notes.push("1) Build-time env NEXT_PUBLIC_API_URL");
+    notes.push(process.env.NEXT_PUBLIC_API_URL ? "→ Found; using it." : "→ Not set.");
+    notes.push("2) Saved local value (localStorage)");
+    notes.push((typeof window !== "undefined" && localStorage.getItem("apiUrl")) ? "→ Found; will use it." : "→ None saved.");
+    notes.push("3) Host heuristic for Render naming");
+    notes.push(heuristicFromRenderHost() ? "→ Produced a candidate." : "→ No candidate.");
+    notes.push("4) Same-origin /whoami probe (works if a proxy routes API+UI together)");
     setDiscoveryNotes(notes);
   }, []);
 
-  // Persist when changed
+  // Persist URL locally
   useEffect(() => {
     if (apiUrl) localStorage.setItem("apiUrl", apiUrl);
   }, [apiUrl]);
 
-  // 4) Same-origin probe for /whoami if still empty
+  // Try same-origin /whoami if still empty
   useEffect(() => {
     (async () => {
       if (apiUrl) return;
@@ -72,41 +63,54 @@ export default function Home() {
           const j = await r.json();
           if (j && j.url) setApiUrl(j.url);
         }
-      } catch (_) {/* ignore */}
+      } catch {}
     })();
   }, [apiUrl]);
 
-  // Auto smoke on detect
+  // Auto-smoke when apiUrl present
   useEffect(() => {
     (async () => {
       if (!apiUrl) { setStatusMsg("API URL not detected. Paste or use Auto-detect."); return; }
       try {
         setStatusMsg("Pinging API...");
         const h = await fetch(`${apiUrl}/healthz`);
-        if (!h.ok) throw new Error("healthz not ok");
+        if (!h.ok) throw new Error(`healthz HTTP ${h.status}`);
 
         setStatusMsg("API OK. Creating project...");
-        const p = await fetch(`${apiUrl}/v1/projects`, {
+        const res = await fetch(`${apiUrl}/v1/projects`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: "Auto Smoke" })
-        }).then(r => r.json());
-        if (!p.project_id) throw new Error("No project_id");
-        setProjectId(p.project_id);
+          body: JSON.stringify({ name: "Auto Smoke" }),
+        });
+        const txt = await res.text();
+        let data = {};
+        try { data = JSON.parse(txt); } catch {}
+        if (!res.ok || !data.project_id) {
+          setStatusMsg(`Create failed (HTTP ${res.status}): ${txt.slice(0,200)}`);
+          return;
+        }
+        setProjectId(data.project_id);
 
         setStatusMsg("Queuing run...");
-        const run = await fetch(`${apiUrl}/v1/runs`, {
+        const res2 = await fetch(`${apiUrl}/v1/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ project_id: p.project_id, language: "python", code })
-        }).then(r => r.json());
-        if (!run.run_id) throw new Error("No run_id");
-        setRunId(run.run_id);
-
+          body: JSON.stringify({ project_id: data.project_id, language: "python", code }),
+        });
+        const txt2 = await res2.text();
+        let d2 = {};
+        try { d2 = JSON.parse(txt2); } catch {}
+        if (!res2.ok || !d2.run_id) {
+          setStatusMsg(`Run failed (HTTP ${res2.status}): ${txt2.slice(0,200)}`);
+          return;
+        }
+        setRunId(d2.run_id);
         setStatusMsg("Polling...");
+
         const poll = setInterval(async () => {
           try {
-            const j = await fetch(`${apiUrl}/v1/runs/${run.run_id}`).then(r => r.json());
+            const jr = await fetch(`${apiUrl}/v1/runs/${d2.run_id}`);
+            const j = await jr.json();
             setResult(j);
             if (j.status === "completed" || j.status === "failed") {
               clearInterval(poll);
@@ -118,7 +122,7 @@ export default function Home() {
           }
         }, 1000);
       } catch (e) {
-        setStatusMsg("Auto-run failed. Paste API URL or tap Auto-detect.");
+        setStatusMsg(`Auto-run failed: ${String(e)}`);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -126,20 +130,16 @@ export default function Home() {
 
   async function autoDetectNow() {
     setStatusMsg("Auto-detecting...");
-    // try build-time env
-    if (process.env.NEXT_PUBLIC_API_URL) { setStatusMsg("Using build-time env."); setApiUrl(process.env.NEXT_PUBLIC_API_URL); return; }
-    // try saved
+    if (process.env.NEXT_PUBLIC_API_URL) { setApiUrl(process.env.NEXT_PUBLIC_API_URL.trim()); setStatusMsg("Using build-time env."); return; }
     const saved = (typeof window !== "undefined") ? localStorage.getItem("apiUrl") : "";
-    if (saved && saved.trim()) { setStatusMsg("Using saved value."); setApiUrl(saved.trim()); return; }
-    // try render heuristic
+    if (saved && saved.trim()) { setApiUrl(saved.trim()); setStatusMsg("Using saved value."); return; }
     const guess = heuristicFromRenderHost();
-    if (guess) { setStatusMsg("Using Render heuristic."); setApiUrl(guess); return; }
-    // try same-origin whoami
+    if (guess) { setApiUrl(guess); setStatusMsg("Using host heuristic."); return; }
     try {
       const r = await fetch("/whoami");
       if (r.ok) {
         const j = await r.json();
-        if (j && j.url) { setStatusMsg("Using same-origin /whoami."); setApiUrl(j.url); return; }
+        if (j && j.url) { setApiUrl(j.url); setStatusMsg("Using same-origin /whoami."); return; }
       }
     } catch {}
     setStatusMsg("Could not detect automatically. Please paste API URL.");
@@ -150,7 +150,7 @@ export default function Home() {
     setStatusMsg("Pinging API...");
     try {
       const r = await fetch(`${apiUrl}/healthz`);
-      setStatusMsg(r.ok ? "API OK." : "API not healthy.");
+      setStatusMsg(r.ok ? "API OK." : `API not healthy (HTTP ${r.status}).`);
     } catch {
       setStatusMsg("Ping failed.");
     }
@@ -175,7 +175,7 @@ export default function Home() {
         <input
           value={apiUrl}
           onChange={(e) => setApiUrl(e.target.value)}
-          placeholder="https://scw-api-abc123.onrender.com"
+          placeholder="https://scw-api.onrender.com"
           style={{ width: "100%" }}
         />
       </p>
@@ -198,8 +198,7 @@ export default function Home() {
         <div style={{ paddingTop: 8, color: "#333" }}>
           {discoveryNotes.map((n, i) => <div key={i}>{n}</div>)}
           <div style={{ marginTop: 8 }}>
-            <em>Rationale:</em> we favor baked-in config (env var), then stable local memory (saved value),
-            then a safe heuristic for Render subdomains, and finally a same-origin probe for proxies.
+            <em>Rationale:</em> explicit config (env) → saved memory → host heuristic → same-origin probe.
           </div>
         </div>
       </details>
@@ -207,15 +206,23 @@ export default function Home() {
       <hr style={{ margin: "20px 0" }} />
 
       <button onClick={async () => {
+        if (!apiUrl) return;
         setStatusMsg("Creating project...");
         try {
-          const p = await fetch(`${apiUrl}/v1/projects`, {
+          const res = await fetch(`${apiUrl}/v1/projects`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: "Manual" })
-          }).then(r => r.json());
-          setProjectId(p.project_id || "");
-          setStatusMsg(p.project_id ? "Project created." : "Failed to create project.");
+          });
+          const txt = await res.text();
+          let data = {};
+          try { data = JSON.parse(txt); } catch {}
+          if (!res.ok || !data.project_id) {
+            setStatusMsg(`Create failed (HTTP ${res.status}): ${txt.slice(0,200)}`);
+            return;
+          }
+          setProjectId(data.project_id);
+          setStatusMsg("Project created.");
         } catch { setStatusMsg("Request failed."); }
       }} disabled={!apiUrl}>Create Project</button>
 
@@ -231,15 +238,23 @@ export default function Home() {
 
       <p>
         <button onClick={async () => {
+          if (!apiUrl || !projectId) return;
           setStatusMsg("Queuing run...");
           try {
-            const run = await fetch(`${apiUrl}/v1/runs`, {
+            const res = await fetch(`${apiUrl}/v1/runs`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ project_id: projectId, language: "python", code })
-            }).then(r => r.json());
-            setRunId(run.run_id || "");
-            setStatusMsg(run.run_id ? "Polling..." : "Failed to start run.");
+            });
+            const txt = await res.text();
+            let data = {};
+            try { data = JSON.parse(txt); } catch {}
+            if (!res.ok || !data.run_id) {
+              setStatusMsg(`Run failed (HTTP ${res.status}): ${txt.slice(0,200)}`);
+              return;
+            }
+            setRunId(data.run_id);
+            setStatusMsg("Polling...");
           } catch { setStatusMsg("Request failed."); }
         }} disabled={!projectId || !apiUrl}>Run</button>
       </p>
