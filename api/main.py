@@ -1,5 +1,6 @@
 # --- imports ---
 import os, json, uuid, time
+from pydantic import BaseModel, Field
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
