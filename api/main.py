@@ -2,7 +2,16 @@ import os, json, uuid, time
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 import redis
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://scw-ui.onrender.com"],  # your UI origin
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
