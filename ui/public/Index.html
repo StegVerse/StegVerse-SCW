@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>StegVerse: Genesis Beta</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:40px auto;padding:0 16px}
+  .muted{color:#666} .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:16px 0}
+  .row{display:flex;gap:12px;flex-wrap:wrap} a.button{display:inline-block;padding:10px 14px;border-radius:8px;border:1px solid #ddd;text-decoration:none}
+  code{background:#f6f8fa;border-radius:6px;padding:2px 6px}
+  .ok{color:#0a0} .err{color:#b00}
+</style>
+<script>
+// >>> EDIT THIS if needed:
+const API = 'https://scw-api.onrender.com'.replace(/\/+$/,'');  // your API base
+
+async function probe(){
+  const el = document.getElementById('apiStatus');
+  const svc = document.getElementById('apiService');
+  if(!API){ el.textContent = 'API URL not set'; el.className='err'; return; }
+  try{
+    const r = await fetch(API + '/whoami', {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j = await r.json();
+    el.textContent = 'Connected'; el.className='ok';
+    svc.textContent = j.service || 'scw-api';
+  }catch(e){
+    el.textContent = 'Unreachable — ' + e.message; el.className='err';
+    svc.textContent = 'n/a';
+  }
+}
+window.addEventListener('DOMContentLoaded', probe);
+</script>
+</head>
+<body>
+  <h1>StegVerse: Genesis Beta</h1>
+  <p class="muted">Autonomous, AI-secured communication (beta).</p>
+
+  <div class="card">
+    <h2>Download</h2>
+    <div class="row">
+      <!-- Replace the APK URL below when you publish a GitHub Release asset -->
+      <a class="button" id="apk" href="#" onclick="alert('APK link coming shortly.');return false;">StegTalk Genesis APK</a>
+      <!-- If you have a recovery QR online later, link it here -->
+      <a class="button" href="#" onclick="alert('Recovery QR coming shortly.');return false;">Recovery QR</a>
+      <a class="button" href="#fallback">SCW Fallback</a>
+    </div>
+    <small class="muted">Android sideload. Enable developer mode & “Unknown sources”.</small>
+  </div>
+
+  <div class="card">
+    <h2>Status</h2>
+    <p>API: <strong id="apiStatus">Checking…</strong> • Service: <code id="apiService">…</code></p>
+    <div class="row">
+      <a class="button" href="#legal" onclick="document.getElementById('legal').scrollIntoView({behavior:'smooth'});return false;">Legal (stub)</a>
+      <a class="button" href="#consent" onclick="document.getElementById('consent').scrollIntoView({behavior:'smooth'});return false;">Consent (coming soon)</a>
+    </div>
+  </div>
+
+  <div id="legal" class="card">
+    <h2>Legal Dashboard (stub)</h2>
+    <pre id="report" style="white-space:pre-wrap">Loading weekly report…</pre>
+    <script>
+      (async () => {
+        const el = document.getElementById('report');
+        try{
+          const r = await fetch(API + '/v1/legal/report/latest', {cache:'no-store'});
+          const j = await r.json();
+          el.textContent = (j.markdown || JSON.stringify(j, null, 2)).slice(0, 5000);
+        }catch(e){
+          el.textContent = 'No report yet (this is OK for first boot).';
+        }
+      })();
+    </script>
+  </div>
+
+  <div id="fallback" class="card">
+    <h2>SCW Fallback</h2>
+    <p>If the Builder Portal is redeploying, this page remains available. SCW can continue building via the API in the background.</p>
+  </div>
+
+  <div id="consent" class="card">
+    <h2>Consent Gate (coming soon)</h2>
+    <p>Human/AI contributor consent will appear here once enabled.</p>
+  </div>
+
+  <p class="muted">© StegVerse — Genesis build. If you’re seeing this, we’re live.</p>
+</body>
+</html>
