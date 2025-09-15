@@ -10,6 +10,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from routes.ops import router as ops_router   # add this import
+
 
 # --------------------------
 # Config & Redis connection
@@ -24,7 +26,7 @@ UI_ORIGINS = [o.strip() for o in os.getenv("UI_ORIGINS", "").split(",") if o.str
 CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL", "0") == "1"
 
 app = FastAPI(title="StegVerse SCW API", version="0.1.0")
-
+app.include_router(ops_router)                # add this line
 # --------------------------
 # CORS
 # --------------------------
