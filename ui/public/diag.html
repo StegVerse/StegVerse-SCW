@@ -32,14 +32,12 @@
 
 <fieldset id="bootstrapBox" style="display:none">
   <legend>Bootstrap Admin (first-time only)</legend>
-  <p>If no admin is configured yet, set an <strong>ADMIN_TOKEN</strong> here. Choose something long & random.</p>
   <div class="row">
     <label>New ADMIN_TOKEN
       <input id="bootTok" type="password" placeholder="enter a strong token (min 10 chars)">
     </label>
     <button onclick="bootstrap()">Set Admin Token</button>
   </div>
-  <small class="muted">After bootstrap, store this token in your password manager. It will be required for protected ops.</small>
 </fieldset>
 
 <fieldset>
@@ -94,7 +92,36 @@
     <button onclick="fixApiRedeploy()">Redeploy API</button>
     <button onclick="fixWorkerRedeploy()">Redeploy Worker</button>
   </div>
-  <small class="muted">These require the Admin token (enter above). After a fix, checks re-run automatically.</small>
+  <small class="muted">Enter Admin token above first. After each fix, checks re-run automatically.</small>
+</fieldset>
+
+<fieldset>
+  <legend>Worker maintenance</legend>
+  <div class="row">
+    <label><input id="dry" type="checkbox" checked> Dry run (show what would be deleted)</label>
+    <label><input id="purgeRuns" type="checkbox" checked> Purge run queues & logs/results</label>
+    <button onclick="resetWorker()">Reset Worker State</button>
+  </div>
+  <small class="muted">Use Dry run first. This clears Redis keys like <code>runs</code> and <code>run:*</code> when enabled.</small>
+  <pre id="wrkOut"></pre>
+</fieldset>
+
+<fieldset>
+  <legend>Cloudflare config</legend>
+  <div class="row">
+    <label>New Zone ID
+      <input id="newZid" type="text" placeholder="e.g. abcdef123456...">
+    </label>
+    <label>New API Token
+      <input id="newTok" type="password" placeholder="token with Cache Purge scope">
+    </label>
+  </div>
+  <div class="row">
+    <button onclick="cfSet()">Set/Rotate CF Credentials</button>
+    <button onclick="cfReset()">Remove CF Credentials</button>
+  </div>
+  <small class="muted">After rotating, use Purge Cloudflare above to validate.</small>
+  <pre id="cfOut"></pre>
 </fieldset>
 
 <script>
@@ -114,16 +141,12 @@ async function run(){
   const ui=$('ui').value.replace(/\/+$/,'');
   const api=$('api').value.replace(/\/+$/,'');
   const out=$('out'); out.textContent='Running…';
-
-  // show bootstrap panel if open
   const bs = await j(api+'/v1/ops/config/bootstrap/status');
   $('bootstrapBox').style.display = (bs.ok && bs.data && bs.data.bootstrap_open) ? '' : 'none';
 
   const lines=[];
-  // UI
   let u1=await j(ui+'/?v=diag'); lines.push(`${u1.ok?ok:bad} UI reachable (${u1.code})`);
   let u2=await j(ui+'/index.html?v=diag'); lines.push(`${u2.ok?ok:bad} UI /index.html (${u2.code})`);
-  // API
   let w=await j(api+'/whoami'); lines.push(`${(w.ok && w.data && w.data.service)?ok:bad} API /whoami ${(w.ok? (w.data.service||'?') : w.code)}`);
   let rep=await j(api+'/v1/legal/report/latest'); lines.push(`${rep.ok?ok:(String(rep.data).includes('404')?wrn:bad)} API legal report ${rep.ok?'ok':'(none yet)'}`);
   let al=await j(api+'/v1/legal/alerts'); lines.push(`${(al.ok && Array.isArray(al.data))?ok:bad} API legal alerts ${al.ok?('items='+(Array.isArray(al.data)?al.data.length:'?')):(':: '+al.code)}`);
@@ -191,5 +214,37 @@ async function fixWorkerRedeploy(){
   const r=await j(api+'/v1/ops/redeploy/worker', {method:'POST', headers:{'X-Admin-Token':adm}});
   alert((r.ok?'OK ':'ERR ')+JSON.stringify(r.data).slice(0,300));
   setTimeout(run, 5000);
+}
+
+async function resetWorker(){
+  const api=$('api').value.replace(/\/+$/,'');
+  const adm=$('adm').value.trim();
+  const dry=$('dry').checked;
+  const purgeRuns=$('purgeRuns').checked;
+  const r=await j(api+'/v1/ops/worker/reset', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-Admin-Token':adm},
+    body: JSON.stringify({dry_run: dry, purge_runs: purgeRuns})
+  });
+  $('wrkOut').textContent = (r.ok? JSON.stringify(r.data,null,2) : ('ERR '+r.code+' '+JSON.stringify(r.data)));
+}
+
+async function cfSet(){
+  const api=$('api').value.replace(/\/+$/,'');
+  const adm=$('adm').value.trim();
+  const zid=$('newZid').value.trim();
+  const tok=$('newTok').value.trim();
+  if(!zid && !tok){ alert('Enter a Zone ID and/or API token to set/rotate.'); return; }
+  const r=await j(api+'/v1/ops/config/cloudflare/set', {
+    method:'POST', headers:{'Content-Type':'application/json','X-Admin-Token':adm},
+    body: JSON.stringify({CLOUDFLARE_ZONE_ID:zid, CLOUDFLARE_API_TOKEN:tok})
+  });
+  $('cfOut').textContent = (r.ok? JSON.stringify(r.data,null,2) : ('ERR '+r.code+' '+JSON.stringify(r.data)));
+}
+async function cfReset(){
+  const api=$('api').value.replace(/\/+$/,'');
+  const adm=$('adm').value.trim();
+  const r=await j(api+'/v1/ops/config/cloudflare/reset', {method:'POST', headers:{'X-Admin-Token':adm}});
+  $('cfOut').textContent = (r.ok? JSON.stringify(r.data,null,2) : ('ERR '+r.code+' '+JSON.stringify(r.data)));
 }
 </script>
