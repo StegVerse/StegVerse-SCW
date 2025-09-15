@@ -91,7 +91,30 @@ def snapshot():
         "report": {"ok": ok_rep}, "alerts": {"ok": ok_alerts},
         "config_missing": missing,
     }
+    
+# ---------- bootstrap (no auth if not configured yet) ----------
+@router.post("/config/bootstrap")
+def config_bootstrap(payload: Dict[str, str]):
+    """
+    First-time setup ONLY.
+    If ADMIN_TOKEN is not configured (in Redis OR env), allow setting it once.
+    """
+    current = _admin_token()
+    if current:
+        raise HTTPException(status_code=409, detail="admin already configured")
+    token = (payload or {}).get("ADMIN_TOKEN", "").strip()
+    if not token or len(token) < 10:
+        raise HTTPException(status_code=400, detail="weak or missing ADMIN_TOKEN")
+    set_cfg("ADMIN_TOKEN", token)
+    return {"ok": True, "message": "admin token set"}
 
+@router.get("/config/bootstrap/status")
+def config_bootstrap_status():
+    """
+    Returns whether bootstrap is still open (no admin set).
+    """
+    return {"bootstrap_open": not bool(_admin_token())}
+    
 # ---------- config management (auth) ----------
 @router.get("/config/list")
 def config_list(x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token")):
