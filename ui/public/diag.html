@@ -1,250 +1,278 @@
 <!doctype html>
-<meta charset="utf-8"/>
-<title>StegVerse Diagnostics & Config</title>
-<style>
-  body{font-family:system-ui,sans-serif;max-width:980px;margin:32px auto;padding:0 16px}
-  .ok{color:#0a0}.bad{color:#b00}.warn{color:#b80}
-  pre{background:#f6f8fa;padding:12px;border-radius:8px;white-space:pre-wrap}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  input[type=text],input[type=password]{width:420px;max-width:100%}
-  fieldset{border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:16px 0}
-  legend{padding:0 6px}
-  button{padding:8px 12px;border:1px solid #ddd;border-radius:8px;background:#fff}
-  small.muted{color:#666}
-  label{display:flex;flex-direction:column;gap:4px;margin:6px 0}
-</style>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>StegVerse Diagnostics & Config</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 960px; margin: 28px auto; line-height: 1.4; }
+    h1 { margin: 0 0 16px; }
+    .card { border: 1px solid #e5e5e5; border-radius: 10px; padding: 14px; margin: 14px 0; background: #fff; }
+    input[type="text"], input[type="password"] { padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+    button { padding: 8px 12px; border: 1px solid #ddd; background: #f7f7f7; border-radius: 6px; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eee; margin-left: 8px; font-size: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    .ok { color: #19c37d; }
+    .bad { color: #ff4d4f; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    small { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>StegVerse Diagnostics & Config</h1>
 
-<h1>StegVerse Diagnostics & Config</h1>
-
-<fieldset>
-  <legend>Targets</legend>
-  <div class="row">
-    <label>API base
-      <input id="api" type="text" value="https://scw-api.onrender.com">
-    </label>
-    <label>UI base (informational)
-      <input id="ui" type="text" value="https://scw-ui.onrender.com">
-    </label>
-    <button onclick="run()">Run checks</button>
+  <!-- Targets -->
+  <div class="card">
+    <h3>Targets</h3>
+    <div class="row">
+      <div>API base<br/><input id="apiBase" type="text" style="width:100%" placeholder="https://scw-api.onrender.com"></div>
+      <div>UI base (informational)<br/><input id="uiBase" type="text" style="width:100%" placeholder="https://scw-ui.onrender.com"></div>
+    </div>
+    <p style="margin-top:10px">
+      <button id="btnRunChecks">Run checks</button>
+      <span id="checkOut" class="pill"></span>
+    </p>
+    <div id="snapshot" class="mono" style="margin-top:8px"></div>
   </div>
-  <pre id="out">Ready.</pre>
-</fieldset>
 
-<fieldset id="bootstrapBox" style="display:none">
-  <legend>Bootstrap Admin (first-time only)</legend>
-  <div class="row">
-    <label>New ADMIN_TOKEN
-      <input id="bootTok" type="password" placeholder="enter a strong token (min 10 chars)">
-    </label>
-    <button onclick="bootstrap()">Set Admin Token</button>
+  <!-- Admin + Config -->
+  <div class="card">
+    <h3>Config (requires admin)</h3>
+    <p>
+      Admin token (X-Admin-Token):
+      <input id="admin" type="password" placeholder="enter your ADMIN_TOKEN" style="width:60%" />
+      <button id="saveToken">Save</button>
+      <span id="tokStatus" class="pill"></span>
+      <button id="btnListCfg" style="margin-left:8px">List Config</button>
+    </p>
+
+    <div class="row" style="margin-top:10px">
+      <div>SCW_UI_URL<br/><input id="SCW_UI_URL" type="text" style="width:100%" placeholder="https://scw-ui.onrender.com"></div>
+      <div>SCW_API_URL<br/><input id="SCW_API_URL" type="text" style="width:100%" placeholder="https://scw-api.onrender.com"></div>
+
+      <div>RENDER_UI_DEPLOY_HOOK<br/><input id="RENDER_UI_DEPLOY_HOOK" type="text" style="width:100%" placeholder="https://api.render.com/deploy/..."></div>
+      <div>RENDER_API_DEPLOY_HOOK<br/><input id="RENDER_API_DEPLOY_HOOK" type="text" style="width:100%" placeholder="https://api.render.com/deploy/..."></div>
+      <div>RENDER_WORKER_DEPLOY_HOOK<br/><input id="RENDER_WORKER_DEPLOY_HOOK" type="text" style="width:100%" placeholder="https://api.render.com/deploy/..."></div>
+
+      <div>NETLIFY_BUILD_HOOK<br/><input id="NETLIFY_BUILD_HOOK" type="text" style="width:100%" placeholder="https://api.netlify.com/build_hooks/..."></div>
+      <div>VERCEL_DEPLOY_HOOK<br/><input id="VERCEL_DEPLOY_HOOK" type="text" style="width:100%" placeholder="https://api.vercel.com/v1/integrations/deploy/..."></div>
+
+      <div>CLOUDFLARE_ZONE_ID<br/><input id="CLOUDFLARE_ZONE_ID" type="text" style="width:100%"></div>
+      <div>CLOUDFLARE_API_TOKEN<br/><input id="CLOUDFLARE_API_TOKEN" type="password" style="width:100%"></div>
+
+      <div>MIN_REDEPLOY_INTERVAL_S<br/><input id="MIN_REDEPLOY_INTERVAL_S" type="text" style="width:100%" placeholder="15"></div>
+    </div>
+
+    <p style="margin-top:10px">
+      <button id="btnSaveCfg">Save Config</button>
+      <span class="pill">Saving a key blank clears it</span>
+    </p>
   </div>
-</fieldset>
 
-<fieldset>
-  <legend>Config (requires admin)</legend>
-  <div class="row">
-    <label>Admin token (X-Admin-Token)
-      <input id="adm" type="password" placeholder="enter your ADMIN_TOKEN">
-    </label>
-    <button onclick="listCfg()">List Config</button>
+  <!-- Remediations -->
+  <div class="card">
+    <h3>Remediations</h3>
+    <button id="btnPurgeCF">Purge Cloudflare</button>
+    <button id="btnReUi">Redeploy UI</button>
+    <button id="btnReApi">Redeploy API</button>
+    <button id="btnReWorker">Redeploy Worker</button>
+    <span class="pill">Enter Admin token above first. After each fix, checks re-run automatically.</span>
+    <div id="opsOut" class="mono" style="margin-top:8px"></div>
   </div>
-  <div class="row">
-    <label>SCW_UI_URL
-      <input id="cfg_ui" type="text" value="https://scw-ui.onrender.com">
-    </label>
-    <label>SCW_API_URL
-      <input id="cfg_api" type="text" value="https://scw-api.onrender.com">
-    </label>
+
+  <!-- Worker maintenance -->
+  <div class="card">
+    <h3>Worker maintenance</h3>
+    <label><input id="dryRun" type="checkbox" checked> Dry run (show what would be deleted)</label>
+    <label style="margin-left:12px"><input id="purgeRuns" type="checkbox" checked> Purge run queues & logs/results</label>
+    <button id="btnResetWorker" style="margin-left:12px">Reset Worker State</button>
+    <div id="workerOut" class="mono" style="margin-top:8px"></div>
   </div>
-  <div class="row">
-    <label>RENDER_UI_DEPLOY_HOOK
-      <input id="cfg_rui" type="text" placeholder="https://api.render.com/deploy/srv-...?...">
-    </label>
-    <label>RENDER_API_DEPLOY_HOOK
-      <input id="cfg_rapi" type="text" placeholder="https://api.render.com/deploy/srv-...?...">
-    </label>
-    <label>RENDER_WORKER_DEPLOY_HOOK
-      <input id="cfg_rwrk" type="text" placeholder="(optional)">
-    </label>
+
+  <!-- Cloudflare config -->
+  <div class="card">
+    <h3>Cloudflare config</h3>
+    <div class="row">
+      <div>New Zone ID<br/><input id="newZid" type="text" style="width:100%" placeholder="cf_zone_id"></div>
+      <div>New API Token<br/><input id="newTok" type="password" style="width:100%" placeholder="token with Cache Purge scope"></div>
+    </div>
+    <p style="margin-top:10px">
+      <button id="btnSetCF">Set/Rotate CF Credentials</button>
+      <button id="btnRmCF"  style="margin-left:8px">Remove CF Credentials</button>
+      <span class="pill">After rotating, use Purge Cloudflare above to validate.</span>
+    </p>
+    <div id="cfOut" class="mono" style="margin-top:8px"></div>
   </div>
-  <div class="row">
-    <label>CLOUDFLARE_ZONE_ID
-      <input id="cfg_cfz" type="text" placeholder="(optional)">
-    </label>
-    <label>CLOUDFLARE_API_TOKEN
-      <input id="cfg_cft" type="password" placeholder="(optional)">
-    </label>
-    <label>MIN_REDEPLOY_INTERVAL_S
-      <input id="cfg_min" type="text" value="15">
-    </label>
+
+  <!-- Recovery + One-Click -->
+  <div class="card">
+    <h3>Recovery + One-Click Reset</h3>
+    <p>If you’ve lost the Admin token, paste the one-time <b>ADMIN_RECOVERY_CODE</b> (configured in API env) and click <em>Recover</em>.</p>
+    <p>
+      <input id="recoverCode" type="password" placeholder="ADMIN_RECOVERY_CODE" style="width:60%" />
+      <button id="btnRecover">Recover Admin Token</button>
+      <span id="recoverOut" class="pill"></span>
+    </p>
+    <hr/>
+    <p>
+      <label><input type="checkbox" id="optNetlify"> Include Netlify</label>
+      <label style="margin-left:16px"><input type="checkbox" id="optVercel"> Include Vercel</label>
+      <label style="margin-left:16px"><input type="checkbox" id="optPurge" checked> Purge Cloudflare</label>
+    </p>
+    <button id="btnOneClick">🔁 Reset Token & Redeploy All</button>
+    <div id="oneOut" class="mono" style="margin-top:8px"></div>
   </div>
-  <div class="row">
-    <button onclick="saveCfg()">Save Config</button>
-  </div>
-  <pre id="cfgOut"></pre>
-</fieldset>
 
-<fieldset>
-  <legend>Remediations</legend>
-  <div class="row">
-    <button onclick="fixCloudflare()">Purge Cloudflare</button>
-    <button onclick="fixUiRedeploy()">Redeploy UI</button>
-    <button onclick="fixApiRedeploy()">Redeploy API</button>
-    <button onclick="fixWorkerRedeploy()">Redeploy Worker</button>
-  </div>
-  <small class="muted">Enter Admin token above first. After each fix, checks re-run automatically.</small>
-</fieldset>
+  <script>
+    const ORIGIN = (new URL(location.href)).origin.replace(/\/+$/, "");
+    const API = ORIGIN + "/v1/ops";
 
-<fieldset>
-  <legend>Worker maintenance</legend>
-  <div class="row">
-    <label><input id="dry" type="checkbox" checked> Dry run (show what would be deleted)</label>
-    <label><input id="purgeRuns" type="checkbox" checked> Purge run queues & logs/results</label>
-    <button onclick="resetWorker()">Reset Worker State</button>
-  </div>
-  <small class="muted">Use Dry run first. This clears Redis keys like <code>runs</code> and <code>run:*</code> when enabled.</small>
-  <pre id="wrkOut"></pre>
-</fieldset>
+    // Admin token local store
+    const adminInp = document.getElementById("admin");
+    const tokStatus = document.getElementById("tokStatus");
+    adminInp.value = localStorage.getItem("adminToken") || "";
+    tokStatus.textContent = adminInp.value ? "loaded" : "not set";
+    document.getElementById("saveToken").onclick = () => {
+      localStorage.setItem("adminToken", adminInp.value);
+      tokStatus.textContent = adminInp.value ? "saved" : "cleared";
+    };
 
-<fieldset>
-  <legend>Cloudflare config</legend>
-  <div class="row">
-    <label>New Zone ID
-      <input id="newZid" type="text" placeholder="e.g. abcdef123456...">
-    </label>
-    <label>New API Token
-      <input id="newTok" type="password" placeholder="token with Cache Purge scope">
-    </label>
-  </div>
-  <div class="row">
-    <button onclick="cfSet()">Set/Rotate CF Credentials</button>
-    <button onclick="cfReset()">Remove CF Credentials</button>
-  </div>
-  <small class="muted">After rotating, use Purge Cloudflare above to validate.</small>
-  <pre id="cfOut"></pre>
-</fieldset>
+    function hdrs() {
+      const t = adminInp.value.trim();
+      return { "Content-Type": "application/json", ...(t ? {"X-Admin-Token": t} : {}) };
+    }
+    async function g(path) {
+      const r = await fetch(API + path, { method: "GET" });
+      const txt = await r.text(); try { return [r.ok, JSON.parse(txt)] } catch { return [r.ok, {raw:txt}] }
+    }
+    async function p(path, body, needAuth = true) {
+      const h = needAuth ? hdrs() : {"Content-Type":"application/json"};
+      const r = await fetch(API + path, { method: "POST", headers: h, body: JSON.stringify(body||{}) });
+      const txt = await r.text(); let data={}; try { data = JSON.parse(txt) } catch {}
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${txt.slice(0,200)}`);
+      return data;
+    }
+    const pretty = (o)=>{ try { return JSON.stringify(o,null,2) } catch { return String(o) } };
 
-<script>
-const $ = id => document.getElementById(id);
-const ok='✅', bad='❌', wrn='⚠️';
+    // Populate bases from snapshot
+    async function runChecks() {
+      document.getElementById("checkOut").textContent = "checking…";
+      const [ok, data] = await g("/snapshot");
+      document.getElementById("checkOut").textContent = ok ? "done" : "error";
+      document.getElementById("snapshot").textContent = pretty(data || {});
+      if (data && data.api && data.api.base) document.getElementById("apiBase").value = data.api.base;
+      if (data && data.ui && data.ui.base)   document.getElementById("uiBase").value  = data.ui.base;
+      if (Array.isArray(data?.config_missing)) {
+        // Pre-fill inputs with what we know
+        ["SCW_UI_URL","SCW_API_URL"].forEach(k=>{
+          if (!document.getElementById(k).value && data.ui?.base && k==="SCW_UI_URL") document.getElementById(k).value = data.ui.base;
+          if (!document.getElementById(k).value && data.api?.base && k==="SCW_API_URL") document.getElementById(k).value = data.api.base;
+        });
+      }
+    }
+    document.getElementById("btnRunChecks").onclick = runChecks;
+    runChecks();
 
-async function j(url, opt={}){
-  try{
-    const r = await fetch(url, opt);
-    const t = await r.text();
-    let data; try{ data = JSON.parse(t) }catch{ data = t }
-    return {ok:r.ok, code:r.status, data};
-  }catch(e){ return {ok:false, code:'ERR', data:String(e)} }
-}
+    // List config
+    document.getElementById("btnListCfg").onclick = async () => {
+      const [ok, data] = await g("/config/bootstrap/status");
+      const list = await fetch(API + "/config/list", { headers: hdrs() });
+      const txt = await list.text(); let j={}; try { j = JSON.parse(txt) } catch {}
+      alert("bootstrap_open=" + (data?.bootstrap_open) + "\n\n" + pretty(j));
+    };
 
-async function run(){
-  const ui=$('ui').value.replace(/\/+$/,'');
-  const api=$('api').value.replace(/\/+$/,'');
-  const out=$('out'); out.textContent='Running…';
-  const bs = await j(api+'/v1/ops/config/bootstrap/status');
-  $('bootstrapBox').style.display = (bs.ok && bs.data && bs.data.bootstrap_open) ? '' : 'none';
+    // Save config
+    document.getElementById("btnSaveCfg").onclick = async () => {
+      const payload = {};
+      ["SCW_UI_URL","SCW_API_URL","RENDER_UI_DEPLOY_HOOK","RENDER_API_DEPLOY_HOOK","RENDER_WORKER_DEPLOY_HOOK",
+       "NETLIFY_BUILD_HOOK","VERCEL_DEPLOY_HOOK","CLOUDFLARE_ZONE_ID","CLOUDFLARE_API_TOKEN","MIN_REDEPLOY_INTERVAL_S"]
+       .forEach(id => payload[id] = document.getElementById(id).value.trim());
+      try {
+        const res = await p("/config/set", payload, true);
+        alert("Saved:\n" + pretty(res.changed));
+        runChecks();
+      } catch(e) { alert("Save failed:\n" + e.message); }
+    };
 
-  const lines=[];
-  let u1=await j(ui+'/?v=diag'); lines.push(`${u1.ok?ok:bad} UI reachable (${u1.code})`);
-  let u2=await j(ui+'/index.html?v=diag'); lines.push(`${u2.ok?ok:bad} UI /index.html (${u2.code})`);
-  let w=await j(api+'/whoami'); lines.push(`${(w.ok && w.data && w.data.service)?ok:bad} API /whoami ${(w.ok? (w.data.service||'?') : w.code)}`);
-  let rep=await j(api+'/v1/legal/report/latest'); lines.push(`${rep.ok?ok:(String(rep.data).includes('404')?wrn:bad)} API legal report ${rep.ok?'ok':'(none yet)'}`);
-  let al=await j(api+'/v1/legal/alerts'); lines.push(`${(al.ok && Array.isArray(al.data))?ok:bad} API legal alerts ${al.ok?('items='+(Array.isArray(al.data)?al.data.length:'?')):(':: '+al.code)}`);
-  out.textContent = lines.join('\n');
-}
+    // Remediations
+    const opsOut = document.getElementById("opsOut");
+    document.getElementById("btnPurgeCF").onclick = async () => {
+      try { opsOut.textContent = pretty(await p("/purge/cloudflare", {})); runChecks(); }
+      catch(e) { opsOut.textContent = "Error: " + e.message; }
+    };
+    document.getElementById("btnReUi").onclick = async () => {
+      try { opsOut.textContent = pretty(await p("/redeploy/ui", {})); runChecks(); }
+      catch(e) { opsOut.textContent = "Error: " + e.message; }
+    };
+    document.getElementById("btnReApi").onclick = async () => {
+      try { opsOut.textContent = pretty(await p("/redeploy/api", {})); runChecks(); }
+      catch(e) { opsOut.textContent = "Error: " + e.message; }
+    };
+    document.getElementById("btnReWorker").onclick = async () => {
+      try { opsOut.textContent = pretty(await p("/redeploy/worker", {})); runChecks(); }
+      catch(e) { opsOut.textContent = "Error: " + e.message; }
+    };
 
-async function bootstrap(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const tok=$('bootTok').value.trim();
-  if(tok.length<10){ alert('Please enter a stronger ADMIN_TOKEN (>= 10 chars).'); return; }
-  const r=await j(api+'/v1/ops/config/bootstrap', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ADMIN_TOKEN: tok})});
-  alert((r.ok?'OK ':'ERR ')+JSON.stringify(r.data).slice(0,300));
-  if(r.ok){ $('adm').value = tok; run(); }
-}
+    // Worker reset
+    document.getElementById("btnResetWorker").onclick = async () => {
+      const body = { dry_run: document.getElementById("dryRun").checked, purge_runs: document.getElementById("purgeRuns").checked };
+      try { document.getElementById("workerOut").textContent = pretty(await p("/worker/reset", body)); }
+      catch(e) { document.getElementById("workerOut").textContent = "Error: " + e.message; }
+    };
 
-async function listCfg(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const r=await j(api+'/v1/ops/config/list', {headers:{'X-Admin-Token':adm}});
-  $('cfgOut').textContent = (r.ok? JSON.stringify(r.data,null,2) : ('ERR '+r.code+' '+JSON.stringify(r.data)));
-}
+    // Cloudflare config
+    document.getElementById("btnSetCF").onclick = async () => {
+      const body = { CLOUDFLARE_ZONE_ID: document.getElementById("newZid").value.trim(), CLOUDFLARE_API_TOKEN: document.getElementById("newTok").value.trim() };
+      try { document.getElementById("cfOut").textContent = pretty(await p("/config/cloudflare/set", body)); }
+      catch(e) { document.getElementById("cfOut").textContent = "Error: " + e.message; }
+    };
+    document.getElementById("btnRmCF").onclick = async () => {
+      try { document.getElementById("cfOut").textContent = pretty(await p("/config/cloudflare/reset", {})); }
+      catch(e) { document.getElementById("cfOut").textContent = "Error: " + e.message; }
+    };
 
-async function saveCfg(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const payload={
-    SCW_UI_URL: $('cfg_ui').value.trim(),
-    SCW_API_URL: $('cfg_api').value.trim(),
-    RENDER_UI_DEPLOY_HOOK: $('cfg_rui').value.trim(),
-    RENDER_API_DEPLOY_HOOK: $('cfg_rapi').value.trim(),
-    RENDER_WORKER_DEPLOY_HOOK: $('cfg_rwrk').value.trim(),
-    CLOUDFLARE_ZONE_ID: $('cfg_cfz').value.trim(),
-    CLOUDFLARE_API_TOKEN: $('cfg_cft').value.trim(),
-    MIN_REDEPLOY_INTERVAL_S: $('cfg_min').value.trim()
-  };
-  const r=await j(api+'/v1/ops/config/set', {method:'POST', headers:{'Content-Type':'application/json','X-Admin-Token':adm}, body: JSON.stringify(payload)});
-  $('cfgOut').textContent = (r.ok? JSON.stringify(r.data,null,2) : ('ERR '+r.code+' '+JSON.stringify(r.data)));
-  if(r.ok) setTimeout(run, 1500);
-}
+    // Recovery + One-Click
+    document.getElementById("btnRecover").onclick = async () => {
+      const code = document.getElementById("recoverCode").value.trim();
+      const out  = document.getElementById("recoverOut");
+      out.textContent = "…";
+      try {
+        const res = await p("/admin/recover", { recovery_code: code }, false);
+        const newTok = res.new_admin_token;
+        if (newTok) {
+          localStorage.setItem("adminToken", newTok);
+          adminInp.value = newTok;
+          out.textContent = "new token saved";
+        } else {
+          out.textContent = "no token returned";
+        }
+      } catch(e) { out.textContent = "failed: " + e.message; }
+    };
 
-async function fixCloudflare(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const r=await j(api+'/v1/ops/purge/cloudflare', {method:'POST', headers:{'X-Admin-Token':adm}});
-  alert((r.ok?'OK ':'ERR ')+JSON.stringify(r.data).slice(0,300));
-  setTimeout(run, 4000);
-}
-async function fixUiRedeploy(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const r=await j(api+'/v1/ops/redeploy/ui', {method:'POST', headers:{'X-Admin-Token':adm}});
-  alert((r.ok?'OK ':'ERR ')+JSON.stringify(r.data).slice(0,300));
-  setTimeout(run, 5000);
-}
-async function fixApiRedeploy(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const r=await j(api+'/v1/ops/redeploy/api', {method:'POST', headers:{'X-Admin-Token':adm}});
-  alert((r.ok?'OK ':'ERR ')+JSON.stringify(r.data).slice(0,300));
-  setTimeout(run, 5000);
-}
-async function fixWorkerRedeploy(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const r=await j(api+'/v1/ops/redeploy/worker', {method:'POST', headers:{'X-Admin-Token':adm}});
-  alert((r.ok?'OK ':'ERR ')+JSON.stringify(r.data).slice(0,300));
-  setTimeout(run, 5000);
-}
-
-async function resetWorker(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const dry=$('dry').checked;
-  const purgeRuns=$('purgeRuns').checked;
-  const r=await j(api+'/v1/ops/worker/reset', {
-    method:'POST',
-    headers:{'Content-Type':'application/json','X-Admin-Token':adm},
-    body: JSON.stringify({dry_run: dry, purge_runs: purgeRuns})
-  });
-  $('wrkOut').textContent = (r.ok? JSON.stringify(r.data,null,2) : ('ERR '+r.code+' '+JSON.stringify(r.data)));
-}
-
-async function cfSet(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const zid=$('newZid').value.trim();
-  const tok=$('newTok').value.trim();
-  if(!zid && !tok){ alert('Enter a Zone ID and/or API token to set/rotate.'); return; }
-  const r=await j(api+'/v1/ops/config/cloudflare/set', {
-    method:'POST', headers:{'Content-Type':'application/json','X-Admin-Token':adm},
-    body: JSON.stringify({CLOUDFLARE_ZONE_ID:zid, CLOUDFLARE_API_TOKEN:tok})
-  });
-  $('cfOut').textContent = (r.ok? JSON.stringify(r.data,null,2) : ('ERR '+r.code+' '+JSON.stringify(r.data)));
-}
-async function cfReset(){
-  const api=$('api').value.replace(/\/+$/,'');
-  const adm=$('adm').value.trim();
-  const r=await j(api+'/v1/ops/config/cloudflare/reset', {method:'POST', headers:{'X-Admin-Token':adm}});
-  $('cfOut').textContent = (r.ok? JSON.stringify(r.data,null,2) : ('ERR '+r.code+' '+JSON.stringify(r.data)));
-}
-</script>
+    document.getElementById("btnOneClick").onclick = async () => {
+      const out = document.getElementById("oneOut");
+      out.textContent = "Running…";
+      const opts = {
+        redeploy_api: true,
+        redeploy_worker: true,
+        redeploy_ui: true,
+        redeploy_netlify: document.getElementById("optNetlify").checked,
+        redeploy_vercel:  document.getElementById("optVercel").checked,
+        purge_cloudflare: document.getElementById("optPurge").checked
+      };
+      try {
+        const res = await p("/admin/reset_all", opts, true);
+        if (res.new_admin_token) {
+          localStorage.setItem("adminToken", res.new_admin_token);
+          adminInp.value = res.new_admin_token;
+        }
+        out.textContent = "✅ Completed\n\nPrecheck:\n" + pretty(res.precheck) + "\n\nSteps:\n" + pretty(res.steps) + "\n\nPostcheck:\n" + pretty(res.postcheck);
+        runChecks();
+      } catch(e) {
+        out.textContent = "❌ Failed: " + e.message;
+      }
+    };
+  </script>
+</body>
+</html>
