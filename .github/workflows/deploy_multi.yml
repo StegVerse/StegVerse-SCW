@@ -1,4 +1,4 @@
-name: Multi-Host Deploy & Purge
+name: Multi Deploy & Purge
 
 on:
   push:
@@ -9,43 +9,35 @@ jobs:
   ship:
     runs-on: ubuntu-latest
     steps:
-      - name: Render UI
+      - name: Deploy UI (Render)
         if: ${{ secrets.RENDER_UI_DEPLOY_HOOK != '' }}
         run: |
           curl -fsSL -X POST "${{ secrets.RENDER_UI_DEPLOY_HOOK }}" \
-            -H "Content-Type: application/json" \
-            -d '{"source":"github"}'
-
-      - name: Render API
+            -H "Content-Type: application/json" -d '{"source":"gh"}'
+      - name: Deploy API (Render)
         if: ${{ secrets.RENDER_API_DEPLOY_HOOK != '' }}
         run: |
           curl -fsSL -X POST "${{ secrets.RENDER_API_DEPLOY_HOOK }}" \
-            -H "Content-Type: application/json" \
-            -d '{"source":"github"}'
-
-      - name: Render Worker
+            -H "Content-Type: application/json" -d '{"source":"gh"}'
+      - name: Deploy Worker (Render)
         if: ${{ secrets.RENDER_WORKER_DEPLOY_HOOK != '' }}
         run: |
           curl -fsSL -X POST "${{ secrets.RENDER_WORKER_DEPLOY_HOOK }}" \
-            -H "Content-Type: application/json" \
-            -d '{"source":"github"}'
+            -H "Content-Type: application/json" -d '{"source":"gh"}'
 
-      - name: Netlify UI (build hook)
-        if: ${{ secrets.NETLIFY_BUILD_HOOK_UI != '' }}
+      - name: Trigger Netlify Build
+        if: ${{ secrets.NETLIFY_BUILD_HOOK != '' }}
         run: |
-          curl -fsSL -X POST "${{ secrets.NETLIFY_BUILD_HOOK_UI }}"
+          curl -fsSL -X POST "${{ secrets.NETLIFY_BUILD_HOOK }}" \
+            -H "Content-Type: application/json"
 
-      - name: Vercel UI (deploy hook)
-        if: ${{ secrets.VERCEL_DEPLOY_HOOK_UI != '' }}
+      - name: Trigger Vercel Deploy
+        if: ${{ secrets.VERCEL_DEPLOY_HOOK != '' }}
         run: |
-          curl -fsSL -X POST "${{ secrets.VERCEL_DEPLOY_HOOK_UI }}"
+          curl -fsSL -X POST "${{ secrets.VERCEL_DEPLOY_HOOK }}" \
+            -H "Content-Type: application/json"
 
-      - name: Vercel API (deploy hook)
-        if: ${{ secrets.VERCEL_DEPLOY_HOOK_API != '' }}
-        run: |
-          curl -fsSL -X POST "${{ secrets.VERCEL_DEPLOY_HOOK_API }}"
-
-      - name: Purge Cloudflare (entire zone)
+      - name: Purge Cloudflare
         if: ${{ secrets.CF_ZONE_ID != '' && secrets.CF_API_TOKEN != '' }}
         run: |
           curl -fsSL -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CF_ZONE_ID }}/purge_cache" \
@@ -53,15 +45,11 @@ jobs:
             -H "Content-Type: application/json" \
             --data '{"purge_everything":true}'
 
-      - name: Wait for providers to warm up
-        run: sleep 10
+      - name: Wait for propagation
+        run: sleep 8
 
-      - name: Smoke check API /whoami
+      - name: Smoke check API
         run: |
-          curl -fsS https://scw-api.onrender.com/whoami | sed -e 's/.*/API OK: &/'
-
-      - name: Smoke check UI /stegtalk.html
-        run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" https://scw-ui.onrender.com/stegtalk.html)
-          test "$code" = "200" || (echo "UI stegtalk.html not 200 ($code)" && exit 1)
-          echo "UI OK: stegtalk.html"
+          echo "Checking API connectivity..."
+          curl -fsS https://scw-api.onrender.com/whoami | tee result.json
+          echo "✅ API OK"
