@@ -1,5 +1,6 @@
 # api/routes/ops.py
-import os, json, time, urllib.request, urllib.error
+import os, json, time, urllib.request, urllib.error, secrets
+from hmac import compare_digest
 from typing import Optional, Dict, Any
 
 import redis
@@ -74,6 +75,42 @@ def _post_json(url: str, data: Optional[Dict[str, Any]] = None, headers: Optiona
     req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, body, timeout=30) as r_:
         return r_.status, r_.read().decode("utf-8", "ignore")
+
+# -----------------------------
+# NEW: locks, token gen, recovery
+# -----------------------------
+# One-time out-of-band recovery code (set in env of API service)
+RECOVERY_CODE = os.getenv("ADMIN_RECOVERY_CODE", "")
+
+def _gen_token(nbytes: int = 48) -> str:
+    # urlsafe, long enough to pass >10 chars check
+    return secrets.token_urlsafe(nbytes)
+
+LOCK_PREFIX = "lock:"
+def _acquire_lock(name: str, ttl: int = 60) -> tuple[bool, str]:
+    token = secrets.token_hex(16)
+    ok = r.set(f"{LOCK_PREFIX}{name}", token, nx=True, ex=ttl)
+    return bool(ok), token
+
+def _release_lock(name: str, token: str):
+    k = f"{LOCK_PREFIX}{name}"
+    v = r.get(k)
+    if v == token:
+        r.delete(k)
+
+def _maybe_redeploy(hook_key: str, throttle_key: str, source: str, result: Dict[str, Any]):
+    hook = get_cfg(hook_key)
+    if not hook:
+        result[throttle_key] = {"ok": False, "status": 501, "note": f"{hook_key} not set"}
+        return
+    try:
+        _throttle(throttle_key)
+        code, text = _post_json(hook, {"source": source})
+        result[throttle_key] = {"ok": code in (200, 201, 202), "status": code, "body": text[:600]}
+    except HTTPException as e:
+        result[throttle_key] = {"ok": False, "status": e.status_code, "detail": e.detail}
+    except Exception as e:
+        result[throttle_key] = {"ok": False, "status": 0, "error": str(e)}
 
 # -----------------------------
 # Bootstrap (first run)
@@ -291,3 +328,108 @@ def worker_reset(payload: Dict[str, Any] | None = None, x_admin_token: Optional[
 
     summary["notes"].append(f"deleted {deleted} keys")
     return {"ok": True, "dry_run": False, "summary": summary}
+
+# -----------------------------
+# NEW: token rotation + recovery + one-click reset
+# -----------------------------
+@router.post("/admin/rotate_token")
+def admin_rotate_token(x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token")):
+    _auth(x_admin_token)
+    new_tok = _gen_token()
+    set_cfg("ADMIN_TOKEN", new_tok)
+    return {"ok": True, "new_admin_token": new_tok}
+
+@router.post("/admin/recover")
+def admin_recover(payload: Dict[str, str] | None = None):
+    """
+    Recovery path if ADMIN_TOKEN is lost.
+    Requires ADMIN_RECOVERY_CODE (env) to match payload.recovery_code.
+    """
+    if not RECOVERY_CODE:
+        raise HTTPException(status_code=501, detail="recovery not configured")
+    code = (payload or {}).get("recovery_code", "").strip()
+    if not code or not compare_digest(code, RECOVERY_CODE):
+        raise HTTPException(status_code=403, detail="invalid recovery code")
+
+    new_tok = _gen_token()
+    set_cfg("ADMIN_TOKEN", new_tok)
+    return {"ok": True, "new_admin_token": new_tok}
+
+@router.post("/admin/reset_all")
+def admin_reset_all(payload: Dict[str, Any] | None = None, x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token")):
+    """
+    One-click:
+      1) Rotate ADMIN_TOKEN
+      2) Redeploy API -> Worker -> UI (Render hooks if set)
+      3) Optional: Netlify/Vercel redeploy
+      4) Optional: Cloudflare purge
+      5) Post snapshot
+    """
+    _auth(x_admin_token)
+
+    ok, lock_token = _acquire_lock("reset_all", ttl=60)
+    if not ok:
+        raise HTTPException(status_code=429, detail="reset already in progress")
+
+    opts = payload or {}
+    do_api      = bool(opts.get("redeploy_api", True))
+    do_worker   = bool(opts.get("redeploy_worker", True))
+    do_ui       = bool(opts.get("redeploy_ui", True))
+    do_netlify  = bool(opts.get("redeploy_netlify", False))
+    do_vercel   = bool(opts.get("redeploy_vercel", False))
+    do_cf_purge = bool(opts.get("purge_cloudflare", True))
+
+    result: Dict[str, Any] = {"steps": {}, "warnings": [], "notes": []}
+
+    try:
+        pre_missing = [k for k in CFG_KEYS if not get_cfg(k)]
+        result["precheck"] = {"config_missing": pre_missing}
+
+        # Rotate token first
+        new_tok = _gen_token()
+        set_cfg("ADMIN_TOKEN", new_tok)
+        result["steps"]["rotate_admin_token"] = {"ok": True, "length": len(new_tok)}
+
+        # Redeploys in dependency order
+        if do_api:     _maybe_redeploy("RENDER_API_DEPLOY_HOOK",    "redeploy_api",    "ops.reset_all", result["steps"])
+        if do_worker:  _maybe_redeploy("RENDER_WORKER_DEPLOY_HOOK", "redeploy_worker", "ops.reset_all", result["steps"])
+        if do_ui:      _maybe_redeploy("RENDER_UI_DEPLOY_HOOK",     "redeploy_ui",     "ops.reset_all", result["steps"])
+
+        if do_netlify: _maybe_redeploy("NETLIFY_BUILD_HOOK",        "redeploy_netlify","ops.reset_all", result["steps"])
+        if do_vercel:  _maybe_redeploy("VERCEL_DEPLOY_HOOK",        "redeploy_vercel", "ops.reset_all", result["steps"])
+
+        # Cloudflare purge last
+        if do_cf_purge:
+            zid = get_cfg("CLOUDFLARE_ZONE_ID")
+            tok = get_cfg("CLOUDFLARE_API_TOKEN")
+            if zid and tok:
+                try:
+                    _throttle("purge_cf")
+                    url = f"https://api.cloudflare.com/client/v4/zones/{zid}/purge_cache"
+                    headers = {"Authorization": f"Bearer {tok}"}
+                    code, text = _post_json(url, {"purge_everything": True}, headers)
+                    result["steps"]["purge_cloudflare"] = {"ok": code == 200, "status": code, "body": text[:600]}
+                except Exception as e:
+                    result["steps"]["purge_cloudflare"] = {"ok": False, "error": str(e)}
+            else:
+                result["steps"]["purge_cloudflare"] = {"ok": False, "note": "cloudflare not configured"}
+
+        # Post snapshot
+        try:
+            api = (get_cfg("SCW_API_URL", "https://scw-api.onrender.com") or "").rstrip("/")
+            def jget(u):
+                try:
+                    with urllib.request.urlopen(u, timeout=12) as r_:
+                        return True, json.loads(r_.read().decode("utf-8", "ignore"))
+                except Exception as e:
+                    return False, str(e)
+            ok_api, who = jget(api + "/whoami")
+            ok_hz  = jget(api + "/healthz")[0]
+            result["postcheck"] = {"api_ok": ok_api, "healthz_ok": ok_hz, "whoami": who}
+        except Exception as e:
+            result["postcheck"] = {"api_ok": False, "error": str(e)}
+
+        result["new_admin_token"] = new_tok
+        return {"ok": True, **result}
+    finally:
+        _release_lock("reset_all", lock_token)
