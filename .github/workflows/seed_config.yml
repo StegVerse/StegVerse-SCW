@@ -1,34 +1,49 @@
-name: Seed Ops Config
-on: { workflow_dispatch: {} }
+name: Seed Steg Config
+on:
+  workflow_dispatch: {}
 
 jobs:
   seed:
     runs-on: ubuntu-latest
     steps:
-      - name: Push config into API (Redis-backed)
+      - name: Seed config into API (Redis-backed)
         env:
-          API: https://scw-api.onrender.com
-          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
-          SCW_UI_URL:  https://scw-ui.onrender.com
-          SCW_API_URL: https://scw-api.onrender.com
+          API:               ${{ vars.SCW_API_URL || 'https://scw-api.onrender.com' }}
+          ADMIN_TOKEN:       ${{ secrets.ADMIN_TOKEN }}
+          SCW_UI_URL:        ${{ vars.SCW_UI_URL || 'https://scw-ui.onrender.com' }}
+          SCW_API_URL:       ${{ vars.SCW_API_URL || 'https://scw-api.onrender.com' }}
           RENDER_UI_DEPLOY_HOOK:     ${{ secrets.RENDER_UI_DEPLOY_HOOK }}
           RENDER_API_DEPLOY_HOOK:    ${{ secrets.RENDER_API_DEPLOY_HOOK }}
           RENDER_WORKER_DEPLOY_HOOK: ${{ secrets.RENDER_WORKER_DEPLOY_HOOK }}
-          NETLIFY_BUILD_HOOK_UI:     ${{ secrets.NETLIFY_BUILD_HOOK_UI }}
-          VERCEL_DEPLOY_HOOK_UI:     ${{ secrets.VERCEL_DEPLOY_HOOK_UI }}
-          VERCEL_DEPLOY_HOOK_API:    ${{ secrets.VERCEL_DEPLOY_HOOK_API }}
-          CF_ZONE_ID:  ${{ secrets.CF_ZONE_ID }}
-          CF_API_TOKEN:${{ secrets.CF_API_TOKEN }}
+          NETLIFY_BUILD_HOOK:        ${{ secrets.NETLIFY_BUILD_HOOK }}
+          VERCEL_DEPLOY_HOOK:        ${{ secrets.VERCEL_DEPLOY_HOOK }}
+          CLOUDFLARE_ZONE_ID:        ${{ secrets.CF_ZONE_ID }}
+          CLOUDFLARE_API_TOKEN:      ${{ secrets.CF_API_TOKEN }}
+          MIN_REDEPLOY_INTERVAL_S:   ${{ vars.MIN_REDEPLOY_INTERVAL_S || '15' }}
         run: |
+          set -e
+          # Build JSON payload
           DATA=$(jq -n \
-            --arg UI "$SCW_UI_URL" --arg APIURL "$SCW_API_URL" \
-            --arg RUI "$RENDER_UI_DEPLOY_HOOK" --arg RAPI "$RENDER_API_DEPLOY_HOOK" --arg RWRK "$RENDER_WORKER_DEPLOY_HOOK" \
-            --arg NL "$NETLIFY_BUILD_HOOK_UI" --arg VUI "$VERCEL_DEPLOY_HOOK_UI" --arg VAPI "$VERCEL_DEPLOY_HOOK_API" \
-            --arg ZID "$CF_ZONE_ID" --arg TOK "$CF_API_TOKEN" \
-            '{SCW_UI_URL:$UI,SCW_API_URL:$APIURL,
+            --arg ADMIN_TOKEN "$ADMIN_TOKEN" \
+            --arg UI "$SCW_UI_URL" \
+            --arg APIURL "$SCW_API_URL" \
+            --arg RUI "$RENDER_UI_DEPLOY_HOOK" \
+            --arg RAPI "$RENDER_API_DEPLOY_HOOK" \
+            --arg RWRK "$RENDER_WORKER_DEPLOY_HOOK" \
+            --arg NFLY "$NETLIFY_BUILD_HOOK" \
+            --arg VERC "$VERCEL_DEPLOY_HOOK" \
+            --arg ZID "$CLOUDFLARE_ZONE_ID" \
+            --arg TOK "$CLOUDFLARE_API_TOKEN" \
+            --arg MIN "$MIN_REDEPLOY_INTERVAL_S" \
+            '{ADMIN_TOKEN:$ADMIN_TOKEN,SCW_UI_URL:$UI,SCW_API_URL:$APIURL,
               RENDER_UI_DEPLOY_HOOK:$RUI,RENDER_API_DEPLOY_HOOK:$RAPI,RENDER_WORKER_DEPLOY_HOOK:$RWRK,
-              NETLIFY_BUILD_HOOK_UI:$NL, VERCEL_DEPLOY_HOOK_UI:$VUI, VERCEL_DEPLOY_HOOK_API:$VAPI,
-              CLOUDFLARE_ZONE_ID:$ZID, CLOUDFLARE_API_TOKEN:$TOK}')
+              NETLIFY_BUILD_HOOK:$NFLY,VERCEL_DEPLOY_HOOK:$VERC,
+              CLOUDFLARE_ZONE_ID:$ZID,CLOUDFLARE_API_TOKEN:$TOK,
+              MIN_REDEPLOY_INTERVAL_S:$MIN}')
+          # Send to API
           curl -fsSL -X POST "$API/v1/ops/config/set" \
-            -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+            -H "Content-Type: application/json" \
+            -H "X-Admin-Token: $ADMIN_TOKEN" \
             --data "$DATA"
+          # Show what the API believes is configured (presence-only)
+          curl -fsSL -H "X-Admin-Token: $ADMIN_TOKEN" "$API/v1/ops/config/list"
