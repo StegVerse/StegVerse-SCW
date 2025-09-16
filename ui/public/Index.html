@@ -1,90 +1,110 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>StegVerse: Genesis Beta</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StegVerse — Private, Resilient Communication</title>
+<meta name="description" content="StegVerse: privacy-first messaging. Join the StegTalk beta today.">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/icon-192.png">
+<meta name="theme-color" content="#000000">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:40px auto;padding:0 16px}
-  .muted{color:#666} .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:16px 0}
-  .row{display:flex;gap:12px;flex-wrap:wrap} a.button{display:inline-block;padding:10px 14px;border-radius:8px;border:1px solid #ddd;text-decoration:none}
-  code{background:#f6f8fa;border-radius:6px;padding:2px 6px}
-  .ok{color:#0a0} .err{color:#b00}
+  :root { --bg:#0b0e13; --fg:#e9eef7; --mut:#97a3b6; --accent:#6ee7b7; --chip:#1b2330; }
+  html,body { background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  .wrap { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:16px 0; }
+  .brand { font-weight:700; letter-spacing:.3px; }
+  .cta { display:flex; gap:12px; flex-wrap:wrap; }
+  a.btn,button.btn { background:var(--accent); color:#04110b; padding:12px 16px; border-radius:10px; border:none; text-decoration:none; font-weight:700; }
+  a.btn.alt { background:#232b3b; color:var(--fg); border:1px solid #334258; }
+  .hero { padding:24px 0 8px; }
+  h1 { font-size: clamp(28px, 5vw, 44px); margin: 12px 0; line-height:1.1; }
+  p.lead { color:var(--mut); max-width: 52ch; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin: 12px 0 24px; }
+  .chip { background:var(--chip); color:#bcd0ea; padding:6px 10px; border-radius:999px; font-size:14px; }
+  section { margin: 32px 0; }
+  .cols { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:16px; }
+  .card { background:#0f141c; border:1px solid #1d2532; border-radius:14px; padding:16px; }
+  small.mut { color:var(--mut); }
+  footer { color:var(--mut); font-size:14px; margin: 32px 0; }
+  .hide { display:none; }
 </style>
+
+<div class="wrap">
+  <header>
+    <div class="brand">StegVerse</div>
+    <nav class="cta">
+      <a class="btn" href="/stegtalk.html">Get StegTalk Beta</a>
+      <a class="btn alt" href="#learn">Learn more</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <h1>Private, resilient communication for everyone.</h1>
+    <p class="lead">StegVerse pairs human-friendly tools with safety-first automation. Start with StegTalk (Beta), our installable app for secure messaging. No technical knowledge required.</p>
+
+    <div class="chips">
+      <span class="chip" id="chipAPI">API: checking…</span>
+      <span class="chip" id="chipWorker">Worker: checking…</span>
+      <span class="chip" id="chipLegal">Legal feed: checking…</span>
+    </div>
+
+    <div class="cta">
+      <a class="btn" href="/stegtalk.html">Install StegTalk (Beta)</a>
+      <a class="btn alt" href="#simple">Simple Mode</a>
+    </div>
+    <p><small class="mut">On iPhone: open <b>StegTalk</b> → Share → “Add to Home Screen”. On Android: tap the “Install” prompt.</small></p>
+  </div>
+
+  <section id="simple">
+    <h2>Simple Mode (for everyone)</h2>
+    <div class="cols">
+      <div class="card">
+        <h3>1) Install</h3>
+        <p>Tap “Install StegTalk” above. If you don’t see a prompt: iPhone → Share → Add to Home Screen.</p>
+      </div>
+      <div class="card">
+        <h3>2) Verify</h3>
+        <p>Open StegTalk and look for “API connected”. If you see a warning, just wait a few seconds or try again.</p>
+      </div>
+      <div class="card">
+        <h3>3) Start</h3>
+        <p>Create a handle and message a friend. That’s it—StegVerse handles the heavy lifting.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="learn">
+    <h2>What is StegVerse?</h2>
+    <div class="cols">
+      <div class="card">
+        <h3>Trust by Design</h3>
+        <p>Local-first where sensible, zero-trust server boundaries, transparent diagnostics, and user-controlled recovery.</p>
+      </div>
+      <div class="card">
+        <h3>Resilient by Default</h3>
+        <p>Automated redeploys and cache controls keep the system healthy—even during high traffic or provider issues.</p>
+      </div>
+      <div class="card">
+        <h3>Open Roadmap</h3>
+        <p>StegDev invites contributors. See our developer docs for modules, APIs, and safety policies.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>© StegVerse. <a href="/diag.html" class="hide" id="ops">Ops</a></p>
+  </footer>
+</div>
+
 <script>
-// >>> EDIT THIS if needed:
-const API = 'https://scw-api.onrender.com'.replace(/\/+$/,'');  // your API base
-
-async function probe(){
-  const el = document.getElementById('apiStatus');
-  const svc = document.getElementById('apiService');
-  if(!API){ el.textContent = 'API URL not set'; el.className='err'; return; }
-  try{
-    const r = await fetch(API + '/whoami', {cache:'no-store'});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const j = await r.json();
-    el.textContent = 'Connected'; el.className='ok';
-    svc.textContent = j.service || 'scw-api';
-  }catch(e){
-    el.textContent = 'Unreachable — ' + e.message; el.className='err';
-    svc.textContent = 'n/a';
-  }
-}
-window.addEventListener('DOMContentLoaded', probe);
+  // Status chips (non-blocking)
+  const API='https://scw-api.onrender.com';
+  fetch(API+'/whoami',{cache:'no-store'}).then(r=>r.json()).then(_=>{document.getElementById('chipAPI').textContent='API: Connected'}).catch(_=>{document.getElementById('chipAPI').textContent='API: Unreachable'});
+  // Worker: consider exposed run-queue ping later; for now mirror API status
+  fetch(API+'/healthz',{cache:'no-store'}).then(r=>{document.getElementById('chipWorker').textContent=(r.ok?'Worker: OK':'Worker: Unknown')}).catch(_=>{document.getElementById('chipWorker').textContent='Worker: Unknown'});
+  // Legal: warn only (expected empty in early beta)
+  fetch(API+'/v1/legal/alerts',{cache:'no-store'}).then(r=>{document.getElementById('chipLegal').textContent=(r.ok?'Legal feed: OK':'Legal feed: pending')}).catch(_=>{document.getElementById('chipLegal').textContent='Legal feed: pending'});
+  // Long-press footer to reveal Ops link
+  let pressT; document.querySelector('footer').addEventListener('touchstart',()=>{pressT=Date.now()});
+  document.querySelector('footer').addEventListener('touchend',()=>{ if(Date.now()-pressT>700) document.getElementById('ops').classList.remove('hide') });
 </script>
-</head>
-<body>
-  <h1>StegVerse: Genesis Beta</h1>
-  <p class="muted">Autonomous, AI-secured communication (beta).</p>
-
-  <div class="card">
-    <h2>Download</h2>
-    <div class="row">
-      <!-- Replace the APK URL below when you publish a GitHub Release asset -->
-      <a class="button" id="apk" href="#" onclick="alert('APK link coming shortly.');return false;">StegTalk Genesis APK</a>
-      <!-- If you have a recovery QR online later, link it here -->
-      <a class="button" href="#" onclick="alert('Recovery QR coming shortly.');return false;">Recovery QR</a>
-      <a class="button" href="#fallback">SCW Fallback</a>
-    </div>
-    <small class="muted">Android sideload. Enable developer mode & “Unknown sources”.</small>
-  </div>
-
-  <div class="card">
-    <h2>Status</h2>
-    <p>API: <strong id="apiStatus">Checking…</strong> • Service: <code id="apiService">…</code></p>
-    <div class="row">
-      <a class="button" href="#legal" onclick="document.getElementById('legal').scrollIntoView({behavior:'smooth'});return false;">Legal (stub)</a>
-      <a class="button" href="#consent" onclick="document.getElementById('consent').scrollIntoView({behavior:'smooth'});return false;">Consent (coming soon)</a>
-    </div>
-  </div>
-
-  <div id="legal" class="card">
-    <h2>Legal Dashboard (stub)</h2>
-    <pre id="report" style="white-space:pre-wrap">Loading weekly report…</pre>
-    <script>
-      (async () => {
-        const el = document.getElementById('report');
-        try{
-          const r = await fetch(API + '/v1/legal/report/latest', {cache:'no-store'});
-          const j = await r.json();
-          el.textContent = (j.markdown || JSON.stringify(j, null, 2)).slice(0, 5000);
-        }catch(e){
-          el.textContent = 'No report yet (this is OK for first boot).';
-        }
-      })();
-    </script>
-  </div>
-
-  <div id="fallback" class="card">
-    <h2>SCW Fallback</h2>
-    <p>If the Builder Portal is redeploying, this page remains available. SCW can continue building via the API in the background.</p>
-  </div>
-
-  <div id="consent" class="card">
-    <h2>Consent Gate (coming soon)</h2>
-    <p>Human/AI contributor consent will appear here once enabled.</p>
-  </div>
-
-  <p class="muted">© StegVerse — Genesis build. If you’re seeing this, we’re live.</p>
-</body>
-</html>
