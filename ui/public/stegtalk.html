@@ -1,0 +1,51 @@
+<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StegTalk Beta</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#000000">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:860px;margin:24px auto;padding:0 16px}
+  .mut{color:#66758a}
+  .ok{color:#0a0}.bad{color:#b00}
+  button{padding:10px 14px;border:1px solid #ddd;border-radius:10px;background:#fff}
+  pre{background:#f6f8fa;padding:12px;border-radius:8px;white-space:pre-wrap}
+</style>
+<h1>StegTalk (Beta)</h1>
+<p>Status: <span id="st" class="mut">checking…</span></p>
+<button id="installBtn" style="display:none">Install StegTalk</button>
+
+<h2>Getting started</h2>
+<ol>
+  <li>On iPhone: Share → <b>Add to Home Screen</b>. On Android: tap the <b>Install</b> prompt or the button above.</li>
+  <li>Open the app from your home screen. Look for <b>API connected</b> below.</li>
+</ol>
+
+<h3>Diagnostics</h3>
+<pre id="log">Waiting…</pre>
+
+<script>
+  // Register service worker (PWA)
+  if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js'); }
+
+  // Install prompt (Android/Chrome)
+  let deferredPrompt=null;
+  window.addEventListener('beforeinstallprompt', (e)=>{
+    e.preventDefault(); deferredPrompt=e;
+    const btn=document.getElementById('installBtn');
+    btn.style.display='inline-block';
+    btn.onclick=async()=>{ deferredPrompt.prompt(); deferredPrompt=null; btn.style.display='none'; };
+  });
+
+  // API probe
+  const API=(window.STEG_API || 'https://scw-api.onrender.com');
+  const st=document.getElementById('st');
+  const log=document.getElementById('log');
+
+  function write(x){ log.textContent = (log.textContent? log.textContent+'\n':'') + x; }
+
+  fetch(API+'/whoami',{cache:'no-store'})
+    .then(r=>r.json())
+    .then(j=>{ st.textContent='API connected: '+(j.service||'?'); st.className='ok'; write('whoami -> '+JSON.stringify(j)); })
+    .catch(err=>{ st.textContent='API unreachable'; st.className='bad'; write('whoami error: '+err); });
+</script>
