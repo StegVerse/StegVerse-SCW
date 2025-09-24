@@ -1,0 +1,48 @@
+name: SCW API Autodeploy
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'api/**'
+      - '.github/workflows/scw-api-autodeploy.yml'
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Trigger a new deploy on Render for the API service
+      - name: Trigger Render Deploy
+        env:
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          curl -sS -X POST \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Content-Type: application/json" \
+            "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
+            -d '{"clearCache": false}'
+
+      # Poll the health endpoint until it's green
+      - name: Wait & Verify Health
+        env:
+          HEALTH_URL: ${{ secrets.HEALTH_URL }}
+        run: |
+          echo "Polling health: $HEALTH_URL"
+          for i in {1..40}; do
+            sleep 6
+            code=$(curl -s -o /tmp/h -w "%{http_code}" "$HEALTH_URL")
+            if [ "$code" = "200" ]; then
+              echo "Health OK:"
+              cat /tmp/h
+              exit 0
+            fi
+            echo "Attempt $i/40: HTTP $code"
+          done
+          echo "Health check failed after 40 tries"
+          cat /tmp/h || true
+          exit 1
