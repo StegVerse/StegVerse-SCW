@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SCW Diagnostics</title>
+<style>
+:root { --gap: 12px; }
+* { box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:24px; background:#0f172a; color:#e2e8f0; }
+h1,h2{ margin:0 0 8px; }
+h1{ font-size:20px; } h2{ font-size:16px; opacity:.9; }
+.row{ display:grid; grid-template-columns: 1fr 1fr; gap:var(--gap); margin-top:var(--gap);}
+.col{ background:#111827; border:1px solid #1f2937; border-radius:10px; padding:16px;}
+.muted{ color:#94a3b8; font-size:12px; }
+label{ display:block; font-size:12px; margin:8px 0 4px; color:#cbd5e1;}
+input[type=text],input[type=password],input[type=url],textarea{
+  width:100%; padding:10px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e2e8f0;
+}
+textarea{ min-height:120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px;}
+button{ appearance:none; border:1px solid #334155; background:#0b4; color:#fff; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600;}
+button.secondary{ background:#1f2937; }
+button.warn{ background:#b91c1c; border-color:#7f1d1d; }
+.row button{ width:100%; }
+.grid-2{ display:grid; grid-template-columns: repeat(2,1fr); gap:var(--gap);}
+.grid-3{ display:grid; grid-template-columns: repeat(3,1fr); gap:var(--gap);}
+.pill{ display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; border:1px solid #334155; background:#0b1220;}
+.sp{ height:8px; }
+.footer{ margin-top:16px; font-size:12px; color:#94a3b8;}
+.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+.actions{ display:flex; gap:8px; flex-wrap:wrap; }
+.hr{ border-top:1px solid #1f2937; margin:12px 0; }
+@media (max-width:900px){ .row{ grid-template-columns: 1fr; } }
+a { color:#93c5fd; text-decoration: none; }
+a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<h1>SCW Diagnostics</h1>
+<div class="muted">Admin token • Health • Default/Branded build triggers • Service registry • Deploy & Rebuild history</div>
+
+<div class="row">
+  <div class="col">
+    <h2>Status</h2>
+    <div class="muted">Auto-detect API, check health, view env presence</div>
+    <div class="sp"></div>
+    <div class="grid-2">
+      <div>
+        <label>API URL</label>
+        <input id="apiUrl" type="text" placeholder="https://scw-api.onrender.com"/>
+      </div>
+      <div>
+        <label>X-Admin-Token (local only)</label>
+        <input id="adminToken" type="password" placeholder="••••••••••••••••"/>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:8px;">
+      <button class="secondary" id="saveLocal">Save Locally</button>
+      <button class="secondary" id="loadLocal">Load Saved</button>
+      <button id="checkHealth">Check Health</button>
+      <button id="checkEnv" class="secondary">Check Env Presence</button>
+      <button id="getDeploys" class="secondary">Refresh Deploy History</button>
+      <button id="getKits" class="secondary">Refresh Rebuild Kits</button>
+    </div>
+    <div class="sp"></div>
+    <div id="healthOut" class="mono muted"></div>
+  </div>
+
+  <div class="col">
+    <h2>Admin Controls</h2>
+    <div class="muted">Bootstrap once; rotate when needed</div>
+    <div class="sp"></div>
+    <div class="grid-2">
+      <div>
+        <label>Bootstrap: New Admin Token</label>
+        <input id="bootstrapToken" type="password" placeholder="min 16 chars"/>
+      </div>
+      <div class="actions" style="align-items:end;"><button id="doBootstrap">Bootstrap</button></div>
+    </div>
+    <div class="hr"></div>
+    <div class="grid-2">
+      <div>
+        <label>Rotate: New Admin Token</label>
+        <input id="rotateToken" type="password" placeholder="min 16 chars"/>
+      </div>
+      <div>
+        <label>Optional Reset Secret</label>
+        <input id="resetSecret" type="password" placeholder="if configured"/>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:8px;"><button class="warn" id="doRotate">Rotate</button></div>
+    <div class="sp"></div>
+    <div id="adminOut" class="mono muted"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <h2>One-Click Default StegTalk</h2>
+    <div class="muted">brand_id = "default"</div>
+    <div class="grid-2">
+      <div>
+        <label>Default Domain (optional)</label>
+        <input id="defaultDomain" type="text" placeholder="stegtalk.stegverse.org"/>
+      </div>
+      <div>
+        <label>Package ID (optional)</label>
+        <input id="defaultPkg" type="text" placeholder="org.stegverse.stegtalk"/>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:8px;"><button id="triggerDefault">Trigger Default Build</button></div>
+    <div class="sp"></div>
+    <div id="defaultOut" class="mono muted"></div>
+  </div>
+
+  <div class="col">
+    <h2>Custom Brand Manifest</h2>
+    <div class="muted">Fill fields or paste JSON</div>
+    <div class="grid-2">
+      <div>
+        <label>Brand ID</label>
+        <input id="brandId" type="text" placeholder="republi"/>
+      </div>
+      <div>
+        <label>App Name</label>
+        <input id="appName" type="text" placeholder="RepubliSteg"/>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label>Primary HEX</label>
+        <input id="primaryHex" type="text" placeholder="#0A84FF"/>
+      </div>
+      <div>
+        <label>Logo URL</label>
+        <input id="logoUrl" type="url" placeholder="https://.../logo.png"/>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label>Domain</label>
+        <input id="brandDomain" type="text" placeholder="brand.stegverse.org"/>
+      </div>
+      <div>
+        <label>Package ID (optional)</label>
+        <input id="packageId" type="text" placeholder="org.stegverse.republi"/>
+      </div>
+    </div>
+    <label>Env Overrides (JSON, optional)</label>
+    <textarea id="envOverrides" placeholder='{"VITE_WELCOME_COPY":"Hello Brand!"}'></textarea>
+    <label>Raw Manifest (optional; overrides fields)</label>
+    <textarea id="rawManifest" placeholder='{"brand_id":"republi","app_name":"RepubliSteg","primary_hex":"#D91C1C","logo_url":"https://.../logo.png","domain":"republi.stegverse.org"}'></textarea>
+    <div class="actions" style="margin-top:8px;">
+      <button id="triggerBrand">Trigger Branded Build</button>
+      <button class="secondary" id="loadDemo">Load Demo Manifest</button>
+    </div>
+    <div class="sp"></div>
+    <div id="brandOut" class="mono muted"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <h2>Service Registry (optional)</h2>
+    <div class="muted">Token Vault, Social Updater, etc.</div>
+    <div class="grid-2">
+      <div>
+        <label>Service Name</label>
+        <input id="svcName" type="text" placeholder="token-vault"/>
+      </div>
+      <div>
+        <label>Base URL</label>
+        <input id="svcUrl" type="url" placeholder="https://token-vault.onrender.com"/>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:8px;"><button id="registerSvc">Register Service</button></div>
+    <div class="sp"></div>
+    <div id="svcOut" class="mono muted"></div>
+  </div>
+
+  <div class="col">
+    <h2>Deploy History</h2>
+    <div class="muted">Last 10 runs</div>
+    <div id="deploys" class="mono muted"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <h2>Rebuild Kits</h2>
+    <div class="muted">Kits reported from CI (type = rebuild_kit)</div>
+    <div id="kits" class="mono muted"></div>
+  </div>
+  <div class="col">
+    <h2>Notes</h2>
+    <div class="muted">Admin token is saved in <span class="pill">sessionStorage</span> on this device. Rotate periodically.</div>
+  </div>
+</div>
+
+<div class="footer">StegVerse Self-Healing • Diagnostics</div>
+
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const out = { health: $("healthOut"), admin: $("adminOut"), def: $("defaultOut"), brand: $("brandOut"), svc: $("svcOut"), deploys: $("deploys"), kits: $("kits") };
+  const log = (el, msg) => { el.textContent = typeof msg === "string" ? msg : JSON.stringify(msg, null, 2); };
+
+  $("loadLocal").onclick = () => { $("apiUrl").value = sessionStorage.getItem("apiUrl") || ""; $("adminToken").value = sessionStorage.getItem("adminToken") || ""; };
+  $("saveLocal").onclick = () => { sessionStorage.setItem("apiUrl", $("apiUrl").value.trim()); sessionStorage.setItem("adminToken", $("adminToken").value.trim()); };
+
+  window.addEventListener("load", async () => {
+    const saved = sessionStorage.getItem("apiUrl");
+    if (saved) { $("apiUrl").value = saved; return; }
+    const cands = [location.origin.replace(/\/$/,"")+"/api", "https://scw-api.onrender.com"];
+    for (const base of cands) { try { const r = await fetch(base + "/v1/ops/health"); if (r.ok) { $("apiUrl").value = base; sessionStorage.setItem("apiUrl", base); break; } } catch(e){} }
+  });
+
+  const api = (path) => ($("apiUrl").value.trim().replace(/\/$/,"") + path);
+  const headers = () => { const h = { "Content-Type": "application/json" }; const t = $("adminToken").value.trim(); if (t) h["X-Admin-Token"] = t; return h; };
+
+  $("checkHealth").onclick = async () => { try { const r = await fetch(api("/v1/ops/health")); log(out.health, await r.json()); } catch(e){ log(out.health, e.message); } };
+  $("checkEnv").onclick = async () => { try { const r = await fetch(api("/v1/ops/env/required")); log(out.health, await r.json()); } catch(e){ log(out.health, e.message); } };
+
+  $("doBootstrap").onclick = async () => {
+    try {
+      const body = { admin_token: $("bootstrapToken").value.trim() };
+      const r = await fetch(api("/v1/ops/config/bootstrap"), { method: "POST", headers: headers(), body: JSON.stringify(body) });
+      const j = await r.json(); log(out.admin, j);
+      if (r.ok) { $("adminToken").value = body.admin_token; sessionStorage.setItem("adminToken", body.admin_token); }
+    } catch(e){ log(out.admin, e.message); }
+  };
+
+  $("doRotate").onclick = async () => {
+    try {
+      const body = { new_admin_token: $("rotateToken").value.trim(), reset_secret: $("resetSecret").value.trim() || undefined };
+      const r = await fetch(api("/v1/ops/config/rotate"), { method: "POST", headers: headers(), body: JSON.stringify(body) });
+      const j = await r.json(); log(out.admin, j);
+      if (r.ok) { $("adminToken").value = body.new_admin_token; sessionStorage.setItem("adminToken", body.new_admin_token); }
+    } catch(e){ log(out.admin, e.message); }
+  };
+
+  $("triggerDefault").onclick = async () => {
+    try {
+      const brand = { brand_id:"default", app_name:"StegTalk", primary_hex:"#0A84FF",
+        logo_url:"https://raw.githubusercontent.com/StegVerse/branding/main/stegtalk-logo.png",
+        domain:$("defaultDomain").value.trim()||"", package_id:$("defaultPkg").value.trim()||"", env_overrides:{} };
+      const r = await fetch(api("/v1/ops/build/trigger"), { method:"POST", headers: headers(), body: JSON.stringify(brand) });
+      log(out.def, await r.json());
+    } catch(e){ log(out.def, e.message); }
+  };
+
+  $("loadDemo").onclick = () => {
+    $("brandId").value="republi"; $("appName").value="RepubliSteg"; $("primaryHex").value="#D91C1C";
+    $("logoUrl").value="https://raw.githubusercontent.com/StegVerse/branding/main/republi/logo.png";
+    $("brandDomain").value="republi.stegverse.org"; $("packageId").value="org.stegverse.republi";
+    $("envOverrides").value=JSON.stringify({ VITE_WELCOME_COPY:"Welcome to RepubliSteg", VITE_BRAND_TAGLINE:"Private. Fast. Yours." }, null, 2);
+  };
+
+  $("triggerBrand").onclick = async () => {
+    try {
+      let brand; const raw=$("rawManifest").value.trim();
+      if (raw) brand=JSON.parse(raw);
+      else {
+        let env={}; const x=$("envOverrides").value.trim(); if (x) env=JSON.parse(x);
+        brand={ brand_id:$("brandId").value.trim(), app_name:$("appName").value.trim(), primary_hex:$("primaryHex").value.trim(),
+                logo_url:$("logoUrl").value.trim(), domain:$("brandDomain").value.trim(), package_id:$("packageId").value.trim()||undefined,
+                env_overrides:env };
+      }
+      const r=await fetch(api("/v1/ops/build/trigger"), { method:"POST", headers: headers(), body: JSON.stringify(brand) });
+      log(out.brand, await r.json());
+    } catch(e){ log(out.brand, e.message); }
+  };
+
+  $("registerSvc").onclick = async () => {
+    try {
+      const body = { name:$("svcName").value.trim(), base_url:$("svcUrl").value.trim(), hmac_required:true };
+      const r = await fetch(api("/v1/ops/service/register"), { method:"POST", headers: headers(), body: JSON.stringify(body) });
+      log(out.svc, await r.json());
+    } catch(e){ log(out.svc, e.message); }
+  };
+
+  async function loadDeploys(){
+    try {
+      const r = await fetch(api("/v1/ops/deploy/summary?limit=10"));
+      const j = await r.json();
+      if (!j.ok) { log(out.deploys, j); return; }
+      const lines = j.items.map(it => `- [${new Date(it.ts*1000).toISOString()}] ${it.status.toUpperCase()} • ${it.branch}@${it.commit_sha.slice(0,7)} • health=${it.health_code} • run: ${it.run_url}`).join("\n");
+      out.deploys.textContent = lines || "(no deploys yet)";
+    } catch(e){ log(out.deploys, e.message); }
+  }
+  $("getDeploys").onclick = loadDeploys;
+
+  async function loadKits(){
+    try {
+      const r = await fetch(api("/v1/ops/deploy/summary?limit=25"));
+      const j = await r.json();
+      if (!j.ok) { log(out.kits, j); return; }
+      const kits = j.items.filter(it => it.health_body && it.health_body.type === "rebuild_kit");
+      const lines = kits.map(it => {
+        const when = new Date(it.ts*1000).toISOString();
+        const repo = it.health_body.repo || "(repo)";
+        const zip = it.health_body.zip || "(kit zip path)";
+        const note = it.health_body.note || "";
+        return `- [${when}] ${repo} • ${it.branch}@${it.commit_sha.slice(0,7)} • ${note} ${zip.startsWith("http") ? "• download: "+zip : ""}`;
+      }).join("\n");
+      out.kits.textContent = lines || "(no rebuild kits reported yet)";
+    } catch(e){ log(out.kits, e.message); }
+  }
+  $("getKits").onclick = loadKits;
+
+  setTimeout(loadDeploys, 600);
+  setTimeout(loadKits, 900);
+})();
+</script>
+</body>
+</html>
