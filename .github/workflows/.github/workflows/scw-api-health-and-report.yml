@@ -1,0 +1,74 @@
+name: SCW API • Health & Report (Zero-Secret)
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'api/**'
+      - '.github/workflows/scw-api-health-and-report.yml'
+  workflow_dispatch: {}
+
+jobs:
+  verify-and-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wait for Render auto-deploy
+        run: |
+          # Give Render a head start to build & roll out (tune as needed)
+          sleep 60
+
+      - name: Wait for health
+        id: health
+        env:
+          HEALTH_URL: ${{ secrets.HEALTH_URL }}   # only non-Render secret needed
+        run: |
+          set -euo pipefail
+          for i in {1..40}; do
+            sleep 6
+            code=$(curl -s -o /tmp/health -w "%{http_code}" "$HEALTH_URL")
+            if [ "$code" = "200" ]; then
+              echo "health_code=$code" >> $GITHUB_OUTPUT
+              echo "health_body=$(tr -d '\n' < /tmp/health | sed 's/"/\\"/g')" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "Attempt $i/40: HTTP $code"
+          done
+          echo "health_code=${code:-0}" >> $GITHUB_OUTPUT
+          echo "health_body=" >> $GITHUB_OUTPUT
+          exit 1
+
+      - name: Post deploy summary to SCW
+        if: ${{ always() }}
+        env:
+          DEPLOY_REPORT_URL: ${{ secrets.DEPLOY_REPORT_URL }}
+          DEPLOY_REPORT_TOKEN: ${{ secrets.DEPLOY_REPORT_TOKEN }}
+          HEALTH_CODE: ${{ steps.health.outputs.health_code || 0 }}
+          HEALTH_BODY: ${{ steps.health.outputs.health_body || '' }}
+        run: |
+          set -euo pipefail
+          STATUS="${{ job.status }}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BRANCH="${{ github.ref_name }}"
+          SHA="${{ github.sha }}"
+          BODY=$(cat <<JSON
+          {
+            "source":"github-actions",
+            "workflow":"${{ github.workflow }}",
+            "run_id":"${{ github.run_id }}",
+            "run_url":"${RUN_URL}",
+            "commit_sha":"${SHA}",
+            "branch":"${BRANCH}",
+            "status":"${STATUS}",
+            "health_code": ${HEALTH_CODE:-0},
+            "health_body": ${HEALTH_BODY:-{}},
+            "ts": $(date +%s)
+          }
+          JSON
+          )
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${DEPLOY_REPORT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
+            "$DEPLOY_REPORT_URL" || true
