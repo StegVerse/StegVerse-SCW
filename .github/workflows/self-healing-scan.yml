@@ -1,9 +1,10 @@
 name: Self-Healing Scan (+ optional fixes)
+
 on:
   workflow_dispatch:
     inputs:
       auto_fix:
-        description: 'Apply canonical fixes for missing items (writes files & logs actions)'
+        description: 'Apply canonical fixes (writes files & logs)'
         required: false
         default: 'false'
   push:
@@ -26,18 +27,51 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 2 }
 
-      - name: Run continuity scanner
+      - name: Run scanner
         run: python3 scripts/collect_self_healing.py
 
-      - name: Optionally apply canonical fixes
+      - name: Apply fixes (optional)
         if: ${{ github.event.inputs.auto_fix == 'true' }}
         run: python3 scripts/apply_canonical_fixes.py
 
-      - name: Re-scan after fixes (if any)
+      - name: Re-scan (after fixes)
         if: ${{ github.event.inputs.auto_fix == 'true' }}
         run: python3 scripts/collect_self_healing.py
 
-      - name: Upload manifest & remediation journal
+      # -------- OPTIONAL: report to SCW if secrets are present ----------
+      # We COPY secrets into env, then check env.* in the if:. This is parser-safe.
+      - name: Report to SCW (optional)
+        env:
+          DEPLOY_REPORT_URL: ${{ secrets.DEPLOY_REPORT_URL }}
+          DEPLOY_REPORT_TOKEN: ${{ secrets.DEPLOY_REPORT_TOKEN }}
+        if: ${{ env.DEPLOY_REPORT_URL != '' && env.DEPLOY_REPORT_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          BRANCH="${GITHUB_REF_NAME}"
+          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          BODY=$(cat <<JSON
+          {
+            "source": "github-actions",
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${GITHUB_RUN_ID}",
+            "run_url": "${RUN_URL}",
+            "commit_sha": "${SHA}",
+            "branch": "${BRANCH}",
+            "status": "success",
+            "health_code": 200,
+            "health_body": { "type": "self_healing_manifest" },
+            "ts": $(date +%s)
+          }
+          JSON
+          )
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${DEPLOY_REPORT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
+            "$DEPLOY_REPORT_URL" || true
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: self_healing_manifest
@@ -48,21 +82,3 @@ jobs:
             self_healing_out/GAPS.json
             self_healing_out/REMEDIATIONS.md
           if-no-files-found: error
-
-      - name: Report to SCW (optional)
-        if: ${{ secrets.DEPLOY_REPORT_URL != '' && secrets.DEPLOY_REPORT_TOKEN != '' }}
-        env:
-          DEPLOY_REPORT_URL: ${{ secrets.DEPLOY_REPORT_URL }}
-          DEPLOY_REPORT_TOKEN: ${{ secrets.DEPLOY_REPORT_TOKEN }}
-        run: |
-          set -euo pipefail
-          SHA="$(git rev-parse HEAD)"; BRANCH="${GITHUB_REF_NAME}"
-          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          BODY=$(cat <<JSON
-          { "source":"github-actions","workflow":"Self-Healing Scan","run_id":"${GITHUB_RUN_ID}","run_url":"${RUN_URL}",
-            "commit_sha":"${SHA}","branch":"${BRANCH}","status":"success","health_code":200,
-            "health_body":{"type":"self_healing_manifest","repo":"${GITHUB_REPOSITORY}","artifact":"self_healing_manifest"},
-            "ts": $(date +%s) }
-          JSON
-          )
-          curl -sS -X POST -H "Authorization: Bearer ${DEPLOY_REPORT_TOKEN}" -H "Content-Type: application/json" -d "$BODY" "$DEPLOY_REPORT_URL" || true
