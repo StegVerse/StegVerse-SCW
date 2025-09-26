@@ -1,55 +1,11 @@
-name: Multi Deploy & Purge
-
+name: Deploy Multi (temporarily neutralized)
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  ship:
+  noop:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy UI (Render)
-        if: ${{ secrets.RENDER_UI_DEPLOY_HOOK != '' }}
-        run: |
-          curl -fsSL -X POST "${{ secrets.RENDER_UI_DEPLOY_HOOK }}" \
-            -H "Content-Type: application/json" -d '{"source":"gh"}'
-      - name: Deploy API (Render)
-        if: ${{ secrets.RENDER_API_DEPLOY_HOOK != '' }}
-        run: |
-          curl -fsSL -X POST "${{ secrets.RENDER_API_DEPLOY_HOOK }}" \
-            -H "Content-Type: application/json" -d '{"source":"gh"}'
-      - name: Deploy Worker (Render)
-        if: ${{ secrets.RENDER_WORKER_DEPLOY_HOOK != '' }}
-        run: |
-          curl -fsSL -X POST "${{ secrets.RENDER_WORKER_DEPLOY_HOOK }}" \
-            -H "Content-Type: application/json" -d '{"source":"gh"}'
-
-      - name: Trigger Netlify Build
-        if: ${{ secrets.NETLIFY_BUILD_HOOK != '' }}
-        run: |
-          curl -fsSL -X POST "${{ secrets.NETLIFY_BUILD_HOOK }}" \
-            -H "Content-Type: application/json"
-
-      - name: Trigger Vercel Deploy
-        if: ${{ secrets.VERCEL_DEPLOY_HOOK != '' }}
-        run: |
-          curl -fsSL -X POST "${{ secrets.VERCEL_DEPLOY_HOOK }}" \
-            -H "Content-Type: application/json"
-
-      - name: Purge Cloudflare
-        if: ${{ secrets.CF_ZONE_ID != '' && secrets.CF_API_TOKEN != '' }}
-        run: |
-          curl -fsSL -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CF_ZONE_ID }}/purge_cache" \
-            -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            --data '{"purge_everything":true}'
-
-      - name: Wait for propagation
-        run: sleep 8
-
-      - name: Smoke check API
-        run: |
-          echo "Checking API connectivity..."
-          curl -fsS https://scw-api.onrender.com/whoami | tee result.json
-          echo "✅ API OK"
+      - run: |
+          echo "Deploy steps temporarily disabled to fix parser errors."
+          echo "We will re-enable once zero-secret/kv flow is finalized."
