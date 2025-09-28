@@ -1,0 +1,34 @@
+name: Rebuild Kit (Zero-Secret)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Ensure script is executable
+        run: chmod +x scripts/make_rebuild_bundle.sh 2>/dev/null || true
+
+      - name: Build Rebuild Kit
+        run: |
+          bash scripts/make_rebuild_bundle.sh \
+            "$(git rev-parse HEAD)" \
+            "$(git rev-parse HEAD~1 || echo HEAD)" \
+            "rebuild_kit" \
+            "$(basename "$GITHUB_REPOSITORY")" > zipname.txt
+          cat zipname.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuild_kit
+          path: ./*.zip
+          if-no-files-found: error
