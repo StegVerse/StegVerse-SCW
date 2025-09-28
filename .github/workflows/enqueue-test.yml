@@ -1,0 +1,14 @@
+name: Enqueue Test Job
+on: workflow_dispatch
+jobs:
+  enqueue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install redis-py
+        run: pip install redis
+      - name: Run enqueue script
+        env:
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          RUNS_QUEUE_KEY: queue:runs
+        run: python3 enqueue_test.py
