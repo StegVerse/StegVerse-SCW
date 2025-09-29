@@ -1,10 +1,10 @@
-name: One-Button Supercheck (Diag + Repo Audit + Drift + Auto-Triage) [Hardened]
+name: One-Button Supercheck (Preflight + Diag + Audit + Auto-Triage) [Unified]
 
 on:
   workflow_dispatch:
     inputs:
       api_base:
-        description: "API base URL; blank = skip diagnostics"
+        description: "API base URL (blank = skip diagnostics)"
         required: false
         default: ""
       queue_key:
@@ -20,21 +20,39 @@ on:
         required: false
         default: "3"
       auto_apply:
-        description: "Apply safe fixes (ATTIC/scaffold/remove forbidden)"
+        description: "Apply safe repo triage (scaffold/move ATTIC/remove forbidden)"
         required: false
         default: "false"
       auto_commit:
-        description: "Commit fixes directly to main (else PR)"
+        description: "Commit changes directly to main (else: open PR)"
         required: false
         default: "false"
+      preflight_apply:
+        description: "Preflight: apply workflow YAML fixes"
+        required: false
+        default: "true"
+      preflight_autocommit:
+        description: "Preflight: auto-commit normalized workflows to main"
+        required: false
+        default: "true"
+  # OPTIONAL push trigger so you can run by touching a file (delete if you don't want it)
+  push:
+    paths:
+      - ".github/trigger/supercheck/**"
 
 permissions:
   contents: write
   pull-requests: write
 
+# Avoid overlapping runs on the same ref
+concurrency:
+  group: supercheck-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   supercheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,13 +64,12 @@ jobs:
           sudo apt-get install -y jq curl
           python3 -V
 
-      # --- Seed minimal fallbacks so missing scripts never break the run ---
-      - name: Seed fallback scripts if missing
+      # ---------- Seed fallbacks so runs never fail early ----------
+      - name: Seed fallback helper scripts
         run: |
           set -e
           mkdir -p scripts self_healing_out .github/workflows ATTIC docs
-
-          # validate_and_fix.py fallback (writes a minimal report)
+          # validate_and_fix.py (fallback)
           if [ ! -f scripts/validate_and_fix.py ]; then
             cat > scripts/validate_and_fix.py <<'PY'
 #\!/usr/bin/env python3
@@ -69,8 +86,7 @@ print(json.dumps(summary, indent=2))
 PY
             chmod +x scripts/validate_and_fix.py
           fi
-
-          # repo_audit.py fallback (creates inventory placeholders)
+          # repo_audit.py (fallback)
           if [ ! -f scripts/repo_audit.py ]; then
             cat > scripts/repo_audit.py <<'PY'
 #\!/usr/bin/env python3
@@ -85,8 +101,7 @@ print("OK repo_audit (fallback)")
 PY
             chmod +x scripts/repo_audit.py
           fi
-
-          # topic_drift_audit.py fallback
+          # topic_drift_audit.py (fallback)
           if [ ! -f scripts/topic_drift_audit.py ]; then
             cat > scripts/topic_drift_audit.py <<'PY'
 #\!/usr/bin/env python3
@@ -101,8 +116,7 @@ print("OK drift_report (fallback)")
 PY
             chmod +x scripts/topic_drift_audit.py
           fi
-
-          # collect_self_healing.py fallback
+          # collect_self_healing.py (fallback)
           if [ ! -f scripts/collect_self_healing.py ]; then
             cat > scripts/collect_self_healing.py <<'PY'
 #\!/usr/bin/env python3
@@ -119,8 +133,7 @@ print("OK scan (fallback)")
 PY
             chmod +x scripts/collect_self_healing.py
           fi
-
-          # auto_triage.py fallback
+          # auto_triage.py (fallback)
           if [ ! -f scripts/auto_triage.py ]; then
             cat > scripts/auto_triage.py <<'PY'
 #\!/usr/bin/env python3
@@ -134,20 +147,20 @@ PY
             chmod +x scripts/auto_triage.py
           fi
 
-      # --- Normalize/fix workflows first (auto-commit if requested) ---
-      - name: Validate & Auto-Fix Workflows
+      # ---------- PRE-FLIGHT: validate & fix workflow YAML ----------
+      - name: Preflight — Validate & Fix Workflows
         env:
-          APPLY: ${{ github.event.inputs.auto_apply }}
+          PREFLIGHT_APPLY: ${{ github.event.inputs.preflight_apply }}
         run: |
           set -e
-          if [ "${APPLY}" = "true" ]; then
+          if [ "${PREFLIGHT_APPLY}" = "true" ]; then
             python3 scripts/validate_and_fix.py --apply || true
           else
             python3 scripts/validate_and_fix.py || true
           fi
 
-      - name: Commit Fixed Workflows (if auto_apply=true)
-        if: ${{ github.event.inputs.auto_apply == 'true' }}
+      - name: Preflight — Auto-commit normalized workflows
+        if: ${{ github.event.inputs.preflight_autocommit == 'true' && github.event.inputs.preflight_apply == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -162,7 +175,7 @@ PY
             git push origin HEAD:main || true
           fi
 
-      # --- Optional diagnostics against your API/worker ---
+      # ---------- Optional runtime diagnostics ----------
       - name: Runtime diagnostics (API + Worker)
         id: diag
         env:
@@ -183,10 +196,10 @@ PY
           post(){ curl -sS -w "\n%{http_code}" -X POST "$1" -H "Content-Type: application/json" -d "{}"; }
           pass=true; report='{"api_base":"'"$API"'","steps":[],"ok":false}'
           add(){ report=$(jq -c --arg n "$1" --argjson ok $2 --argjson data "$3" --arg e "${4:-}" '.steps += [{"name":$n,"ok":$ok,"data":$data,"error":(($e|length>0)?$e:null)}]' <<<"$report"); }
-          read -r b s < <(get "$API/v1/ops/health");            if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/health" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/health" false null "HTTP $s"; pass=false; fi
-          read -r b s < <(get "$API/v1/ops/env/required");      if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/env/required" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/env/required" false null "HTTP $s"; pass=false; fi
-          read -r b s < <(get "$API/v1/ops/metrics");           if [ "${s:-500}" = "200" ]; then PB=$(echo "$b"|jq -r '.processed // 0'); add "GET /v1/ops/metrics (before)" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/metrics (before)" false null "HTTP $s"; pass=false; fi
-          read -r b s < <(post "$API/v1/ops/queue/test");       if [ "${s:-500}" = "200" ] && [ "$(echo "$b"|jq -r '.queued // false')" = "true" ]; then add "POST /v1/ops/queue/test" true "$(echo "$b"|jq -S .)" ""; else add "POST /v1/ops/queue/test" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(get "$API/v1/ops/health");       if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/health" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/health" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(get "$API/v1/ops/env/required"); if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/env/required" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/env/required" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(get "$API/v1/ops/metrics");      if [ "${s:-500}" = "200" ]; then PB=$(echo "$b"|jq -r '.processed // 0'); add "GET /v1/ops/metrics (before)" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/metrics (before)" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(post "$API/v1/ops/queue/test");  if [ "${s:-500}" = "200" ] && [ "$(echo "$b"|jq -r '.queued // false')" = "true" ]; then add "POST /v1/ops/queue/test" true "$(echo "$b"|jq -S .)" ""; else add "POST /v1/ops/queue/test" false null "HTTP $s"; pass=false; fi
           end=$(( $(date +%s) + ${TIMEOUT_SEC} )); snaps="[]"; PA="$PB"
           if [ "$pass" = true ]; then
             while [ $(date +%s) -lt $end ]; do
@@ -202,17 +215,17 @@ PY
           echo "skip=false" >> $GITHUB_OUTPUT
           echo "ok=$pass" >> $GITHUB_OUTPUT
 
-      # --- Repo audit + drift + manifest (real scripts or fallbacks) ---
+      # ---------- Repo audit + drift + manifest ----------
       - name: Repo Inventory & Diff
         run: python3 scripts/repo_audit.py
 
       - name: Topic Drift Auditor
         run: python3 scripts/topic_drift_audit.py
 
-      - name: Self-Healing Scan (minimal)
+      - name: Self-Healing Scan
         run: python3 scripts/collect_self_healing.py
 
-      # --- Auto-triage (safe apply optional) ---
+      # ---------- Auto-triage (optional apply) ----------
       - name: Auto-Triage (plan + optional apply)
         env:
           APPLY: ${{ github.event.inputs.auto_apply }}
@@ -224,8 +237,7 @@ PY
             python3 scripts/auto_triage.py
           fi
 
-      # --- Commit/PR for triage if requested ---
-      - name: Commit or PR changes
+      - name: Commit or PR triage changes
         if: ${{ github.event.inputs.auto_apply == 'true' }}
         env:
           DO_COMMIT: ${{ github.event.inputs.auto_commit }}
@@ -245,50 +257,45 @@ PY
             git commit -m "supercheck(auto): apply safe triage" || echo "No changes"
             git push origin "$BR" || true
             TITLE="Supercheck: safe triage (auto)"
-            BODY="This PR was created by One-Button Supercheck."
+            BODY="PR created automatically by One-Button Supercheck."
             curl -sS -X POST \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main"}')" \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
 
-      # --- Always leave an artifact, even on failure ---
-      - name: Ensure artifact dir & basic logs
+      # ---------- Always assemble & upload artifact ----------
+      - name: Ensure artifact dir & context
         if: always()
         run: |
           set -e
           mkdir -p self_healing_out
-          # Context snapshots
           echo "== runner env ==" > self_healing_out/RUN_ENV.txt
           env >> self_healing_out/RUN_ENV.txt
           echo "== git status ==" > self_healing_out/GIT_STATUS.txt
           git status >> self_healing_out/GIT_STATUS.txt 2>&1 || true
-          echo "== tree (top) ==" > self_healing_out/TREE_TOP.txt
-          ls -la >> self_healing_out/TREE_TOP.txt 2>&1 || true
-          echo "== workflows dir ==" > self_healing_out/TREE_WORKFLOWS.txt
+          echo "== workflows ==" > self_healing_out/TREE_WORKFLOWS.txt
           ls -la .github/workflows >> self_healing_out/TREE_WORKFLOWS.txt 2>&1 || true
-          echo "== scripts dir ==" > self_healing_out/TREE_SCRIPTS.txt
+          echo "== scripts ==" > self_healing_out/TREE_SCRIPTS.txt
           ls -la scripts >> self_healing_out/TREE_SCRIPTS.txt 2>&1 || true
-          # Drop placeholders if main reports are missing
-          [ -f supercheck_report.md ] || echo "# Supercheck Report\n\n(No report produced—earlier step likely failed.)" > supercheck_report.md
-          [ -f self_healing_out/WORKFLOW_FIX_REPORT.md ] || echo "# Workflow Fix Report\n\n(no report file)" > self_healing_out/WORKFLOW_FIX_REPORT.md
+          [ -f self_healing_out/WORKFLOW_FIX_REPORT.md ] || echo "# Workflow Fix Report\n\n(missing)" > self_healing_out/WORKFLOW_FIX_REPORT.md
+          [ -f self_healing_out/REPO_INVENTORY.md ] || echo "# Repo Inventory\n\n(missing)" > self_healing_out/REPO_INVENTORY.md
+          [ -f self_healing_out/DRIFT_REPORT.md ] || echo "# Drift Report\n\n(missing)" > self_healing_out/DRIFT_REPORT.md
+          [ -f self_healing_out/SELF_HEALING_MANIFEST.md ] || echo "# Manifest\n\n(missing)" > self_healing_out/SELF_HEALING_MANIFEST.md
+          [ -f self_healing_out/AUTO_TRIAGE_REPORT.md ] || echo "# Auto-Triage\n\n(missing)" > self_healing_out/AUTO_TRIAGE_REPORT.md
+          [ -f supercheck_diag.json ] || echo '{}' > supercheck_diag.json
 
       - name: Assemble Supercheck Report
         if: always()
         run: |
           set -e
-          # Build a single human-readable report (best-effort)
           {
             echo "# Supercheck Report"
             echo
-            if [ -f supercheck_diag.json ]; then
-              echo "## API/Worker Diagnostics"
-              echo '```json'
-              head -c 180000 supercheck_diag.json || true
-              echo
-              echo '```'
-              echo
-            fi
+            echo "## Workflow Preflight"
+            echo
+            cat self_healing_out/WORKFLOW_FIX_REPORT.md 2>/dev/null || echo "(missing)"
+            echo
             echo "## Repo Inventory & Diff"
             echo
             cat self_healing_out/REPO_INVENTORY.md 2>/dev/null || echo "(missing)"
@@ -305,9 +312,11 @@ PY
             echo
             cat self_healing_out/AUTO_TRIAGE_REPORT.md 2>/dev/null || echo "(missing)"
             echo
-            echo "## Workflow Fix Report"
+            echo "## API/Worker Diagnostics (if provided)"
+            echo '```json'
+            head -c 180000 supercheck_diag.json || true
             echo
-            cat self_healing_out/WORKFLOW_FIX_REPORT.md 2>/dev/null || echo "(missing)"
+            echo '```'
           } > supercheck_report.md
 
       - name: Upload Supercheck Bundle (always)
