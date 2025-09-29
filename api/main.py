@@ -8,25 +8,38 @@ from typing import List, Optional
 import redis
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
-from routes.ops import router as ops_router   # add this import
 
+# If you have extra ops routes, this keeps them mounted.
+try:
+    from routes.ops import router as ops_router
+except Exception:
+    ops_router = None
 
 # --------------------------
 # Config & Redis connection
 # --------------------------
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+RUNS_QUEUE_KEY = os.getenv("RUNS_QUEUE_KEY", "queue:runs")  # must match the worker
+# Metrics keys (used by the worker; we read them here)
+RUNS_PROCESSED_KEY = os.getenv("RUNS_PROCESSED_KEY", "metrics:runs:processed")
+RUNS_FAILED_KEY    = os.getenv("RUNS_FAILED_KEY",    "metrics:runs:failed")
+WORKER_HEARTBEAT_KEY = os.getenv("WORKER_HEARTBEAT_KEY", "worker:heartbeat")
+
 r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
-# Allow one or more UI origins via env (comma-separated), e.g.:
-# UI_ORIGINS="https://scw-ui.onrender.com,https://dev-ui.example.com"
+# Allow one or more UI origins via env (comma-separated)
 UI_ORIGINS = [o.strip() for o in os.getenv("UI_ORIGINS", "").split(",") if o.strip()]
 # Quick toggle for testing: CORS_ALLOW_ALL=1
 CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL", "0") == "1"
 
 app = FastAPI(title="StegVerse SCW API", version="0.1.0")
-app.include_router(ops_router)                # add this line
+
+# Mount external ops router if present
+if ops_router:
+    app.include_router(ops_router)
+
 # --------------------------
 # CORS
 # --------------------------
@@ -138,6 +151,47 @@ def friendly(request: Request):
     return HTMLResponse(content=html, status_code=200)
 
 # --------------------------
+# Ops Endpoints (for automation)
+# --------------------------
+@app.get("/v1/ops/health")
+def ops_health():
+    # simple 200 OK used by Actions/Render checks
+    return {"status": "ok", "ts": int(now_ts())}
+
+@app.get("/v1/ops/env/required")
+def env_required():
+    required = ["REDIS_URL", "RUNS_QUEUE_KEY"]
+    present = {k: (os.getenv(k) is not None) for k in required}
+    return {"required": required, "present": present}
+
+@app.post("/v1/ops/deploy/report")
+def deploy_report():
+    # can be extended to log/store deploy details
+    return JSONResponse({"report": "Deploy acknowledged", "ts": int(now_ts())})
+
+# Enqueue a synthetic job for end-to-end testing
+@app.post("/v1/ops/queue/test")
+def queue_test():
+    payload = {"task": "test", "ts": int(now_ts()), "job_id": str(uuid.uuid4())}
+    r.lpush(RUNS_QUEUE_KEY, json.dumps(payload))
+    return {"queued": True, "key": RUNS_QUEUE_KEY, "payload": payload}
+
+# Read worker metrics (heartbeat + counters)
+@app.get("/v1/ops/metrics")
+def metrics():
+    processed = int(r.get(RUNS_PROCESSED_KEY) or 0)
+    failed    = int(r.get(RUNS_FAILED_KEY) or 0)
+    hb        = int(r.get(WORKER_HEARTBEAT_KEY) or 0)
+    age       = int(now_ts()) - hb if hb else None
+    return {
+        "queue_key": RUNS_QUEUE_KEY,
+        "processed": processed,
+        "failed": failed,
+        "worker_heartbeat_ts": hb,
+        "worker_heartbeat_age_sec": age
+    }
+
+# --------------------------
 # Projects
 # --------------------------
 @app.post("/v1/projects")
@@ -194,7 +248,8 @@ def create_run(body: RunCreate):
         "language": body.language,
         "code": body.code,
     }
-    r.lpush("runs", json.dumps(payload))
+    # ✅ enqueue to env-driven queue key (matches worker)
+    r.lpush(RUNS_QUEUE_KEY, json.dumps(payload))
 
     return {"run_id": run_id, "status": "queued"}
 
@@ -220,3 +275,8 @@ def get_run(run_id: str):
         "logs": logs,
         "result": result,
     }
+
+# Simple root ping
+@app.get("/")
+def root():
+    return {"service": "StegVerse-SCW", "message": "API root"}
