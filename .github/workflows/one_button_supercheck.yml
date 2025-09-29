@@ -64,6 +64,93 @@ jobs:
           sudo apt-get install -y jq curl
           python3 -V
 
+      - name: Read trigger flags (autorun controls)
+        id: flags
+        run: |
+          set -e
+          TRG=".github/trigger/supercheck"
+          mkdir -p "$TRG"
+
+          has() { [ -f "$TRG/$1" ]; }
+          get() { [ -f "$TRG/$1" ] && cat "$TRG/$1" | tr -d '\r' | sed 's/[[:space:]]*$//' || echo ""; }
+
+          # File flags (presence-based)
+          F_APPLY=$(has apply.txt && echo true || echo false)
+          F_COMMIT=$(has commit.txt && echo true || echo false)
+          F_NO_AUTOFIX=$(has no-autofix.txt && echo true || echo false)
+          F_PREFLIGHT_ONLY=$(has preflight-only.txt && echo true || echo false)
+          F_TRIAGE_ONLY=$(has triage-only.txt && echo true || echo false)
+          F_SKIP_DIAG=$(has skip-diag.txt && echo true || echo false)
+          F_FAST=$(has fast.txt && echo true || echo false)
+          F_DEEP=$(has deep.txt && echo true || echo false)
+          F_ATTIC_OFF=$(has attic-off.txt && echo true || echo false)
+
+          # File values (content-based)
+          F_API_BASE=$(get diag-url.txt)         # override API base URL
+          F_QUEUE_KEY=$(get queue.txt)           # override queue key
+          F_TIMEOUT=$(get timeout.txt)           # number (seconds)
+          F_POLL=$(get poll.txt)                 # number (seconds)
+
+          # Inputs (strings "true"/"false")
+          IN_AUTO_APPLY="${{ github.event.inputs.auto_apply || 'false' }}"
+          IN_AUTO_COMMIT="${{ github.event.inputs.auto_commit || 'false' }}"
+          IN_PREF_APPLY="${{ github.event.inputs.preflight_apply || 'true' }}"
+          IN_PREF_AUTOCOMMIT="${{ github.event.inputs.preflight_autocommit || 'true' }}"
+          IN_API_BASE="${{ github.event.inputs.api_base || '' }}"
+          IN_QUEUE="${{ github.event.inputs.queue_key || 'queue:runs' }}"
+          IN_TIMEOUT="${{ github.event.inputs.timeout_sec || '75' }}"
+          IN_POLL="${{ github.event.inputs.poll_sec || '3' }}"
+
+          # Priority: file flags override UI inputs where sensible
+          eff_true() { [ "$1" = "true" ] || [ "$2" = "true" ] && echo true || echo false; }
+          eff_false_if() { [ "$1" = "true" ] && echo false || echo "$2"; }
+
+          E_AUTO_APPLY=$(eff_true "$F_APPLY" "$IN_AUTO_APPLY")
+          E_AUTO_COMMIT=$(eff_true "$F_COMMIT" "$IN_AUTO_COMMIT")
+
+          # Preflight: if no-autofix.txt present => disable applying fixes
+          if [ "$F_NO_AUTOFIX" = "true" ]; then
+            E_PREF_APPLY=false
+          else
+            E_PREF_APPLY="$IN_PREF_APPLY"
+          fi
+          E_PREF_AUTOCOMMIT="$IN_PREF_AUTOCOMMIT"
+
+          # Diagnostics skip
+          E_SKIP_DIAG=$(eff_true "$F_SKIP_DIAG" false)
+
+          # API/Queue overrides (file content wins if non-empty)
+          if [ -n "$F_API_BASE" ]; then E_API_BASE="$F_API_BASE"; else E_API_BASE="$IN_API_BASE"; fi
+          if [ -n "$F_QUEUE_KEY" ]; then E_QUEUE="$F_QUEUE_KEY"; else E_QUEUE="$IN_QUEUE"; fi
+
+          # Timings
+          if [ -n "$F_TIMEOUT" ]; then E_TIMEOUT="$F_TIMEOUT"; else E_TIMEOUT="$IN_TIMEOUT"; fi
+          if [ -n "$F_POLL" ]; then E_POLL="$F_POLL"; else E_POLL="$IN_POLL"; fi
+          # FAST/DEEP presets
+          if [ "$F_FAST" = "true" ]; then E_TIMEOUT=30; E_POLL=2; fi
+          if [ "$F_DEEP" = "true" ]; then E_TIMEOUT=180; E_POLL=4; fi
+
+          # Triage controls
+          E_ATTIC_OFF="$F_ATTIC_OFF"
+          E_PREFLIGHT_ONLY="$F_PREFLIGHT_ONLY"
+          E_TRIAGE_ONLY="$F_TRIAGE_ONLY"
+
+          # Surface values as outputs
+          {
+            echo "auto_apply=$E_AUTO_APPLY"
+            echo "auto_commit=$E_AUTO_COMMIT"
+            echo "preflight_apply=$E_PREF_APPLY"
+            echo "preflight_autocommit=$E_PREF_AUTOCOMMIT"
+            echo "skip_diag=$E_SKIP_DIAG"
+            echo "api_base=$E_API_BASE"
+            echo "queue_key=$E_QUEUE"
+            echo "timeout_sec=$E_TIMEOUT"
+            echo "poll_sec=$E_POLL"
+            echo "attic_off=$E_ATTIC_OFF"
+            echo "preflight_only=$E_PREFLIGHT_ONLY"
+            echo "triage_only=$E_TRIAGE_ONLY"
+          } >> "$GITHUB_OUTPUT"
+
       # ---------- Seed fallbacks so runs never fail early ----------
       - name: Seed fallback helper scripts
         run: |
