@@ -1,22 +1,21 @@
 # api/routes_admin.py
 import os
+import json
+import requests
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
-import json
-import requests  # add to requirements
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 GH_OWNER = os.getenv("GITHUB_OWNER", "")
-GH_REPO  = os.getenv("GITHUB_REPO", "")
+GH_REPO = os.getenv("GITHUB_REPO", "")
 GH_WORKFLOW = os.getenv("GITHUB_WORKFLOW_FILE", "one_button_supercheck.yml")
-# Fine-grained PAT with "Actions: Read & Write" on this repo (or classic token with workflow scope)
-GH_TOKEN = os.getenv("GITHUB_TOKEN_REPO", "")
+GH_TOKEN = os.getenv("GITHUB_TOKEN_REPO", "")  # fine-grained PAT: Actions read/write
 
-def require_admin(x_admin_token: str | None) -> None:
+def _require_admin(x_admin_token: str | None):
     if not ADMIN_TOKEN:
-        raise HTTPException(status_code=500, detail="ADMIN_TOKEN not configured on server")
+        raise HTTPException(status_code=500, detail="ADMIN_TOKEN not configured")
     if not x_admin_token or x_admin_token != ADMIN_TOKEN:
         raise HTTPException(status_code=401, detail="invalid X-Admin-Token")
 
@@ -28,12 +27,7 @@ def run_supercheck(
     queue_key: str = "queue:runs",
     x_admin_token: str | None = Header(default=None, convert_underscores=False, alias="X-Admin-Token"),
 ):
-    """
-    Triggers GitHub Actions workflow_dispatch for one_button_supercheck.yml.
-    Body params (optional): api_base, auto_apply, auto_commit, queue_key.
-    Auth: header X-Admin-Token must match server ADMIN_TOKEN.
-    """
-    require_admin(x_admin_token)
+    _require_admin(x_admin_token)
 
     if not (GH_OWNER and GH_REPO and GH_WORKFLOW and GH_TOKEN):
         raise HTTPException(status_code=500, detail="GitHub env not configured")
@@ -52,7 +46,7 @@ def run_supercheck(
             "timeout_sec": "75",
             "poll_sec": "3",
             "auto_apply": "true" if auto_apply else "false",
-            "auto_commit": "false" if not auto_commit else "true",
+            "auto_commit": "true" if auto_commit else "false",
         },
     }
     r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
