@@ -1,0 +1,68 @@
+name: Workflow Preflight (Validate & Fix)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_fixes:
+        description: "Apply fixes in-place (otherwise: dry run only)"
+        required: false
+        default: "true"
+      auto_commit:
+        description: "Commit/push normalized workflows to main"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+          python3 -V
+
+      - name: Validate & (optionally) Auto-Fix Workflows
+        env:
+          APPLY: ${{ github.event.inputs.apply_fixes }}
+        run: |
+          set -e
+          if [ "$APPLY" = "true" ]; then
+            python3 scripts/validate_and_fix.py --apply || true
+          else
+            python3 scripts/validate_and_fix.py || true
+          fi
+
+      - name: Commit Fixed Workflows (if auto_commit=true AND apply_fixes=true)
+        if: ${{ github.event.inputs.auto_commit == 'true' && github.event.inputs.apply_fixes == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          git config user.name "workflow-fix-bot"
+          git config user.email "bot@stegverse.local"
+          git add .github/workflows/*.yml .github/workflows/*.yaml || true
+          if git diff --cached --quiet; then
+            echo "No workflow changes to commit."
+          else
+            git commit -m "chore: normalize workflows (auto-fix common YAML issues)"
+            git push origin HEAD:main || true
+          fi
+
+      - name: Upload Fix Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow_fix_report
+          path: |
+            self_healing_out/WORKFLOW_FIX_REPORT.json
+            self_healing_out/WORKFLOW_FIX_REPORT.md
+          if-no-files-found: warn
