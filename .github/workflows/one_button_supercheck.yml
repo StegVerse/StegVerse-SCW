@@ -42,6 +42,22 @@ jobs:
         run: |
           set -e
           python3 scripts/validate_and_fix.py --apply || true
+
+      - name: Commit Fixed Workflows (if auto_apply=true)
+        if: ${{ github.event.inputs.auto_apply == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          git config user.name "workflow-fix-bot"
+          git config user.email "bot@stegverse.local"
+          git add .github/workflows/*.yml .github/workflows/*.yaml || true
+          if git diff --cached --quiet; then
+            echo "No workflow changes to commit."
+          else
+            git commit -m "chore: normalize workflows (auto-fix common YAML issues)"
+            git push origin HEAD:main || true
+          fi
           
       - name: Ensure tools
         run: |
