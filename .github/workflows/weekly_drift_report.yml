@@ -1,0 +1,24 @@
+name: Weekly Drift Report
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 14 * * 1"  # Mondays 14:00 UTC
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Topic Drift Auditor
+        run: |
+          python3 scripts/topic_drift_audit.py
+
+      - name: Upload drift artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift_report
+          path: |
+            self_healing_out/DRIFT_REPORT.json
+            self_healing_out/DRIFT_REPORT.md
+          if-no-files-found: error
