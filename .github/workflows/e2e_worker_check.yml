@@ -1,0 +1,56 @@
+name: E2E Worker Check (no secrets)
+on:
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "Your API base URL (e.g., https://your-api.onrender.com)"
+        required: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get baseline metrics
+        id: baseline
+        run: |
+          set -e
+          API="${{ github.event.inputs.api_base }}"
+          curl -sS "${API}/v1/ops/metrics" | tee metrics_before.json
+          PROC=$(jq -r '.processed // 0' metrics_before.json)
+          echo "processed_before=$PROC" >> $GITHUB_OUTPUT
+
+      - name: Enqueue test job
+        run: |
+          set -e
+          API="${{ github.event.inputs.api_base }}"
+          curl -sS -X POST "${API}/v1/ops/queue/test" | tee enqueue_resp.json
+
+      - name: Wait for worker to process
+        id: wait
+        run: |
+          set -e
+          API="${{ github.event.inputs.api_base }}"
+          BEFORE=${{ steps.baseline.outputs.processed_before }}
+          inc=0
+          for i in $(seq 1 20); do
+            sleep 3
+            curl -sS "${API}/v1/ops/metrics" | tee "metrics_after_$i.json"
+            NOW=$(jq -r '.processed // 0' "metrics_after_$i.json")
+            if [ "$NOW" -gt "$BEFORE" ]; then
+              echo "ok=true" >> $GITHUB_OUTPUT
+              echo "processed_after=$NOW" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          done
+          echo "ok=false" >> $GITHUB_OUTPUT
+          exit 1
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e_worker_report
+          path: |
+            metrics_before.json
+            enqueue_resp.json
+            metrics_after_*.json
+          if-no-files-found: warn
