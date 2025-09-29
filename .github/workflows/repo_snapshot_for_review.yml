@@ -1,0 +1,135 @@
+name: Repo Snapshot for Review (no changes)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for context)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build snapshot (inventory + index + zip)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p snapshot_out
+
+          # 1) Basic repo context
+          REPO="${GITHUB_REPOSITORY}"
+          BRANCH="${GITHUB_REF_NAME}"
+          LAST_SHA="$(git rev-parse HEAD)"
+          LAST_MSG="$(git log -1 --pretty=%s)"
+          LAST_DATE="$(git log -1 --date=iso --pretty=%ad)"
+
+          # 2) Generate inventory (JSON) with hashes (first ~2MB per file)
+          python3 - <<'PY' > snapshot_out/REPO_INVENTORY.json
+import os, json, hashlib, fnmatch
+from pathlib import Path
+
+ROOT = Path(".").resolve()
+IGNORE = [".git/**","**/__pycache__/**","node_modules/**",".idea/**",".vscode/**",".DS_Store","*.png","*.jpg","*.jpeg","*.gif","*.webp","*.pdf","*.zip","*.tar","*.gz"]
+def ignore(rel):
+    return any(fnmatch.fnmatch(rel, pat) for pat in IGNORE)
+
+def sha256_cap(p, cap=2_000_000):
+    h=hashlib.sha256(); n=0
+    with open(p,"rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk); n+=len(chunk)
+            if n>=cap: break
+    return h.hexdigest(), n
+
+files=[]
+for p in ROOT.rglob("*"):
+    if not p.is_file(): continue
+    rel=p.as_posix()
+    # compute rel path from repo root (strip leading './')
+    if rel.startswith("./"): rel=rel[2:]
+    if rel.startswith("/"): rel=rel[1:]
+    if ignore(rel): continue
+    stat=p.stat()
+    try:
+        dig, read=sha256_cap(p)
+    except Exception as e:
+        dig=f"error:{e}"; read=0
+    files.append({"path":rel,"size":stat.st_size,"sha256":dig,"sampled_bytes":read})
+
+files.sort(key=lambda x: x["path"])
+out={"files":files}
+print(json.dumps(out, indent=2))
+PY
+
+          # 3) Short lists (workflows, key config)
+          WF=$(ls -1 .github/workflows 2>/dev/null || true)
+          KEY_CFG=$(ls -1 config 2>/dev/null || true)
+
+          # 4) Git summary (last 40 commits)
+          git log -n 40 --date=short --pretty='format:%h %ad %s' > snapshot_out/GIT_RECENT.txt || true
+
+          # 5) Human-readable index
+          {
+            echo "# Repo Snapshot Index"
+            echo
+            echo "- Repo: \`${REPO}\`"
+            echo "- Branch: \`${BRANCH}\`"
+            echo "- Latest: \`${LAST_SHA}\` — ${LAST_MSG}"
+            echo "- Date: ${LAST_DATE}"
+            echo
+            echo "## Workflows (.github/workflows)"
+            if [ -n "${WF}" ]; then
+              echo "\`\`\`"
+              echo "${WF}"
+              echo "\`\`\`"
+            else
+              echo "- (none)"
+            fi
+            echo
+            echo "## Key config (config/)"
+            if [ -n "${KEY_CFG}" ]; then
+              echo "\`\`\`"
+              echo "${KEY_CFG}"
+              echo "\`\`\`"
+            else
+              echo "- (none)"
+            fi
+            echo
+            echo "## Notable files present"
+            for F in render.yaml api/main.py api/requirements.txt worker.py public/diag.html AUTONOMY_POLICY.md REPO_SPEC.json config/env_spec.json; do
+              if [ -f "$F" ]; then echo "- \`$F\`"; fi
+            done
+            echo
+            echo "## Recent commits (last 20)"
+            head -n 20 snapshot_out/GIT_RECENT.txt || true
+            echo
+            echo "## Inventory summary"
+            python3 - <<'PY'
+import json, sys
+j=json.load(open("snapshot_out/REPO_INVENTORY.json"))
+print(f"- Files counted: **{len(j.get('files',[]))}**")
+# show first 20 paths alphabetically
+for x in j.get('files',[])[:20]:
+  print(f"- {x['path']}  ({x['size']} bytes)")
+PY
+            echo
+            echo "> Full file list & hashes are in \`REPO_INVENTORY.json\`."
+          } > snapshot_out/REPO_SNAPSHOT_INDEX.md
+
+          # 6) Zip the repo (exclude common noise and .git)
+          zip -rq snapshot_out/repo_snapshot.zip . \
+            -x ".git/*" "__pycache__/*" "node_modules/*" ".idea/*" ".vscode/*" \
+               "*.zip" "*.tar" "*.gz"
+
+      - name: Upload snapshot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo_snapshot_bundle
+          path: |
+            snapshot_out/REPO_SNAPSHOT_INDEX.md
+            snapshot_out/REPO_INVENTORY.json
+            snapshot_out/GIT_RECENT.txt
+            snapshot_out/repo_snapshot.zip
+          if-no-files-found: error
