@@ -1,0 +1,31 @@
+name: Smoke Tests (live API)
+on:
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "Live API base URL, e.g. https://your-api.onrender.com"
+        required: true
+      timeout_sec:
+        description: "Wait up to N seconds for worker to process"
+        required: false
+        default: "60"
+      poll_sec:
+        description: "Poll interval seconds"
+        required: false
+        default: "3"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dev deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Run pytest (live)
+        env:
+          API_BASE: ${{ github.event.inputs.api_base }}
+          E2E_TIMEOUT_SEC: ${{ github.event.inputs.timeout_sec }}
+          E2E_POLL_SEC: ${{ github.event.inputs.poll_sec }}
+        run: pytest -q tests/test_ops.py
