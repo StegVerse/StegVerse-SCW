@@ -1,0 +1,102 @@
+name: Repo Inventory & Diff (with optional clean-up PR)
+
+on:
+  workflow_dispatch:
+    inputs:
+      open_cleanup_pr:
+        description: "Open a PR that removes forbidden & extra files and scaffolds missing dirs/files"
+        required: false
+        default: "false"
+  schedule:
+    - cron: "0 14 * * 1"   # weekly on Monday 14:00 UTC
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run repo audit
+        run: |
+          python3 scripts/repo_audit.py
+
+      - name: Upload inventory artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo_inventory
+          path: |
+            self_healing_out/REPO_INVENTORY.json
+            self_healing_out/REPO_INVENTORY.md
+            self_healing_out/REPO_DIFF.json
+          if-no-files-found: error
+
+      - name: Prepare clean-up branch (optional)
+        if: ${{ github.event.inputs.open_cleanup_pr == 'true' }}
+        id: prep
+        run: |
+          set -e
+          BR="repo-cleanup-${GITHUB_RUN_ID}"
+          git switch -c "$BR"
+
+          DIFF="self_healing_out/REPO_DIFF.json"
+          req_missing=$(jq -r '.required_missing[]?' "$DIFF")
+          dir_missing=$(jq -r '.dir_missing[]?' "$DIFF")
+          forbidden=$(jq -r '.forbidden_hits[]?' "$DIFF")
+          extras=$(jq -r '.extras[]?' "$DIFF")
+
+          # Scaffold required dirs
+          for d in $dir_missing; do
+            mkdir -p "$d"
+            touch "$d/.gitkeep"
+          done
+
+          # Scaffold required files (empty placeholders)
+          for f in $req_missing; do
+            mkdir -p "$(dirname "$f")"
+            if [ ! -f "$f" ]; then
+              echo "# TODO: add content for $f" > "$f"
+            fi
+          done
+
+          # Remove forbidden files
+          for f in $forbidden; do
+            git rm -f "$f" 2>/dev/null || rm -f "$f"
+          done
+
+          # Remove extras (non-required/recommended) — conservative:
+          # Only remove if they match forbidden or are clearly artifacts
+          # Comment out next block if you want to propose removing all extras
+          for f in $extras; do
+            case "$f" in
+              *.env|*.pem|*.key|*.crt|private/*)
+                git rm -f "$f" 2>/dev/null || rm -f "$f"
+                ;;
+            esac
+          done
+
+          git add -A
+          git commit -m "Repo clean-up: scaffold missing, remove forbidden/artifacts" || echo "No changes"
+          git push origin "$BR" || true
+          echo "branch=$BR" >> $GITHUB_OUTPUT
+
+      - name: Open PR (optional)
+        if: ${{ github.event.inputs.open_cleanup_pr == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BR="${{ steps.prep.outputs.branch }}"
+          if [ -z "$BR" ]; then
+            echo "No branch created; skipping PR."
+            exit 0
+          fi
+          TITLE="Repo clean-up (auto)"
+          BODY="This PR scaffolds missing required files/dirs and removes forbidden or clearly sensitive artifacts.\n\nSee artifact **repo_inventory** for details."
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main","maintainer_can_modify":true}')" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null
