@@ -303,5 +303,57 @@ button.warn{ background:#b91c1c; border-color:#7f1d1d; }
   setTimeout(loadDeploys, 600);
 })();
 </script>
+  <section style="margin-top:24px; padding:12px; border:1px solid #ddd; border-radius:8px;">
+  <h3>Run One-Button Supercheck</h3>
+  <label>API Base
+    <input id="apiBase" style="width:100%" placeholder="https://<your-api>.onrender.com"/>
+  </label>
+  <label style="display:block;margin-top:8px;">Admin Token
+    <input id="adminToken" type="password" style="width:100%" placeholder="X-Admin-Token"/>
+  </label>
+  <div style="margin-top:8px;">
+    <label><input type="checkbox" id="autoApply" checked/> Auto-apply safe fixes</label>
+    <label style="margin-left:12px;"><input type="checkbox" id="autoCommit"/> Commit directly to main</label>
+  </div>
+  <button id="runSC" style="margin-top:12px;">Run Supercheck</button>
+  <pre id="scOut" style="white-space:pre-wrap;background:#f7f7f7;padding:8px;border-radius:6px;margin-top:10px;"></pre>
+</section>
+
+<script>
+document.getElementById('runSC').onclick = async () => {
+  const apiBase = document.getElementById('apiBase').value.trim();
+  const token = document.getElementById('adminToken').value.trim();
+  const autoApply = document.getElementById('autoApply').checked;
+  const autoCommit = document.getElementById('autoCommit').checked;
+  const out = document.getElementById('scOut');
+  out.textContent = 'Queuing Supercheck…';
+
+  try {
+    const res = await fetch('/v1/admin/supercheck/run', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Admin-Token': token
+      },
+      body: JSON.stringify({
+        api_base: apiBase || null,
+        auto_apply: autoApply,
+        auto_commit: autoCommit,
+        queue_key: 'queue:runs'
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    out.textContent =
+`✅ Queued workflow: ${data.workflow}
+Repo: ${data.repo}
+
+Open GitHub → Actions → One-Button Supercheck → latest run
+Artifact: supercheck_bundle → supercheck_report.md`;
+  } catch (e) {
+    out.textContent = '❌ ' + e.message + '\n\nTip: ensure ADMIN_TOKEN on the API matches the token you typed, and GITHUB_* env vars are set.';
+  }
+};
+</script>
 </body>
 </html>
