@@ -1,95 +1,316 @@
 <!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <title>StegVerse SCW — Diagnostics</title>
-    <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 860px; margin: 24px auto; line-height: 1.45; }
-      code { background:#f2f2f2; padding:2px 4px; border-radius:4px; }
-      section { border:1px solid #e6e6e6; border-radius:8px; padding:12px; margin-top:18px; }
-      button { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; background:#fafafa }
-      input[type="text"], input[type="password"] { width: 100%; padding: 8px; border:1px solid #ddd; border-radius:6px; }
-      .row a { margin-right: 12px; }
-      .muted { color:#666; }
-      pre { background:#f7f7f7; padding:8px; border-radius:6px; white-space:pre-wrap; }
-    </style>
-  </head>
-  <body>
-    <h1>StegVerse SCW — Diagnostics</h1>
-    <p class="muted">This page calls the API on the same host.</p>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>StegVerse • Supercheck Control Panel</title>
+  <style>
+    :root{--fg:#111;--bg:#fff;--muted:#6b7280;--accent:#2563eb;--ok:#16a34a;--bad:#dc2626;--card:#f8fafc;}
+    @media (prefers-color-scheme: dark){
+      :root{--fg:#e5e7eb;--bg:#0b0f14;--muted:#9ca3af;--accent:#60a5fa;--ok:#22c55e;--bad:#f87171;--card:#0f172a;}
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;color:var(--fg);background:linear-gradient(180deg,var(--bg),#0000),var(--bg);}
+    .wrap{max-width:820px;margin:24px auto;padding:0 16px}
+    h1{font-size:24px;margin:0 0 8px}
+    p{margin:8px 0}
+    .grid{display:grid;gap:12px}
+    .card{background:var(--card);border:1px solid #1f2937; border-radius:10px;padding:14px 14px}
+    label{display:block;font-weight:600;margin-bottom:6px}
+    input[type="text"],input[type="password"],input[type="url"],input[type="number"]{width:100%;padding:10px 12px;border:1px solid #1f2937;border-radius:8px;background:transparent;color:var(--fg)}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .btn{appearance:none;border:1px solid #1f2937;background:var(--accent);color:white;padding:10px 14px;border-radius:8px;font-weight:700}
+    .btn.secondary{background:transparent;color:var(--accent);border-color:var(--accent)}
+    .btn.danger{background:var(--bad);border-color:var(--bad)}
+    .btn:disabled{opacity:.6}
+    .muted{color:var(--muted);font-size:13px}
+    .bad{color:var(--bad)}
+    .ok{color:var(--ok)}
+    code{background:#1113;border-radius:6px;padding:1px 6px}
+    details summary{cursor:pointer}
+    .checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+    .group{border:1px dashed #374151;border-radius:10px;padding:10px}
+    .log{white-space:pre-wrap;background:#0008;padding:10px;border-radius:8px;max-height:260px;overflow:auto}
+    .kv{display:grid;grid-template-columns:180px 1fr;gap:8px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>One-Button Supercheck • Control Panel</h1>
+    <p class="muted">Create tiny trigger files in <code>.github/trigger/supercheck/</code> to start the unified workflow with your chosen mode.</p>
 
-    <section>
-      <h3>API Info</h3>
-      <div class="row">
-        <a href="/healthz" target="_blank">/healthz</a>
-        <a href="/whoami" target="_blank">/whoami</a>
-        <a href="/v1/ops/health" target="_blank">/v1/ops/health</a>
+    <div class="grid">
+      <div class="card">
+        <h3>GitHub • Connection</h3>
+        <div class="kv">
+          <label for="repo">Repository (owner/name)</label>
+          <input id="repo" type="text" placeholder="StegVerse/stegverse-scw">
+          <label for="branch">Branch</label>
+          <input id="branch" type="text" value="main">
+          <label for="token">Token (repo scope)</label>
+          <input id="token" type="password" placeholder="ghp_...">
+          <div></div>
+          <label><input id="remember" type="checkbox"> Remember token in this browser (local only)</label>
+        </div>
+        <p class="muted">Create a fine-grained PAT with <code>contents:read/write</code>. Stored in <em>localStorage</em> only if you tick “Remember”.</p>
       </div>
-      <button onclick="fetchShow('/v1/ops/env/required','#env')">Check required env</button>
-      <button onclick="fetchShow('/v1/ops/metrics','#env')">Metrics</button>
-      <pre id="env"></pre>
-    </section>
 
-    <section>
-      <h3>Run One-Button Supercheck</h3>
-      <label>API Base (optional; default = this host)
-        <input id="sc_api" type="text" placeholder="https://&lt;your-api&gt;.onrender.com"/>
-      </label>
-      <label style="display:block;margin-top:8px;">Admin Token (X-Admin-Token)
-        <input id="sc_tok" type="password" placeholder="ADMIN_TOKEN"/>
-      </label>
-      <div style="margin-top:8px;">
-        <label><input type="checkbox" id="sc_apply" checked/> Auto-apply safe fixes</label>
-        <label style="margin-left:12px;"><input type="checkbox" id="sc_commit"/> Commit directly to main</label>
+      <div class="card">
+        <h3>Modes & Flags</h3>
+        <div class="checks">
+          <div class="group">
+            <strong>Core</strong>
+            <label><input type="checkbox" id="apply"> Apply triage (scaffold/ATTIC/remove)</label>
+            <label><input type="checkbox" id="commit"> Commit to <code>main</code> (else PR)</label>
+            <label><input type="checkbox" id="atticOff"> Disable ATTIC moves</label>
+          </div>
+          <div class="group">
+            <strong>Flow control</strong>
+            <label><input type="checkbox" id="preflightOnly"> Preflight only</label>
+            <label><input type="checkbox" id="triageOnly"> Triage only</label>
+            <label><input type="checkbox" id="skipDiag"> Skip diagnostics</label>
+          </div>
+          <div class="group">
+            <strong>Preflight options</strong>
+            <label><input type="checkbox" id="noAutofix"> Disable YAML auto-fix (validate only)</label>
+            <label><input type="checkbox" id="fast"> Fast (30s timeout, 2s poll)</label>
+            <label><input type="checkbox" id="deep"> Deep (180s timeout, 4s poll)</label>
+          </div>
+        </div>
       </div>
-      <button id="sc_btn" style="margin-top:12px;">Run Supercheck</button>
-      <pre id="sc_out"></pre>
-    </section>
 
-    <script>
-      async function fetchShow(path, sel) {
-        const el = document.querySelector(sel);
-        el.textContent = '…';
-        try {
-          const res = await fetch(path);
-          el.textContent = await res.text();
-        } catch (e) {
-          el.textContent = 'Error: ' + e.message;
-        }
-      }
+      <div class="card">
+        <h3>Overrides (optional)</h3>
+        <div class="row">
+          <div>
+            <label for="api">API base URL</label>
+            <input id="api" type="url" placeholder="https://scw-api.onrender.com">
+          </div>
+          <div>
+            <label for="queue">Queue key</label>
+            <input id="queue" type="text" placeholder="queue:runs">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="timeout">Timeout (sec)</label>
+            <input id="timeout" type="number" min="1" placeholder="75">
+          </div>
+          <div>
+            <label for="poll">Poll (sec)</label>
+            <input id="poll" type="number" min="1" placeholder="3">
+          </div>
+        </div>
+      </div>
 
-      document.getElementById('sc_btn').onclick = async () => {
-        const api_base = document.getElementById('sc_api').value.trim();
-        const tok = document.getElementById('sc_tok').value.trim();
-        const apply = document.getElementById('sc_apply').checked;
-        const commit = document.getElementById('sc_commit').checked;
-        const out = document.getElementById('sc_out');
-        out.textContent = 'Queuing…';
+      <div class="card">
+        <h3>Actions</h3>
+        <div class="row">
+          <button class="btn" id="runBtn">Run Supercheck</button>
+          <button class="btn secondary" id="cleanupBtn">Clean old triggers</button>
+        </div>
+        <p class="muted">“Run Supercheck” creates <code>run-<timestamp>.txt</code> and any flag files you selected. “Clean” removes prior trigger files.</p>
+        <div id="status" class="muted" style="margin-top:8px"></div>
+        <div id="log" class="log" style="margin-top:8px"></div>
+      </div>
 
-        try {
-          const res = await fetch('/v1/admin/supercheck/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': tok },
-            body: JSON.stringify({
-              api_base: api_base || null,
-              auto_apply: apply,
-              auto_commit: commit,
-              queue_key: 'queue:runs'
-            })
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.detail || res.statusText);
-          out.textContent =
-`✅ Queued workflow: ${data.workflow}
-Repo: ${data.repo}
+      <details class="card">
+        <summary><strong>Notes & Security</strong></summary>
+        <ul>
+          <li>Token is only sent to <code>https://api.github.com</code> over HTTPS.</li>
+          <li>If you tick “Remember”, your token and settings are stored in <code>localStorage</code> on this device only.</li>
+          <li>Minimum scopes: <code>repo</code> (contents:read/write) for this repository.</li>
+          <li>You can revoke the token anytime in GitHub settings.</li>
+        </ul>
+      </details>
+    </div>
+  </div>
 
-Open GitHub → Actions → One-Button Supercheck → latest run
-Artifact: supercheck_bundle → supercheck_report.md`;
-        } catch (e) {
-          out.textContent = '❌ ' + e.message + '\nTip: ensure ADMIN_TOKEN & GITHUB_* env vars are set on API service.';
-        }
+  <script>
+    const qs = id => document.getElementById(id);
+    const statusEl = qs('status');
+    const logEl = qs('log');
+
+    function log(msg){ logEl.textContent += msg + "\\n"; logEl.scrollTop = logEl.scrollHeight; }
+    function setStatus(msg, cls=""){ statusEl.className = "muted " + cls; statusEl.textContent = msg; }
+
+    // Local storage helpers
+    const STORE_KEY = "sv_supercheck_diag";
+    function loadSaved() {
+      try {
+        const j = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+        if (j.repo) qs('repo').value = j.repo;
+        if (j.branch) qs('branch').value = j.branch;
+        if (j.token) { qs('token').value = j.token; qs('remember').checked = true; }
+        if (j.api) qs('api').value = j.api;
+        if (j.queue) qs('queue').value = j.queue;
+        if (j.timeout) qs('timeout').value = j.timeout;
+        if (j.poll) qs('poll').value = j.poll;
+      } catch {}
+    }
+    function maybeSave() {
+      if (!qs('remember').checked) { localStorage.removeItem(STORE_KEY); return; }
+      const data = {
+        repo: qs('repo').value.trim(),
+        branch: qs('branch').value.trim(),
+        token: qs('token').value, // stored only if 'remember' checked
+        api: qs('api').value.trim(),
+        queue: qs('queue').value.trim(),
+        timeout: qs('timeout').value.trim(),
+        poll: qs('poll').value.trim(),
       };
-    </script>
-  </body>
+      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    }
+
+    async function gh(path, method="GET", body=null, token="") {
+      const res = await fetch("https://api.github.com" + path, {
+        method,
+        headers: {
+          "Accept": "application/vnd.github+json",
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: body ? JSON.stringify(body) : null
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(method + " " + path + " -> " + res.status + " " + text);
+      }
+      return res.json();
+    }
+
+    function b64(s) { return btoa(unescape(encodeURIComponent(s))); }
+
+    async function createFile(owner, repo, branch, path, content, token, message) {
+      return gh(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, "PUT", {
+        message,
+        content: b64(content),
+        branch
+      }, token);
+    }
+
+    async function listDir(owner, repo, path, token, ref) {
+      return gh(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`, "GET", null, token);
+    }
+
+    async function deleteFile(owner, repo, branch, path, sha, token, message) {
+      return gh(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, "DELETE", {
+        message,
+        sha,
+        branch
+      }, token);
+    }
+
+    function splitRepo(s) {
+      const [owner, name] = s.split("/");
+      if (!owner || !name) throw new Error("Repository must be in the form owner/name");
+      return {owner, name};
+    }
+
+    function chosenFlags() {
+      const flags = [];
+      if (qs('apply').checked) flags.push("apply.txt");
+      if (qs('commit').checked) flags.push("commit.txt");
+      if (qs('atticOff').checked) flags.push("attic-off.txt");
+      if (qs('preflightOnly').checked) flags.push("preflight-only.txt");
+      if (qs('triageOnly').checked) flags.push("triage-only.txt");
+      if (qs('skipDiag').checked) flags.push("skip-diag.txt");
+      if (qs('noAutofix').checked) flags.push("no-autofix.txt");
+      if (qs('fast').checked) flags.push("fast.txt");
+      if (qs('deep').checked) flags.push("deep.txt");
+      return flags;
+    }
+
+    async function runSupercheck() {
+      try {
+        logEl.textContent = "";
+        setStatus("Preparing…");
+        const repoFull = qs('repo').value.trim();
+        const {owner, name} = splitRepo(repoFull);
+        const branch = qs('branch').value.trim() || "main";
+        const token = qs('token').value.trim();
+        if (!token) { setStatus("Token required.", "bad"); return; }
+        maybeSave();
+
+        const base = ".github/trigger/supercheck";
+        const now = new Date().toISOString().replace(/[:.]/g,"-");
+        const runName = `run-${now}.txt`;
+
+        const files = chosenFlags();
+        const values = [];
+        if (qs('api').value.trim()) values.push(["diag-url.txt", qs('api').value.trim()]);
+        if (qs('queue').value.trim()) values.push(["queue.txt", qs('queue').value.trim()]);
+        if (qs('timeout').value.trim()) values.push(["timeout.txt", qs('timeout').value.trim()]);
+        if (qs('poll').value.trim()) values.push(["poll.txt", qs('poll').value.trim()]);
+
+        setStatus("Creating trigger files…");
+        // 1) create value files first
+        for (const [fname, val] of values) {
+          const path = `${base}/${fname}`;
+          log(`PUT ${path}`);
+          await createFile(owner, name, branch, path, val + "\n", token, `diag: set ${fname}`);
+        }
+        // 2) create flag files
+        for (const fname of files) {
+          const path = `${base}/${fname}`;
+          log(`PUT ${path}`);
+          await createFile(owner, name, branch, path, "1\n", token, `diag: flag ${fname}`);
+        }
+        // 3) create the run file last (this triggers the push-filter)
+        const runPath = `${base}/${runName}`;
+        log(`PUT ${runPath}`);
+        await createFile(owner, name, branch, runPath, "go\n", token, `trigger supercheck ${now}`);
+
+        setStatus("Triggered ✓  — open Actions to watch the run.", "ok");
+        log("Done. Check the Actions tab → One-Button Supercheck.");
+      } catch (e) {
+        console.error(e);
+        setStatus("Error: " + e.message, "bad");
+        log(String(e));
+      }
+    }
+
+    async function cleanup() {
+      try {
+        logEl.textContent = "";
+        setStatus("Listing triggers…");
+        const repoFull = qs('repo').value.trim();
+        const {owner, name} = splitRepo(repoFull);
+        const branch = qs('branch').value.trim() || "main";
+        const token = qs('token').value.trim();
+        if (!token) { setStatus("Token required.", "bad"); return; }
+        maybeSave();
+        const base = ".github/trigger/supercheck";
+
+        let entries = [];
+        try {
+          entries = await listDir(owner, name, base, token, branch);
+          if (!Array.isArray(entries)) entries = [];
+        } catch (e) {
+          // directory may not exist yet
+          entries = [];
+        }
+
+        if (entries.length === 0) { setStatus("No trigger files to delete.", "ok"); return; }
+
+        for (const it of entries) {
+          if (it.type === "file") {
+            log(`DELETE ${it.path}`);
+            await deleteFile(owner, name, branch, it.path, it.sha, token, "diag: cleanup trigger");
+          }
+        }
+        setStatus("Cleaned ✓", "ok");
+        log("Removed all files under .github/trigger/supercheck/");
+      } catch (e) {
+        console.error(e);
+        setStatus("Error: " + e.message, "bad");
+        log(String(e));
+      }
+    }
+
+    qs('runBtn').addEventListener('click', runSupercheck);
+    qs('cleanupBtn').addEventListener('click', cleanup);
+    loadSaved();
+  </script>
+</body>
 </html>
