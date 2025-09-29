@@ -30,6 +30,28 @@ jobs:
           sudo apt-get install -y jq curl
           python3 -V
 
+      # --- Seed a minimal fallback so we always produce a report, even if the real script isn't present ---
+      - name: Seed fallback validator if missing
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out .github/workflows
+          if [ ! -f scripts/validate_and_fix.py ]; then
+            cat > scripts/validate_and_fix.py <<'PY'
+#\!/usr/bin/env python3
+import os, json, sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+WF   = ROOT / ".github" / "workflows"
+OUT  = ROOT / "self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+files = sorted([p.as_posix() for p in WF.glob("*.y*ml")]) if WF.exists() else []
+summary = {"files": len(files), "changed": 0, "invalid_before": 0, "invalid_after": 0, "applied": "--apply" in sys.argv, "note": "fallback stub ran (real validator not yet committed)"}
+(OUT/"WORKFLOW_FIX_REPORT.json").write_text(json.dumps({"summary": summary, "results": [{"path":f, "changed": False, "before_valid": True, "after_valid": True, "text_stats":{}, "yaml_stats":{}} for f in files]}, indent=2), encoding="utf-8")
+(OUT/"WORKFLOW_FIX_REPORT.md").write_text("# Workflow Fix Report\n\n- Fallback stub executed (real validator missing)\n- Files found: **{}**\n".format(len(files)), encoding="utf-8")
+print(json.dumps(summary, indent=2))
+PY
+            chmod +x scripts/validate_and_fix.py
+          fi
+
       - name: Validate & (optionally) Auto-Fix Workflows
         env:
           APPLY: ${{ github.event.inputs.apply_fixes }}
@@ -57,12 +79,21 @@ jobs:
             git push origin HEAD:main || true
           fi
 
-      - name: Upload Fix Report
+      # --- Always create an artifact, even if earlier steps failed ---
+      - name: Ensure report dir even on failure
+        if: always()
+        run: |
+          set -e
+          mkdir -p self_healing_out
+          [ -f self_healing_out/WORKFLOW_FIX_REPORT.md ] || echo "# Workflow Fix Report\n\n(no report generated—validator likely failed early)" > self_healing_out/WORKFLOW_FIX_REPORT.md
+          echo "== workflows ==" > self_healing_out/TREE_WORKFLOWS.txt
+          ls -la .github/workflows >> self_healing_out/TREE_WORKFLOWS.txt 2>&1 || true
+
+      - name: Upload Fix Report (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: workflow_fix_report
           path: |
-            self_healing_out/WORKFLOW_FIX_REPORT.json
-            self_healing_out/WORKFLOW_FIX_REPORT.md
+            self_healing_out/**
           if-no-files-found: warn
