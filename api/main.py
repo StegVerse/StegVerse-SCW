@@ -8,37 +8,35 @@ from typing import List, Optional
 import redis
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-# If you have extra ops routes, this keeps them mounted.
+# Routers
+# - ops router is your existing operational endpoints (health, metrics, queue/test, etc.)
+# - admin router (added below) lets the diag page trigger the One-Button Supercheck via GitHub Actions
 try:
-    from routes.ops import router as ops_router
+    from routes.ops import router as ops_router  # if you already have this
 except Exception:
-    ops_router = None
+    ops_router = None  # safe if not present yet
+
+from routes_admin import router as admin_router  # NEW (provided below)
 
 # --------------------------
 # Config & Redis connection
 # --------------------------
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-RUNS_QUEUE_KEY = os.getenv("RUNS_QUEUE_KEY", "queue:runs")  # must match the worker
-# Metrics keys (used by the worker; we read them here)
-RUNS_PROCESSED_KEY = os.getenv("RUNS_PROCESSED_KEY", "metrics:runs:processed")
-RUNS_FAILED_KEY    = os.getenv("RUNS_FAILED_KEY",    "metrics:runs:failed")
-WORKER_HEARTBEAT_KEY = os.getenv("WORKER_HEARTBEAT_KEY", "worker:heartbeat")
+RUNS_QUEUE_KEY = os.getenv("RUNS_QUEUE_KEY", "queue:runs")
 
+# decode_responses=True returns str instead of bytes
 r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 # Allow one or more UI origins via env (comma-separated)
+# UI_ORIGINS="https://scw-ui.onrender.com,https://dev-ui.example.com"
 UI_ORIGINS = [o.strip() for o in os.getenv("UI_ORIGINS", "").split(",") if o.strip()]
 # Quick toggle for testing: CORS_ALLOW_ALL=1
 CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL", "0") == "1"
 
-app = FastAPI(title="StegVerse SCW API", version="0.1.0")
-
-# Mount external ops router if present
-if ops_router:
-    app.include_router(ops_router)
+app = FastAPI(title="StegVerse SCW API", version="0.2.0")
 
 # --------------------------
 # CORS
@@ -54,7 +52,7 @@ if CORS_ALLOW_ALL:
 else:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=UI_ORIGINS or ["https://scw-ui.onrender.com"],
+        allow_origins=UI_ORIGINS or ["*"],
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -115,6 +113,7 @@ def whoami(request: Request):
 
 @app.get("/friendly", response_class=HTMLResponse)
 def friendly(request: Request):
+    """Built-in minimal diag page with a 'Run Supercheck' button."""
     host = request.headers.get("x-forwarded-host") or request.url.hostname
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     base = f"{proto}://{host}"
@@ -124,10 +123,14 @@ def friendly(request: Request):
         <meta name="viewport" content="width=device-width, initial-scale=1"/>
         <title>SCW API Helper</title>
         <style>
-          body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 760px; margin: 24px auto; line-height: 1.4; }}
+          body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 800px; margin: 24px auto; line-height: 1.45; padding: 0 12px; }}
           code {{ background: #f2f2f2; padding: 2px 4px; border-radius: 4px; }}
           .row a {{ margin-right: 12px; }}
-          button {{ padding: 6px 10px; }}
+          button {{ padding: 8px 12px; }}
+          section {{ border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-top: 16px; }}
+          input[type=text], input[type=password] {{ width: 100%; padding: 8px; }}
+          label {{ display: block; margin-top: 8px; }}
+          pre {{ background:#f7f7f7; padding:8px; border-radius:6px; white-space:pre-wrap; }}
         </style>
       </head>
       <body>
@@ -138,58 +141,57 @@ def friendly(request: Request):
           <a href="{base}/healthz" target="_blank">Open /healthz</a>
           <a href="{base}/whoami" target="_blank">Open /whoami</a>
         </div>
-        <hr/>
-        <h3>Quick Start</h3>
-        <ol>
-          <li>Copy API URL (button above)</li>
-          <li>Paste into the UI field (if not prefilled)</li>
-          <li>Create Project → Run</li>
-        </ol>
+
+        <section>
+          <h3>Run One-Button Supercheck</h3>
+          <label>API Base (optional)
+            <input id="apiBase" type="text" placeholder="https://&lt;your-api&gt;.onrender.com" value="{base}">
+          </label>
+          <label>Admin Token (X-Admin-Token)
+            <input id="adminToken" type="password" placeholder="Paste ADMIN_TOKEN here">
+          </label>
+          <div style="margin-top:8px;">
+            <label><input type="checkbox" id="autoApply" checked> Auto-apply safe fixes</label>
+            <label style="margin-left:12px;"><input type="checkbox" id="autoCommit"> Commit directly to main</label>
+          </div>
+          <button id="runSC" style="margin-top:12px;">Run Supercheck</button>
+          <pre id="scOut"></pre>
+        </section>
+
+        <script>
+        document.getElementById('runSC').onclick = async () => {{
+          const apiBase = document.getElementById('apiBase').value.trim();
+          const token = document.getElementById('adminToken').value.trim();
+          const autoApply = document.getElementById('autoApply').checked;
+          const autoCommit = document.getElementById('autoCommit').checked;
+          const out = document.getElementById('scOut');
+          out.textContent = 'Queuing Supercheck…';
+          try {{
+            const res = await fetch('/v1/admin/supercheck/run', {{
+              method: 'POST',
+              headers: {{
+                'Content-Type': 'application/json',
+                'X-Admin-Token': token
+              }},
+              body: JSON.stringify({{
+                api_base: apiBase || null,
+                auto_apply: autoApply,
+                auto_commit: autoCommit,
+                queue_key: '{RUNS_QUEUE_KEY}'
+              }})
+            }});
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || res.statusText);
+            out.textContent = `✅ Queued: ${{data.workflow}}\\nRepo: ${{data.repo}}\\n\\nOpen GitHub → Actions → One-Button Supercheck → latest run → download artifact supercheck_bundle → open supercheck_report.md`;
+          }} catch (e) {{
+            out.textContent = '❌ ' + e.message + '\\n\\nTips:\\n- Make sure ADMIN_TOKEN env var matches what you typed.\\n- Set GITHUB_* env vars on the API service.\\n- Check API logs if this keeps failing.';
+          }}
+        }};
+        </script>
       </body>
     </html>
     """
     return HTMLResponse(content=html, status_code=200)
-
-# --------------------------
-# Ops Endpoints (for automation)
-# --------------------------
-@app.get("/v1/ops/health")
-def ops_health():
-    # simple 200 OK used by Actions/Render checks
-    return {"status": "ok", "ts": int(now_ts())}
-
-@app.get("/v1/ops/env/required")
-def env_required():
-    required = ["REDIS_URL", "RUNS_QUEUE_KEY"]
-    present = {k: (os.getenv(k) is not None) for k in required}
-    return {"required": required, "present": present}
-
-@app.post("/v1/ops/deploy/report")
-def deploy_report():
-    # can be extended to log/store deploy details
-    return JSONResponse({"report": "Deploy acknowledged", "ts": int(now_ts())})
-
-# Enqueue a synthetic job for end-to-end testing
-@app.post("/v1/ops/queue/test")
-def queue_test():
-    payload = {"task": "test", "ts": int(now_ts()), "job_id": str(uuid.uuid4())}
-    r.lpush(RUNS_QUEUE_KEY, json.dumps(payload))
-    return {"queued": True, "key": RUNS_QUEUE_KEY, "payload": payload}
-
-# Read worker metrics (heartbeat + counters)
-@app.get("/v1/ops/metrics")
-def metrics():
-    processed = int(r.get(RUNS_PROCESSED_KEY) or 0)
-    failed    = int(r.get(RUNS_FAILED_KEY) or 0)
-    hb        = int(r.get(WORKER_HEARTBEAT_KEY) or 0)
-    age       = int(now_ts()) - hb if hb else None
-    return {
-        "queue_key": RUNS_QUEUE_KEY,
-        "processed": processed,
-        "failed": failed,
-        "worker_heartbeat_ts": hb,
-        "worker_heartbeat_age_sec": age
-    }
 
 # --------------------------
 # Projects
@@ -219,7 +221,7 @@ def list_projects(limit: int = 50):
     return {"projects": projects[: max(1, min(limit, 200))]}
 
 # --------------------------
-# Runs
+# Runs (simple queue pattern)
 # --------------------------
 @app.post("/v1/runs")
 def create_run(body: RunCreate):
@@ -248,7 +250,7 @@ def create_run(body: RunCreate):
         "language": body.language,
         "code": body.code,
     }
-    # ✅ enqueue to env-driven queue key (matches worker)
+    # enqueue to worker
     r.lpush(RUNS_QUEUE_KEY, json.dumps(payload))
 
     return {"run_id": run_id, "status": "queued"}
@@ -276,7 +278,9 @@ def get_run(run_id: str):
         "result": result,
     }
 
-# Simple root ping
-@app.get("/")
-def root():
-    return {"service": "StegVerse-SCW", "message": "API root"}
+# --------------------------
+# Routers
+# --------------------------
+if ops_router is not None:
+    app.include_router(ops_router)
+app.include_router(admin_router)
