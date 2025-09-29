@@ -1,0 +1,39 @@
+{
+  "$schema": "https://stegverse/specs/repo-spec-v1",
+  "ignore_globs": [
+    ".git/**",
+    "**/__pycache__/**",
+    "node_modules/**",
+    ".idea/**",
+    ".vscode/**",
+    ".DS_Store"
+  ],
+  "required_files": [
+    "README.md",
+    "render.yaml",
+    "api/main.py",
+    "api/requirements.txt",
+    "worker.py",
+    ".github/workflows/self-healing-scan.yml",
+    ".github/workflows/rebuild-kit.yml"
+  ],
+  "required_dirs": [
+    ".github/workflows",
+    "api"
+  ],
+  "recommended_files": [
+    ".github/workflows/diagnostic_report.yml",
+    ".github/workflows/smoke_and_verify.yml",
+    "requirements-dev.txt",
+    "tests/test_ops.py",
+    "public/diag.html"
+  ],
+  "forbidden_globs": [
+    "**/*.env",
+    "**/secrets.*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.crt",
+    "private/**"
+  ]
+}
