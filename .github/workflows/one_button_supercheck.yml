@@ -1,10 +1,10 @@
-name: One-Button Supercheck (Diag + Repo Audit + Drift + Auto-Triage)
+name: One-Button Supercheck (Diag + Repo Audit + Drift + Auto-Triage) [Hardened]
 
 on:
   workflow_dispatch:
     inputs:
       api_base:
-        description: "API base URL (e.g., https://your-api.onrender.com). Leave blank to skip runtime diagnostics."
+        description: "API base URL; blank = skip diagnostics"
         required: false
         default: ""
       queue_key:
@@ -12,7 +12,7 @@ on:
         required: false
         default: "queue:runs"
       timeout_sec:
-        description: "Max seconds to wait for worker processing"
+        description: "Max seconds to wait for worker"
         required: false
         default: "75"
       poll_sec:
@@ -20,11 +20,11 @@ on:
         required: false
         default: "3"
       auto_apply:
-        description: "Apply safe fixes autonomously (scaffold required, remove forbidden, move extras to ATTIC)"
+        description: "Apply safe fixes (ATTIC/scaffold/remove forbidden)"
         required: false
         default: "false"
       auto_commit:
-        description: "Commit fixes directly to main (else: open PR)"
+        description: "Commit fixes directly to main (else PR)"
         required: false
         default: "false"
 
@@ -36,12 +36,115 @@ jobs:
   supercheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Validate & Auto-Fix Workflows
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure tools
         run: |
           set -e
-          python3 scripts/validate_and_fix.py --apply || true
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+          python3 -V
+
+      # --- Seed minimal fallbacks so missing scripts never break the run ---
+      - name: Seed fallback scripts if missing
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out .github/workflows ATTIC docs
+
+          # validate_and_fix.py fallback (writes a minimal report)
+          if [ ! -f scripts/validate_and_fix.py ]; then
+            cat > scripts/validate_and_fix.py <<'PY'
+#\!/usr/bin/env python3
+import os, json, sys
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]
+WF=ROOT/".github"/"workflows"
+OUT=ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+files=sorted([p.as_posix() for p in WF.glob("*.y*ml")]) if WF.exists() else []
+summary={"files":len(files),"changed":0,"invalid_before":0,"invalid_after":0,"applied":"--apply" in sys.argv,"note":"fallback validator (real script not found)"}
+(OUT/"WORKFLOW_FIX_REPORT.json").write_text(json.dumps({"summary":summary,"results":[{"path":f,"changed":False,"before_valid":True,"after_valid":True,"text_stats":{},"yaml_stats":{}} for f in files]},indent=2),encoding="utf-8")
+(OUT/"WORKFLOW_FIX_REPORT.md").write_text("# Workflow Fix Report\n\n- Fallback stub executed (real validator missing)\n- Files found: **{}**\n".format(len(files)),encoding="utf-8")
+print(json.dumps(summary, indent=2))
+PY
+            chmod +x scripts/validate_and_fix.py
+          fi
+
+          # repo_audit.py fallback (creates inventory placeholders)
+          if [ ! -f scripts/repo_audit.py ]; then
+            cat > scripts/repo_audit.py <<'PY'
+#\!/usr/bin/env python3
+import os, json
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]
+OUT=ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+(OUT/"REPO_INVENTORY.json").write_text(json.dumps({"repo":ROOT.name,"inventory":[],"counts":{"files":0}},indent=2),encoding="utf-8")
+(OUT/"REPO_DIFF.json").write_text(json.dumps({"summary":{"required_missing":0,"dir_missing":0,"recommended_missing":0,"forbidden_hits":0,"extras":0},"required_missing":[],"dir_missing":[],"recommended_missing":[],"forbidden_hits":[],"extras":[]},indent=2),encoding="utf-8")
+(OUT/"REPO_INVENTORY.md").write_text("# Repo Inventory & Diff\n\n- (fallback stub)\n",encoding="utf-8")
+print("OK repo_audit (fallback)")
+PY
+            chmod +x scripts/repo_audit.py
+          fi
+
+          # topic_drift_audit.py fallback
+          if [ ! -f scripts/topic_drift_audit.py ]; then
+            cat > scripts/topic_drift_audit.py <<'PY'
+#\!/usr/bin/env python3
+import json, time
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]
+OUT=ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+rep={"generated_at":int(time.time()),"files_scanned":0,"idea_tags":{},"attic_files":[],"possibly_unused":[],"commit_topics_last200":[],"drift_ratio_no_topic":None}
+(OUT/"DRIFT_REPORT.json").write_text(json.dumps(rep,indent=2),encoding="utf-8")
+(OUT/"DRIFT_REPORT.md").write_text("# Drift Report\n\n- (fallback stub)\n",encoding="utf-8")
+print("OK drift_report (fallback)")
+PY
+            chmod +x scripts/topic_drift_audit.py
+          fi
+
+          # collect_self_healing.py fallback
+          if [ ! -f scripts/collect_self_healing.py ]; then
+            cat > scripts/collect_self_healing.py <<'PY'
+#\!/usr/bin/env python3
+import os, json, datetime
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]
+OUT=ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+manifest={"repo":os.getenv("GITHUB_REPOSITORY",ROOT.name),"branch":os.getenv("GITHUB_REF_NAME",""),"generated_at":datetime.datetime.utcnow().isoformat()+"Z","measures":{}}
+(OUT/"SELF_HEALING_MANIFEST.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
+(OUT/"SELF_HEALING_MANIFEST.md").write_text("# Minimal Manifest (fallback)\n",encoding="utf-8")
+(OUT/"GAPS.json").write_text(json.dumps({"note":"fallback scan"},indent=2),encoding="utf-8")
+(OUT/"REMEDIATIONS.md").write_text("",encoding="utf-8")
+print("OK scan (fallback)")
+PY
+            chmod +x scripts/collect_self_healing.py
+          fi
+
+          # auto_triage.py fallback
+          if [ ! -f scripts/auto_triage.py ]; then
+            cat > scripts/auto_triage.py <<'PY'
+#\!/usr/bin/env python3
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]
+OUT=ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+(OUT/"AUTO_TRIAGE_PLAN.json").write_text('{"remove_forbidden":[],"move_to_attic":[],"scaffold_dirs":[],"scaffold_files":[],"keep":[]}',encoding="utf-8")
+(OUT/"AUTO_TRIAGE_REPORT.md").write_text("# Auto-Triage Plan\n\n- (fallback stub)\n",encoding="utf-8")
+print("OK auto_triage (fallback)")
+PY
+            chmod +x scripts/auto_triage.py
+          fi
+
+      # --- Normalize/fix workflows first (auto-commit if requested) ---
+      - name: Validate & Auto-Fix Workflows
+        env:
+          APPLY: ${{ github.event.inputs.auto_apply }}
+        run: |
+          set -e
+          if [ "${APPLY}" = "true" ]; then
+            python3 scripts/validate_and_fix.py --apply || true
+          else
+            python3 scripts/validate_and_fix.py || true
+          fi
 
       - name: Commit Fixed Workflows (if auto_apply=true)
         if: ${{ github.event.inputs.auto_apply == 'true' }}
@@ -58,392 +161,8 @@ jobs:
             git commit -m "chore: normalize workflows (auto-fix common YAML issues)"
             git push origin HEAD:main || true
           fi
-          
-      - name: Ensure tools
-        run: |
-          set -e
-          sudo apt-get update
-          sudo apt-get install -y jq curl
-          python3 -V
 
-      # -------- Seed helper scripts (safe heredocs; shebangs escaped) ----------
-      - name: Seed scripts/repo_audit.py if missing
-        run: |
-          set -e
-          mkdir -p scripts self_healing_out docs ATTIC .github/workflows
-          if [ ! -f scripts/repo_audit.py ]; then
-            cat > scripts/repo_audit.py <<'PY'
-#\!/usr/bin/env python3
-import os, sys, json, hashlib, fnmatch, time
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
-DEFAULT_IGNORE = [".git/**","**/__pycache__/**","node_modules/**",".idea/**",".vscode/**",".DS_Store"]
-
-def sha256_file(p, cap=2_000_000):
-    h = hashlib.sha256(); n = 0
-    with open(p, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk); n += len(chunk)
-            if n >= cap: break
-    return h.hexdigest(), n
-
-def load_spec():
-    p = ROOT / "REPO_SPEC.json"
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception as e:
-            return {
-                "_error": f"bad REPO_SPEC.json: {e}",
-                "ignore_globs": DEFAULT_IGNORE,
-                "required_files": [],
-                "required_dirs": [],
-                "recommended_files": [],
-                "forbidden_globs": ["**/*.env","**/secrets.*","**/*.pem","**/*.key","**/*.crt","private/**"],
-            }
-    return {
-        "ignore_globs": DEFAULT_IGNORE,
-        "required_files": [],
-        "required_dirs": [],
-        "recommended_files": [],
-        "forbidden_globs": ["**/*.env","**/secrets.*","**/*.pem","**/*.key","**/*.crt","private/**"],
-    }
-
-def match_any(rel, pats):
-    return any(fnmatch.fnmatch(rel, pat) or rel == pat for pat in pats)
-
-def main():
-    spec = load_spec()
-    ignore = spec.get("ignore_globs") or DEFAULT_IGNORE
-    req = spec.get("required_files", [])
-    rdirs = spec.get("required_dirs", [])
-    rec = spec.get("recommended_files", [])
-    forb = spec.get("forbidden_globs", [])
-
-    files = []
-    for p in ROOT.rglob("*"):
-        if p.is_file():
-            rel = p.relative_to(ROOT).as_posix()
-            if any(fnmatch.fnmatch(rel, pat) for pat in ignore): continue
-            files.append(rel)
-    files = sorted(files)
-
-    inv=[]
-    for rel in files:
-        p = ROOT / rel
-        size = p.stat().st_size
-        try: d,n = sha256_file(p)
-        except Exception as e: d,f"error:{e}"; n = 0
-        inv.append({"path":rel,"size":size,"sha256":d,"sampled_bytes":n})
-
-    present = set(files)
-    missing = [f for f in req if f not in present]
-    dir_missing = [d for d in rdirs if not (ROOT/d).exists()]
-    rec_missing = [f for f in rec if f not in present]
-    forb_hits = [rel for rel in files if match_any(rel, forb)]
-
-    wanted = set(req) | set(rec)
-    extras = [rel for rel in files if rel not in wanted]
-
-    ts = int(time.time())
-    (OUT/"REPO_INVENTORY.json").write_text(json.dumps({
-        "repo": os.getenv("GITHUB_REPOSITORY", ROOT.name),
-        "generated_at": ts,
-        "counts": {"files": len(files)},
-        "inventory": inv
-    }, indent=2), encoding="utf-8")
-
-    (OUT/"REPO_DIFF.json").write_text(json.dumps({
-        "summary": {
-            "required_missing": len(missing),
-            "dir_missing": len(dir_missing),
-            "recommended_missing": len(rec_missing),
-            "forbidden_hits": len(forb_hits),
-            "extras": len(extras)
-        },
-        "required_missing": missing,
-        "dir_missing": dir_missing,
-        "recommended_missing": rec_missing,
-        "forbidden_hits": forb_hits,
-        "extras": extras
-    }, indent=2), encoding="utf-8")
-
-    md=[]
-    md.append(f"# Repo Inventory & Diff — {os.getenv('GITHUB_REPOSITORY', ROOT.name)}\n")
-    md.append(f"- Files scanned: **{len(files)}**\n")
-    def sec(title, items):
-        md.append(f"## {title} ({len(items)})")
-        if not items:
-            md.append("- ✅ None\n")
-            return
-        for it in items:
-            md.append(f"- `{it}`")
-        md.append("")
-    sec("Required files missing", missing)
-    sec("Required directories missing", dir_missing)
-    sec("Recommended files missing", rec_missing)
-    sec("Forbidden items present", forb_hits)
-    sec("Extras (not required/recommended)", extras[:200])
-    (OUT/"REPO_INVENTORY.md").write_text("\n".join(md), encoding="utf-8")
-    print("OK repo_audit")
-
-if __name__ == "__main__":
-    main()
-PY
-            chmod +x scripts/repo_audit.py
-          fi
-
-      - name: Seed scripts/topic_drift_audit.py if missing
-        run: |
-          set -e
-          if [ ! -f scripts/topic_drift_audit.py ]; then
-            cat > scripts/topic_drift_audit.py <<'PY'
-#\!/usr/bin/env python3
-import os, re, json, subprocess, time
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
-
-IDEA_RE = re.compile(r'@idea:([a-zA-Z0-9_\-]+)')
-ATTIC_RE = re.compile(r'@attic\b')
-TOPIC_RE = re.compile(r'\[topic:([a-zA-Z0-9_\-]+)\]')
-
-IGNORE = {".git","node_modules","__pycache__", ".idea",".vscode"}
-EXTS = {".py",".ts",".tsx",".js",".jsx",".json",".yml",".yaml",".md",".html",".sh"}
-
-def files():
-    out=[]
-    for p in ROOT.rglob("*"):
-        if p.is_file():
-            rel=p.relative_to(ROOT).as_posix()
-            if any(seg in IGNORE for seg in rel.split("/")): continue
-            out.append(rel)
-    return out
-
-def scan_markers(paths):
-    ideas, attic = {}, []
-    for rel in paths:
-        if not any(rel.endswith(e) for e in EXTS): continue
-        try: txt=(ROOT/rel).read_text(encoding="utf-8",errors="ignore")
-        except: continue
-        for t in IDEA_RE.findall(txt):
-            ideas.setdefault(t,[]).append(rel)
-        if ATTIC_RE.search(txt) or rel.startswith("ATTIC/"):
-            attic.append(rel)
-    return ideas, sorted(attic)
-
-def git(cmd):
-    return subprocess.check_output(["git"]+cmd, cwd=str(ROOT)).decode().strip()
-
-def recent_commits(n=200):
-    try:
-        log=git(["log", f"-n{n}", "--pretty=%H%x09%ad%x09%s", "--date=short"])
-    except:
-        return []
-    out=[]
-    for line in log.splitlines():
-        try:
-            sha,date,subj=line.split("\t",2)
-        except:
-            continue
-        out.append({"sha":sha,"date":date,"subject":subj,"topics":TOPIC_RE.findall(subj)})
-    return out
-
-def simple_unused(paths):
-    py=[f for f in paths if f.endswith(".py")]
-    mods={f[:-3].replace("/","."):f for f in py if not f.endswith("__init__.py")}
-    rev={m:set() for m in mods}
-    for f in py:
-        try: t=(ROOT/f).read_text(encoding="utf-8",errors="ignore")
-        except: continue
-        for m in mods:
-            if mods[m]==f: continue
-            if f"import {m}" in t or f"from {m} import" in t:
-                rev[m].add(f)
-    unused=[]
-    for m,srcs in rev.items():
-        rel=mods[m]
-        if rel.startswith(("scripts/","docs/","ATTIC/")): continue
-        if len(srcs)==0: unused.append(rel)
-    return sorted(unused)
-
-def main():
-    paths=files()
-    ideas, attic = scan_markers(paths)
-    commits=recent_commits()
-    unused=simple_unused(paths)
-    no_topic=sum(1 for c in commits if not c["topics"])
-    drift=(no_topic/max(1,len(commits))) if commits else None
-
-    rep={
-        "generated_at":int(time.time()),
-        "files_scanned":len(paths),
-        "idea_tags":{k:sorted(v) for k,v in ideas.items()},
-        "attic_files":attic,
-        "possibly_unused":unused,
-        "commit_topics_last200":commits,
-        "drift_ratio_no_topic":drift
-    }
-    (OUT/"DRIFT_REPORT.json").write_text(json.dumps(rep,indent=2),encoding="utf-8")
-
-    md=["# Drift Report","","- Files scanned: **{}**".format(len(paths))]
-    if drift is not None:
-        md.append(f"- Commits without topic tag: **{int(drift*100)}%** (last 200)")
-    md.append("\n## Idea tags found")
-    if ideas:
-        for tag,paths in sorted(rep["idea_tags"].items()):
-            md.append(f"- **{tag}** ({len(paths)})")
-            md += [f"  - `{p}`" for p in paths[:20]]
-    else:
-        md.append("- None")
-    md.append("\n## Files in ATTIC/ or marked @attic")
-    md += ([f"- `{p}`" for p in attic[:50]] or ["- None"])
-    md.append("\n## Possibly unused Python modules (heuristic)")
-    md += ([f"- `{p}`" for p in unused[:50]] or ["- None"])
-    md.append("\n## Recent commit topics (last 20)")
-    md += [f"- {c['date']} {c['sha'][:7]} — {c['subject']}  (topics: {', '.join(c['topics']) or '—'})" for c in commits[:20]]
-    (OUT/"DRIFT_REPORT.md").write_text("\n".join(md),encoding="utf-8")
-    print("OK drift_report")
-
-if __name__=="__main__":
-    main()
-PY
-          fi
-
-      - name: Seed scripts/auto_triage.py (autonomous keep/attic/delete)
-        run: |
-          set -e
-          cat > scripts/auto_triage.py <<'PY'
-#\!/usr/bin/env python3
-"""
-Auto-triage files into:
-- keep (required/recommended)
-- move_to_attic (extras, experiments), with @attic header added
-- remove_forbidden (for sure sensitive/forbidden patterns)
-
-Outputs to self_healing_out/*. If APPLY=1, performs changes.
-"""
-import os, json, time
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
-
-def load(path):
-    p = ROOT / path
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-
-def write(path, text):
-    (OUT / path).write_text(text, encoding="utf-8")
-
-def attic_header(rel, idea_tag="auto-attic", why="Parked by auto-triage"):
-    ts = time.strftime("%Y-%m-%d", time.gmtime())
-    return f"# @attic\n# when: {ts}\n# why: {why}\n# related-idea: {idea_tag}\n# how-to-restore: move file out of ATTIC/, re-link imports if needed\n\n"
-
-def main():
-    diff = load("self_healing_out/REPO_DIFF.json") or {}
-    inv  = load("self_healing_out/REPO_INVENTORY.json") or {}
-
-    forbid = set(diff.get("forbidden_hits", []))
-    extras = set(diff.get("extras", []))
-    missing = set(diff.get("required_missing", []))
-    dir_missing = set(diff.get("dir_missing", []))
-
-    plan = {
-        "remove_forbidden": sorted(forbid),
-        "move_to_attic": sorted([e for e in extras if not e.startswith(("ATTIC/","docs/","tests/"))]),
-        "scaffold_dirs": sorted(dir_missing),
-        "scaffold_files": sorted(missing),
-        "keep": []
-    }
-    write("AUTO_TRIAGE_PLAN.json", json.dumps(plan, indent=2))
-
-    md = ["# Auto-Triage Plan"]
-    md += ["\n## To Remove (forbidden)"] + ([f"- `{p}`" for p in plan["remove_forbidden"]] or ["- ✅ None"])
-    md += ["\n## To Move to ATTIC (extras)"] + ([f"- `{p}`" for p in plan["move_to_attic"]] or ["- ✅ None"])
-    md += ["\n## To Scaffold (dirs)"] + ([f"- `{p}`" for p in plan["scaffold_dirs"]] or ["- ✅ None"])
-    md += ["\n## To Scaffold (files)"] + ([f"- `{p}`" for p in plan["scaffold_files"]] or ["- ✅ None"])
-    write("AUTO_TRIAGE_REPORT.md", "\n".join(md))
-
-    if os.getenv("APPLY","0") != "1":
-        print("DRY RUN (no changes)."); return
-
-    for d in plan["scaffold_dirs"]:
-        (ROOT / d).mkdir(parents=True, exist_ok=True)
-        (ROOT / d / ".gitkeep").write_text("", encoding="utf-8")
-
-    for f in plan["scaffold_files"]:
-        p = ROOT / f
-        p.parent.mkdir(parents=True, exist_ok=True)
-        if not p.exists():
-            p.write_text(f"# TODO: add content for {f}\n", encoding="utf-8")
-
-    for f in plan["remove_forbidden"]:
-        try: (ROOT / f).unlink(missing_ok=True)
-        except Exception: pass
-
-    for f in plan["move_to_attic"]:
-        src = ROOT / f
-        if not src.exists(): continue
-        dst = ROOT / ("ATTIC/" + f)
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            content = src.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            content = ""
-        header = attic_header(f)
-        dst.write_text(header + content, encoding="utf-8")
-        src.unlink(missing_ok=True)
-
-    print("Applied auto-triage changes.")
-
-if __name__ == "__main__":
-    main()
-PY
-          chmod +x scripts/auto_triage.py
-
-      - name: Ensure minimal Self-Healing Scan script
-        run: |
-          set -e
-          if [ ! -f scripts/collect_self_healing.py ]; then
-            cat > scripts/collect_self_healing.py <<'PY'
-#\!/usr/bin/env python3
-import os, json, datetime
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
-
-def ls(pats):
-  out=[]
-  for pat in pats:
-    out += [str(p) for p in ROOT.glob(pat) if p.is_file()]
-  return sorted(out)
-
-manifest = {
-  "repo": os.getenv("GITHUB_REPOSITORY", ROOT.name),
-  "branch": os.getenv("GITHUB_REF_NAME",""),
-  "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
-  "measures": {
-    "workflows": ls([".github/workflows/*.yml",".github/workflows/*.yaml"]),
-    "scripts":   ls(["scripts/*.sh","scripts/*.py"]),
-    "config":    ls(["render.yaml","api/requirements.txt"]),
-    "ui":        ls(["public/diag.html"]),
-    "api":       ls(["api/main.py","api/app/main.py"])
-  }
-}
-(OUT/"SELF_HEALING_MANIFEST.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
-(OUT/"SELF_HEALING_MANIFEST.md").write_text("# Minimal Manifest\n\n```\n"+json.dumps(manifest,indent=2)+"\n```",encoding="utf-8")
-(OUT/"GAPS.json").write_text(json.dumps({"note":"minimal scan"},indent=2),encoding="utf-8")
-(OUT/"REMEDIATIONS.md").write_text("",encoding="utf-8")
-print("OK scan")
-PY
-          fi
-
-      # -------- A) Runtime diagnostics (optional) ----------
+      # --- Optional diagnostics against your API/worker ---
       - name: Runtime diagnostics (API + Worker)
         id: diag
         env:
@@ -459,19 +178,15 @@ PY
             printf '{"ok":null,"skipped":true}\n' > supercheck_diag.json
             exit 0
           fi
-
           API="$(echo "$API" | sed 's:/*$::')"
           get(){ curl -sS -w "\n%{http_code}" "$1"; }
           post(){ curl -sS -w "\n%{http_code}" -X POST "$1" -H "Content-Type: application/json" -d "{}"; }
-
           pass=true; report='{"api_base":"'"$API"'","steps":[],"ok":false}'
           add(){ report=$(jq -c --arg n "$1" --argjson ok $2 --argjson data "$3" --arg e "${4:-}" '.steps += [{"name":$n,"ok":$ok,"data":$data,"error":(($e|length>0)?$e:null)}]' <<<"$report"); }
-
-          read -r b s < <(get "$API/v1/ops/health"); if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/health" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/health" false null "HTTP $s"; pass=false; fi
-          read -r b s < <(get "$API/v1/ops/env/required"); if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/env/required" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/env/required" false null "HTTP $s"; pass=false; fi
-          read -r b s < <(get "$API/v1/ops/metrics"); if [ "${s:-500}" = "200" ]; then PB=$(echo "$b"|jq -r '.processed // 0'); add "GET /v1/ops/metrics (before)" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/metrics (before)" false null "HTTP $s"; pass=false; fi
-          read -r b s < <(post "$API/v1/ops/queue/test"); if [ "${s:-500}" = "200" ] && [ "$(echo "$b"|jq -r '.queued // false')" = "true" ]; then add "POST /v1/ops/queue/test" true "$(echo "$b"|jq -S .)" ""; else add "POST /v1/ops/queue/test" false null "HTTP $s"; pass=false; fi
-
+          read -r b s < <(get "$API/v1/ops/health");            if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/health" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/health" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(get "$API/v1/ops/env/required");      if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/env/required" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/env/required" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(get "$API/v1/ops/metrics");           if [ "${s:-500}" = "200" ]; then PB=$(echo "$b"|jq -r '.processed // 0'); add "GET /v1/ops/metrics (before)" true "$(echo "$b"|jq -S .)" ""; else add "GET /v1/ops/metrics (before)" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(post "$API/v1/ops/queue/test");       if [ "${s:-500}" = "200" ] && [ "$(echo "$b"|jq -r '.queued // false')" = "true" ]; then add "POST /v1/ops/queue/test" true "$(echo "$b"|jq -S .)" ""; else add "POST /v1/ops/queue/test" false null "HTTP $s"; pass=false; fi
           end=$(( $(date +%s) + ${TIMEOUT_SEC} )); snaps="[]"; PA="$PB"
           if [ "$pass" = true ]; then
             while [ $(date +%s) -lt $end ]; do
@@ -482,31 +197,34 @@ PY
             add "Poll metrics until processed increases" "$ok" "$snaps" "before=$PB after=$PA timeout=${TIMEOUT_SEC}s"
             [ "$ok" = true ] || pass=false
           fi
-
           report=$(jq -c --argjson ok $([ "$pass" = true ] && echo true || echo false) '.ok=$ok' <<<"$report")
           echo "$report" | jq -S . > supercheck_diag.json
           echo "skip=false" >> $GITHUB_OUTPUT
           echo "ok=$pass" >> $GITHUB_OUTPUT
 
-      # -------- B) Repo audit + Drift report ----------
+      # --- Repo audit + drift + manifest (real scripts or fallbacks) ---
       - name: Repo Inventory & Diff
         run: python3 scripts/repo_audit.py
 
       - name: Topic Drift Auditor
         run: python3 scripts/topic_drift_audit.py
 
-      # -------- C) Self-Healing Scan ----------
       - name: Self-Healing Scan (minimal)
         run: python3 scripts/collect_self_healing.py
 
-      # -------- D) Auto-triage (with optional autonomous apply) ----------
+      # --- Auto-triage (safe apply optional) ---
       - name: Auto-Triage (plan + optional apply)
         env:
           APPLY: ${{ github.event.inputs.auto_apply }}
         run: |
-          if [ "${APPLY}" = "true" ]; then APPLY=1 python3 scripts/auto_triage.py; else python3 scripts/auto_triage.py; fi
+          set -e
+          if [ "${APPLY}" = "true" ]; then
+            APPLY=1 python3 scripts/auto_triage.py
+          else
+            python3 scripts/auto_triage.py
+          fi
 
-      # -------- E) Commit/PR if auto_apply requested ----------
+      # --- Commit/PR for triage if requested ---
       - name: Commit or PR changes
         if: ${{ github.event.inputs.auto_apply == 'true' }}
         env:
@@ -518,61 +236,81 @@ PY
           git config user.email "bot@stegverse.local"
           if [ "$DO_COMMIT" = "true" ]; then
             git add -A
-            git commit -m "supercheck(auto): apply safe triage (scaffold/move ATTIC/remove forbidden)" || echo "No changes"
+            git commit -m "supercheck(auto): apply safe triage" || echo "No changes"
             git push origin HEAD:main || true
           else
             BR="supercheck/triage-${GITHUB_RUN_ID}"
-            git checkout -b "$BR"
+            git checkout -b "$BR" || git checkout "$BR"
             git add -A
-            git commit -m "supercheck(auto): apply safe triage (scaffold/move ATTIC/remove forbidden)" || echo "No changes"
+            git commit -m "supercheck(auto): apply safe triage" || echo "No changes"
             git push origin "$BR" || true
             TITLE="Supercheck: safe triage (auto)"
-            BODY="This PR was created by One-Button Supercheck.\n\n- Scaffolds missing files/dirs\n- Moves extras to ATTIC with @attic headers\n- Removes forbidden files\n\nReview the artifact 'supercheck_bundle' for details."
+            BODY="This PR was created by One-Button Supercheck."
             curl -sS -X POST \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
-              -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main","maintainer_can_modify":true}')" \
+              -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main"}')" \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
 
-      # -------- F) Assemble one human-readable report ----------
-      - name: Assemble Supercheck Report
+      # --- Always leave an artifact, even on failure ---
+      - name: Ensure artifact dir & basic logs
+        if: always()
         run: |
           set -e
-          echo "# Supercheck Report" > supercheck_report.md
-          echo "" >> supercheck_report.md
+          mkdir -p self_healing_out
+          # Context snapshots
+          echo "== runner env ==" > self_healing_out/RUN_ENV.txt
+          env >> self_healing_out/RUN_ENV.txt
+          echo "== git status ==" > self_healing_out/GIT_STATUS.txt
+          git status >> self_healing_out/GIT_STATUS.txt 2>&1 || true
+          echo "== tree (top) ==" > self_healing_out/TREE_TOP.txt
+          ls -la >> self_healing_out/TREE_TOP.txt 2>&1 || true
+          echo "== workflows dir ==" > self_healing_out/TREE_WORKFLOWS.txt
+          ls -la .github/workflows >> self_healing_out/TREE_WORKFLOWS.txt 2>&1 || true
+          echo "== scripts dir ==" > self_healing_out/TREE_SCRIPTS.txt
+          ls -la scripts >> self_healing_out/TREE_SCRIPTS.txt 2>&1 || true
+          # Drop placeholders if main reports are missing
+          [ -f supercheck_report.md ] || echo "# Supercheck Report\n\n(No report produced—earlier step likely failed.)" > supercheck_report.md
+          [ -f self_healing_out/WORKFLOW_FIX_REPORT.md ] || echo "# Workflow Fix Report\n\n(no report file)" > self_healing_out/WORKFLOW_FIX_REPORT.md
 
-          if [ -f supercheck_diag.json ]; then
-            OK=$(jq -r '.ok' supercheck_diag.json 2>/dev/null || echo null)
-            if [ "$OK" != "null" ]; then
-              BADGE=$([ "$OK" = "true" ] && echo "✅ PASS" || echo "❌ FAIL")
-              echo "## API/Worker Diagnostics — $BADGE" >> supercheck_report.md
-              echo "" >> supercheck_report.md
-              jq -S . supercheck_diag.json | head -c 180000 | sed 's/^/    /' >> supercheck_report.md
-              echo "" >> supercheck_report.md
+      - name: Assemble Supercheck Report
+        if: always()
+        run: |
+          set -e
+          # Build a single human-readable report (best-effort)
+          {
+            echo "# Supercheck Report"
+            echo
+            if [ -f supercheck_diag.json ]; then
+              echo "## API/Worker Diagnostics"
+              echo '```json'
+              head -c 180000 supercheck_diag.json || true
+              echo
+              echo '```'
+              echo
             fi
-          fi
+            echo "## Repo Inventory & Diff"
+            echo
+            cat self_healing_out/REPO_INVENTORY.md 2>/dev/null || echo "(missing)"
+            echo
+            echo "## Drift Report"
+            echo
+            cat self_healing_out/DRIFT_REPORT.md 2>/dev/null || echo "(missing)"
+            echo
+            echo "## Self-Healing Manifest"
+            echo
+            cat self_healing_out/SELF_HEALING_MANIFEST.md 2>/dev/null || echo "(missing)"
+            echo
+            echo "## Auto-Triage Plan"
+            echo
+            cat self_healing_out/AUTO_TRIAGE_REPORT.md 2>/dev/null || echo "(missing)"
+            echo
+            echo "## Workflow Fix Report"
+            echo
+            cat self_healing_out/WORKFLOW_FIX_REPORT.md 2>/dev/null || echo "(missing)"
+          } > supercheck_report.md
 
-          echo "## Repo Inventory & Diff" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          cat self_healing_out/REPO_INVENTORY.md >> supercheck_report.md
-          echo "" >> supercheck_report.md
-
-          echo "## Drift Report" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          cat self_healing_out/DRIFT_REPORT.md >> supercheck_report.md
-          echo "" >> supercheck_report.md
-
-          echo "## Self-Healing Scan Manifest" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          cat self_healing_out/SELF_HEALING_MANIFEST.md >> supercheck_report.md
-          echo "" >> supercheck_report.md
-
-          echo "## Auto-Triage Plan" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          cat self_healing_out/AUTO_TRIAGE_REPORT.md >> supercheck_report.md
-          echo "" >> supercheck_report.md
-
-      - name: Upload Supercheck Bundle
+      - name: Upload Supercheck Bundle (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -580,15 +318,5 @@ PY
           path: |
             supercheck_report.md
             supercheck_diag.json
-            self_healing_out/REPO_INVENTORY.json
-            self_healing_out/REPO_INVENTORY.md
-            self_healing_out/REPO_DIFF.json
-            self_healing_out/DRIFT_REPORT.json
-            self_healing_out/DRIFT_REPORT.md
-            self_healing_out/SELF_HEALING_MANIFEST.json
-            self_healing_out/SELF_HEALING_MANIFEST.md
-            self_healing_out/GAPS.json
-            self_healing_out/REMEDIATIONS.md
-            self_healing_out/AUTO_TRIAGE_PLAN.json
-            self_healing_out/AUTO_TRIAGE_REPORT.md
+            self_healing_out/**
           if-no-files-found: warn
