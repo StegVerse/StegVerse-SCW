@@ -37,7 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      
+      - name: Validate & Auto-Fix Workflows
+        run: |
+          set -e
+          python3 scripts/validate_and_fix.py --apply || true
+          
       - name: Ensure tools
         run: |
           set -e
