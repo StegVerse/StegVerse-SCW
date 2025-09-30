@@ -1,13 +1,46 @@
 name: CodeQL
+
 on:
-  push: { branches: [ "main" ] }
-  pull_request: {}
-permissions: read-all
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+# IMPORTANT: let the token upload SARIF
+permissions:
+  contents: read
+
 jobs:
   analyze:
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+
+    # Job-scoped perms for SARIF upload
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python', 'actions' ]  # scan Python + GitHub Actions
+
     steps:
       - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
-        with: { languages: python }
-      - uses: github/codeql-action/analyze@v3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      # Try a build (harmless if there’s nothing to build)
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+        continue-on-error: true
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
