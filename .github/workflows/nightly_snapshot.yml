@@ -1,0 +1,24 @@
+name: Nightly Snapshot
+on:
+  schedule: [{ cron: "17 4 * * *" }]
+  workflow_dispatch: {}
+permissions: read-all
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make SBOM (python only demo)
+        run: |
+          pipx install cyclonedx-bom || python -m pip install cyclonedx-bom
+          cyclonedx-bom -o sbom.json -i api/requirements.txt || true
+      - name: Zip repo tree
+        run: |
+          git ls-files > filelist.txt
+          zip -r repo_snapshot.zip $(cat filelist.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly_snapshot
+          path: |
+            repo_snapshot.zip
+            sbom.json
