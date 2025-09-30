@@ -2,27 +2,84 @@ name: Rebuild Kit (Zero-Secret, Self-Contained)
 
 on:
   push:
-    paths:
-      - ".github/trigger/rebuild/**"
+    paths: [".github/trigger/rebuild/**"]
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write   # to commit ledger
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: rebuild-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rebuild:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Ensure tools
         run: |
           set -e
           sudo apt-get update -y
           sudo apt-get install -y zip jq || true
-          command -v zip || echo "zip not found; will fallback to tar.gz"
-          command -v jq || echo "jq not found; manifest will be minimal"
+
+      - name: Seed usage logger
+        run: |
+          set -e
+          mkdir -p scripts
+          if [ ! -f scripts/log_trigger_event.sh ]; then
+            cat > scripts/log_trigger_event.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+WF_NAME="${1:-unknown_workflow}"
+TRIG_DIR="${2:-.github/trigger}"
+EXTRA_TAG="${3:-}"
+ROOT="$(pwd)"
+OUT_DIR="${ROOT}/self_healing_out"
+LEDGER_DIR="${ROOT}/.github/trigger/LOGS"
+mkdir -p "${OUT_DIR}" "${LEDGER_DIR}"
+SHA="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
+ACTOR="${GITHUB_ACTOR:-unknown}"
+TS_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+BEFORE="${GITHUB_EVENT_BEFORE:-}"
+if [ -z "${BEFORE}" ] && git rev-parse HEAD~1 >/dev/null 2>&1; then BEFORE="$(git rev-parse HEAD~1)"; fi
+CHANGES="$(git diff --name-status "${BEFORE}" HEAD -- "${TRIG_DIR}" 2>/dev/null || true)"
+LINE="$(echo "${CHANGES}" | head -n1 || true)"
+STATUS="$(echo "${LINE}" | awk '{print $1}' || true)"
+PATH_CHANGED="$(echo "${LINE}" | awk '{print $2}' || true)"
+PURPOSE="unknown"
+case "${STATUS}" in
+  A) PURPOSE="breadcrumb_new" ;;
+  M) PURPOSE="test_edit" ;;
+  D) PURPOSE="cleanup" ;;
+  *) PURPOSE="unknown" ;;
+esac
+if [[ "${PATH_CHANGED}" =~ run-[0-9]+\.txt$ ]]; then PURPOSE="test_edit"; fi
+if [[ "${PATH_CHANGED}" =~ run-20[0-9]{6} ]]; then PURPOSE="breadcrumb_new"; fi
+if [ -n "${PATH_CHANGED}" ] && [ -f "${PATH_CHANGED}" ]; then
+  if grep -qiE 'breadcrumb|keep|save' "${PATH_CHANGED}" 2>/dev/null; then PURPOSE="breadcrumb_new"; fi
+  if grep -qiE 'test|debug|again' "${PATH_CHANGED}" 2>/dev/null; then PURPOSE="test_edit"; fi
+fi
+JSON_LINE=$(cat <<EOF
+{"ts":"${TS_UTC}","workflow":"${WF_NAME}","branch":"${BRANCH}","sha":"${SHA}","actor":"${ACTOR}","trigger_dir":"${TRIG_DIR}","status":"${STATUS}","path":"${PATH_CHANGED}","purpose":"${PURPOSE}","tag":"${EXTRA_TAG}"}
+EOF
+)
+echo "${JSON_LINE}" >> "${OUT_DIR}/TRIGGER_EVENTS.jsonl"
+LEDGER_FILE="${LEDGER_DIR}/ledger-$(date -u +%Y%m).jsonl"
+echo "${JSON_LINE}" >> "${LEDGER_FILE}"
+echo "${JSON_LINE}"
+SH
+            chmod +x scripts/log_trigger_event.sh
+          fi
+
+      - name: Log trigger usage
+        run: scripts/log_trigger_event.sh "rebuild_kit" ".github/trigger/rebuild" ""
 
       - name: Seed bundle script if missing
         run: |
@@ -32,53 +89,20 @@ jobs:
             cat > scripts/make_rebuild_bundle.sh <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-
 ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 OUT_DIR="$ROOT/out"
 WORK_DIR="$ROOT/bundle"
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
-
-rm -rf "$OUT_DIR" "$WORK_DIR"
-mkdir -p "$OUT_DIR" "$WORK_DIR"
-
+rm -rf "$OUT_DIR" "$WORK_DIR"; mkdir -p "$OUT_DIR" "$WORK_DIR"
 copy_if() { [ -e "$1" ] && (mkdir -p "$WORK_DIR/$(dirname "$1")"; cp -R "$1" "$WORK_DIR/$1"); }
-
-# Include key areas if they exist
-copy_if ".github/workflows"
-copy_if "scripts"
-copy_if "self_healing_out"
-copy_if "infra"
-copy_if "api"
-copy_if "public"
-copy_if "docs"
-copy_if "README.md"
-
-# If nothing got copied, create a placeholder so we still produce an artifact
-if [ -z "$(ls -A "$WORK_DIR" 2>/dev/null)" ]; then
-  echo "# Rebuild Kit placeholder" > "$WORK_DIR/README_REBUILD_KIT.md"
-fi
-
-# Create a small manifest
+for p in ".github/workflows" "scripts" "self_healing_out" "infra" "api" "public" "docs" "README.md"; do copy_if "$p"; done
+[ -z "$(ls -A "$WORK_DIR" 2>/dev/null)" ] && echo "# Rebuild Kit placeholder" > "$WORK_DIR/README_REBUILD_KIT.md"
 mkdir -p "$WORK_DIR/_manifest"
 cat > "$WORK_DIR/_manifest/MANIFEST.json" <<JSON
-{
-  "repo": "${GITHUB_REPOSITORY:-unknown}",
-  "sha": "${SHA}",
-  "branch": "${BRANCH}",
-  "generated_at": "${TS}",
-  "counts": {
-    "files_in_bundle": $(find "$WORK_DIR" -type f | wc -l | tr -d ' ')
-  },
-  "notes": [
-    "This archive is produced by scripts/make_rebuild_bundle.sh",
-    "It is safe to unpack on a new machine to reconstruct workflows/scripts/docs."
-  ]
-}
+{"repo":"${GITHUB_REPOSITORY:-unknown}","sha":"${SHA}","branch":"${BRANCH}","generated_at":"${TS}","counts":{"files_in_bundle":$(find "$WORK_DIR" -type f | wc -l | tr -d ' ')}, "notes":["Produced by scripts/make_rebuild_bundle.sh"]}
 JSON
-
-# Prefer zip; fallback to tar.gz
 BASENAME="rebuild_kit_${SHA}_${TS//[:]/}"
 if command -v zip >/dev/null 2>&1; then
   (cd "$WORK_DIR" && zip -r "../out/${BASENAME}.zip" . >/dev/null)
@@ -87,10 +111,7 @@ else
   tar -C "$WORK_DIR" -czf "$OUT_DIR/${BASENAME}.tgz" .
   echo "out/${BASENAME}.tgz" > "$OUT_DIR/.bundle_path"
 fi
-
-# convenience symlink
 ln -sf "$(cat "$OUT_DIR/.bundle_path")" "$OUT_DIR/latest"
-
 echo "Bundle created: $(cat "$OUT_DIR/.bundle_path")"
 ls -lh "$OUT_DIR"
 SH
@@ -99,25 +120,24 @@ SH
       - name: Normalize line endings & make executable
         run: |
           set -e
-          # dos2unix may not exist; use sed fallback
-          if command -v dos2unix >/dev/null 2>&1; then
-            dos2unix scripts/make_rebuild_bundle.sh || true
-          else
-            sed -i 's/\r$//' scripts/make_rebuild_bundle.sh || true
-          fi
+          sed -i 's/\r$//' scripts/make_rebuild_bundle.sh || true
           chmod +x scripts/make_rebuild_bundle.sh
 
       - name: Build bundle
         run: |
           set -euo pipefail
           bash -x scripts/make_rebuild_bundle.sh
-          echo "BUNDLE_PATH=$(cat out/.bundle_path)" >> $GITHUB_ENV
+          if [ -f out/.bundle_path ]; then
+            echo "BUNDLE_PATH=$(cat out/.bundle_path)" >> $GITHUB_ENV
+          else
+            echo "BUNDLE_PATH=" >> $GITHUB_ENV
+          fi
 
       - name: Ensure there is *some* file to upload
         run: |
           set -e
-          if [ ! -f "${BUNDLE_PATH}" ]; then
-            echo "No bundle found at ${BUNDLE_PATH}. Creating placeholder."
+          if [ -z "${BUNDLE_PATH:-}" ] || [ ! -f "${BUNDLE_PATH}" ]; then
+            mkdir -p out
             echo "empty" > out/EMPTY.txt
             echo "BUNDLE_PATH=out/EMPTY.txt" >> $GITHUB_ENV
           fi
@@ -128,3 +148,15 @@ SH
           name: rebuild_kit_bundle
           path: ${{ env.BUNDLE_PATH }}
           if-no-files-found: warn
+          retention-days: 14
+
+      - name: Commit trigger ledger (optional)
+        run: |
+          set -e
+          git config user.name  "trigger-ledger-bot"
+          git config user.email "bot@stegverse.local"
+          if git status --porcelain | grep -E '\.github/trigger/LOGS/ledger-' >/dev/null 2>&1; then
+            git add .github/trigger/LOGS/ledger-*.jsonl
+            git commit -m "chore(trigger): append rebuild ledger" || true
+            git push || true
+          fi
