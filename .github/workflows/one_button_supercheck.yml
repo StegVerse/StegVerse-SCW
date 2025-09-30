@@ -146,12 +146,14 @@ jobs:
         id: diag
         if: ${{ steps.flags.outputs.preflight_only != 'true' && steps.flags.outputs.skip_diag != 'true' }}
         env:
-          API_BASE:   ${{ steps.flags.outputs.api_base }}
-          QUEUE_KEY:  ${{ steps.flags.outputs.queue_key }}
-          TIMEOUT_SEC:${{ steps.flags.outputs.timeout_sec }}
-          POLL_SEC:   ${{ steps.flags.outputs.poll_sec }}
+          API_BASE: ${{ steps.flags.outputs.api_base }}
+          QUEUE_KEY: ${{ steps.flags.outputs.queue_key }}
+          TIMEOUT_SEC: ${{ steps.flags.outputs.timeout_sec }}
+          POLL_SEC: ${{ steps.flags.outputs.poll_sec }}
         run: |
-          echo "Running diagnostics against $API_BASE"
+          set -euo pipefail
+          API="${API_BASE%/}"
+          echo "Running diagnostics against $API"
           # (diagnostic code remains same as before)
 
       # ---- Repo audit & drift ----
