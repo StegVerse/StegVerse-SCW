@@ -1,0 +1,88 @@
+name: Self-Repair Autopatch
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - ".github/trigger/self-repair/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autopatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl python3-pip
+          pip3 install --user ruff==0.6.5 black==24.8.0 autoflake==2.3.1 yamllint
+          curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
+
+      - name: Normalize YAML spacing (tabs → spaces)
+        run: |
+          set -e
+          python3 - <<'PY'
+import re, sys
+from pathlib import Path
+wf = Path(".github/workflows")
+changed = 0
+for p in list(wf.glob("*.yml")) + list(wf.glob("*.yaml")):
+    s = p.read_text(encoding="utf-8", errors="ignore")
+    t = s.replace("\t", "  ")
+    t = re.sub(r":\${{", ": ${{", t)  # fix :${{ → : ${{ (common paste issue)
+    if t != s:
+        p.write_text(t, encoding="utf-8"); changed += 1
+print(f"normalized={changed}")
+PY
+
+      - name: Lint workflows (actionlint + yamllint)
+        continue-on-error: true
+        run: |
+          ./actionlint -color -shellcheck= || true
+          ~/.local/bin/yamllint -f parsable .github/workflows || true
+
+      - name: Python autofix (ruff/black/autoflake)
+        run: |
+          set -e
+          ~/.local/bin/autoflake -r --in-place --remove-all-unused-imports --remove-unused-variables api scripts || true
+          ~/.local/bin/ruff check --fix api scripts || true
+          ~/.local/bin/black api scripts || true
+
+      - name: Commit changes (branch)
+        id: commit
+        run: |
+          set -e
+          git config user.name "autopatch-bot"
+          git config user.email "bot@stegverse.local"
+          CHANGES=$(git status --porcelain | wc -l | tr -d ' ')
+          if [ "$CHANGES" -eq 0 ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          BR="autopatch/${GITHUB_RUN_ID}"
+          git checkout -b "$BR"
+          git add -A
+          git commit -m "autopatch: normalize YAML & python formatting"
+          git push origin "$BR"
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "branch=$BR" >> $GITHUB_OUTPUT
+
+      - name: Open PR (if changes)
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TITLE="Autopatch: YAML & Python normalization"
+          BODY="This PR was created by Self-Repair Autopatch.\n- Tabs→spaces in YAML\n- actionlint/yamllint reports attached in logs\n- ruff/black/autoflake on api/ & scripts/\n\nReview and merge."
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "${{ steps.commit.outputs.branch }}" '{"title":$t,"body":$b,"head":$head,"base":"main"}')" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
