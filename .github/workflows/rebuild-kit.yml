@@ -14,17 +14,38 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Ensure script is executable
-        run: chmod +x scripts/make_rebuild_bundle.sh 2>/dev/null || true
-
-      - name: Build Rebuild Kit
+      - name: Create bundle (zip or tgz)
         run: |
-          bash scripts/make_rebuild_bundle.sh \
-            "$(git rev-parse HEAD)" \
-            "$(git rev-parse HEAD~1 || echo HEAD)" \
-            "rebuild_kit" \
-            "$(basename "$GITHUB_REPOSITORY")" > zipname.txt
-          cat zipname.txt
+          set -euo pipefail
+          rm -rf out bundle
+          mkdir -p out bundle
+
+          # Collect stuff you want in the bundle:
+          [ -d self_healing_out ] && cp -R self_healing_out bundle/self_healing_out || true
+          [ -d .github/workflows ] && cp -R .github/workflows bundle/workflows || true
+          [ -d scripts ] && cp -R scripts bundle/scripts || true
+          [ -f README.md ] && cp README.md bundle/ || true
+
+          # Prefer zip; install if missing; else fallback to tar.gz
+          if ! command -v zip >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y zip || true
+          fi
+
+          if command -v zip >/dev/null 2>&1; then
+            (cd bundle && zip -r ../out/rebuild_kit_bundle.zip .)
+            echo "BUNDLE_PATH=out/rebuild_kit_bundle.zip" >> $GITHUB_ENV
+          else
+            tar -C bundle -czf out/rebuild_kit_bundle.tgz .
+            echo "BUNDLE_PATH=out/rebuild_kit_bundle.tgz" >> $GITHUB_ENV
+          fi
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuild_kit_bundle
+          path: ${{ env.BUNDLE_PATH }}
+          if-no-files-found: error
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
