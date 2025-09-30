@@ -1,0 +1,63 @@
+name: Smoke — API & Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "API base URL (https://your-api.onrender.com)"
+        required: true
+      timeout_sec:
+        description: "Max seconds to wait for processed to increase"
+        default: "60"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure curl/jq
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y curl jq
+
+      - name: Health checks
+        env: { API: ${{ github.event.inputs.api_base }} }
+        run: |
+          set -e
+          API="${API%/}"
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$API/healthz")
+          [ "$code" = "200" ] || { echo "healthz=$code"; exit 1; }
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$API/metrics")
+          [ "$code" = "200" ] || { echo "metrics=$code"; exit 1; }
+
+      - name: Create project + run
+        id: run
+        env: { API: ${{ github.event.inputs.api_base }} }
+        run: |
+          set -e
+          API="${API%/}"
+          pj=$(curl -s -X POST "$API/v1/projects" -H 'content-type: application/json' -d '{"name":"smoke"}')
+          pid=$(echo "$pj" | jq -r '.project_id')
+          rn=$(curl -s -X POST "$API/v1/runs" -H 'content-type: application/json' -H 'Idempotency-Key: smoke-1' \
+                  -d '{"project_id":"'"$pid"'","language":"python","code":"print(1)"}')
+          rid=$(echo "$rn" | jq -r '.run_id')
+          echo "rid=$rid" >> $GITHUB_OUTPUT
+
+      - name: Wait for processed increase
+        env:
+          API: ${{ github.event.inputs.api_base }}
+          TIMEOUT: ${{ github.event.inputs.timeout_sec }}
+        run: |
+          set -e
+          API="${API%/}"
+          start=$(curl -s "$API/metrics" | awk -F' ' '/^scw_runs_processed_total/{print $2; exit}'); start=${start:-0}
+          deadline=$(( $(date +%s) + ${TIMEOUT} ))
+          ok=0
+          while [ $(date +%s) -lt $deadline ]; do
+            sleep 2
+            cur=$(curl -s "$API/metrics" | awk -F' ' '/^scw_runs_processed_total/{print $2; exit}'); cur=${cur:-0}
+            if [ "$cur" -gt "$start" ]; then ok=1; break; fi
+          done
+          [ "$ok" -eq 1 ] || { echo "processed did not increase"; exit 1; }
