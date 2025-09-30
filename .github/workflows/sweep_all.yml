@@ -1,0 +1,38 @@
+name: Sweep-All (Universal Workflow Repair)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/trigger/sweep/**"
+
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq || true
+          python3 -V
+
+      - name: Run Universal Sweep
+        run: |
+          mkdir -p self_healing_out
+          python3 scripts/sweep_all_workflows.py --apply || true
+
+      - name: Upload Sweep Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep_report
+          path: |
+            self_healing_out/SWEEP_REPORT.json
+            self_healing_out/SWEEP_REPORT.md
+          if-no-files-found: warn
