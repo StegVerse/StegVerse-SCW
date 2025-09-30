@@ -87,6 +87,38 @@ PY
             git push origin HEAD:main || true
           fi
 
+      - name: Record outcome (last-two)
+        if: always()
+        run: |
+          set -e
+          mkdir -p self_healing_out
+          echo "STATUS=${{ job.status }}" >> $GITHUB_ENV
+          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          SHA="$(git rev-parse --short HEAD || echo unknown)"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          LEDGER="self_healing_out/TRIGGER_EVENTS_${{ github.workflow }}.jsonl"
+          echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
+
+          # Rebuild "last two" JSON + MD
+          LAST_JSON="self_healing_out/LAST_TWO_<NAME>.json"
+          LAST_MD="self_healing_out/LAST_TWO_<NAME>.md"
+          tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
+
+          {
+            echo "### Last two <NAME> outcomes"
+            jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
+          } > "$LAST_MD"
+
+      - name: Upload last-two summary (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: last_two_<workflow_preflight>
+          path: |
+            self_healing_out/LAST_TWO_<workflow_preflight>.json
+            self_healing_out/LAST_TWO_<workflow_preflight>.md
+          if-no-files-found: warn
+
       - name: Ensure report dir even on failure
         if: always()
         run: |
