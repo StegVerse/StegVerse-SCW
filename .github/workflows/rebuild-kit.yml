@@ -35,6 +35,33 @@ jobs:
           mkdir -p self_healing_out
           python3 scripts/sweep_all_workflows.py --apply || true
 
+      # --- Breadcrumb logger ---
+      - name: Log trigger metadata
+        run: |
+          mkdir -p self_healing_out
+          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          SHA="$(git rev-parse --short HEAD)"
+          echo "timestamp=$TS" >> $GITHUB_ENV
+          echo "commit=$SHA" >> $GITHUB_ENV
+          # Capture trigger files and contents
+          LOG_JSON="self_healing_out/REBUILD_TRIGGER_LOG.json"
+          LOG_MD="self_healing_out/REBUILD_TRIGGER_LOG.md"
+          jq -n --arg ts "$TS" --arg sha "$SHA" --arg repo "$GITHUB_REPOSITORY" \
+            --argjson triggers "$(jq -R -s -c 'split("\n")|map(select(length>0))' <<< "$(cat .github/trigger/rebuild/* 2>/dev/null || true)")" \
+            '{repo:$repo, sha:$sha, timestamp:$ts, triggers:$triggers}' > "$LOG_JSON"
+          echo "# Rebuild Trigger Log" > "$LOG_MD"
+          echo "- Repo: $GITHUB_REPOSITORY" >> "$LOG_MD"
+          echo "- Commit: $SHA" >> "$LOG_MD"
+          echo "- Timestamp: $TS" >> "$LOG_MD"
+          echo "- Trigger files:" >> "$LOG_MD"
+          for f in .github/trigger/rebuild/*; do
+            [ -f "$f" ] || continue
+            echo "  - $f" >> "$LOG_MD"
+            echo "    \`\`\`" >> "$LOG_MD"
+            cat "$f" >> "$LOG_MD"
+            echo "    \`\`\`" >> "$LOG_MD"
+          done
+
       - name: Seed bundle script if missing
         run: |
           set -euo pipefail
@@ -66,6 +93,10 @@ copy_if "public"
 copy_if "docs"
 copy_if "README.md"
 
+# Always include trigger logs
+copy_if "self_healing_out/REBUILD_TRIGGER_LOG.json"
+copy_if "self_healing_out/REBUILD_TRIGGER_LOG.md"
+
 # If nothing got copied, create a placeholder
 if [ -z "$(ls -A "$WORK_DIR" 2>/dev/null)" ]; then
   echo "# Rebuild Kit placeholder" > "$WORK_DIR/README_REBUILD_KIT.md"
@@ -84,7 +115,8 @@ cat > "$WORK_DIR/_manifest/MANIFEST.json" <<JSON
   },
   "notes": [
     "This archive was produced after Fix-It + Sweep-All auto-healing.",
-    "Safe to unpack on a new machine to reconstruct workflows/scripts/docs."
+    "Safe to unpack on a new machine to reconstruct workflows/scripts/docs.",
+    "Includes breadcrumb trigger logs for traceability."
   ]
 }
 JSON
