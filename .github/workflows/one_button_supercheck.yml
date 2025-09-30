@@ -55,6 +55,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+    codeql:
+    name: CodeQL (Python + Actions)
+    runs-on: ubuntu-latest
+
+    # Job-scoped perms (lets the SARIF upload succeed)
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    # Don’t block Supercheck if CodeQL has issues
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          # Scan Python source + GitHub Actions workflows
+          languages: python, actions
+
+      # Safe even if there’s nothing to build
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+        continue-on-error: true
+
+      - name: Analyze & Upload to Code Scanning
+        id: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:matrix"
+        continue-on-error: true
+
+      # Fallback: keep a SARIF/summary as artifact if upload is blocked
+      - name: Collect SARIF (fallback)
+        if: always()
+        run: |
+          mkdir -p self_healing_out/codeql
+          # Default location CodeQL uses inside runner workspace:
+          # We’ll grab anything it produced.
+          find "$GITHUB_WORKSPACE" -name "*.sarif" -maxdepth 3 -print0 \
+            | xargs -0 -I{} cp -v "{}" self_healing_out/codeql/ || true
+          # Tiny summary so we always have breadcrumbs
+          echo "# CodeQL Fallback" > self_healing_out/codeql/README.md
+          echo "- run_id: ${GITHUB_RUN_ID}" >> self_healing_out/codeql/README.md
+          echo "- repo: ${GITHUB_REPOSITORY}" >> self_healing_out/codeql/README.md
+          echo "- time: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> self_healing_out/codeql/README.md
+
+      - name: Upload CodeQL artifact (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql_fallback_${{ github.run_id }}
+          path: |
+            self_healing_out/codeql/**
+          if-no-files-found: warn
+          
   supercheck:
     runs-on: ubuntu-latest
 
