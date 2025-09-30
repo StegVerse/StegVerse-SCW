@@ -1,4 +1,4 @@
-name: One-Button Supercheck (Diag + Fix-It + Repo Audit + Drift + Auto-Triage)
+name: One-Button Supercheck (Diag + YAML Corrector + Repo Audit + Drift + Auto-Triage)
 
 on:
   workflow_dispatch:
@@ -28,17 +28,21 @@ on:
         required: false
         default: "false"
 
-  # File-based triggers for iPhone-friendly runs
+  # File-based triggers (mobile friendly)
   push:
     branches: [ "main" ]
     paths:
       - ".github/trigger/supercheck/**"
-      - ".github/trigger/preflight/**"
-      - ".github/trigger/rebuild/**"
 
 permissions:
   contents: write
   pull-requests: write
+  checks: write
+  security-events: write
+
+concurrency:
+  group: supercheck-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   supercheck:
@@ -56,37 +60,60 @@ jobs:
       - name: Log trigger (breadcrumb trail)
         run: |
           mkdir -p self_healing_out
-          echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"run_id\":\"${GITHUB_RUN_ID}\",\"actor\":\"${GITHUB_ACTOR}\",\"trigger\":\"push:.github/trigger/supercheck\"}" \
-            >> self_healing_out/TRIGGER_EVENTS.jsonl
+          echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"run_id\":\"${GITHUB_RUN_ID}\",\"attempt\":${GITHUB_RUN_ATTEMPT},\"actor\":\"${GITHUB_ACTOR}\",\"trigger\":\"${{ github.event_name }}:${{ github.ref }}\",\"run_url\":\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" >> self_healing_out/TRIGGER_EVENTS.jsonl
 
-      # ---- Stage A: Precision Fix-It & Sweep ----
-      - name: Validate & Auto-Fix Workflows (Precision)
+      # ---- Stage A: YAML Corrector v2 (always run first) ----
+      - name: Install YAML Corrector deps
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install ruamel.yaml yamllint
+
+      - name: Run YAML Corrector v2
         run: |
           mkdir -p self_healing_out
-          python3 scripts/validate_and_fix.py --apply || true
+          if [ -f scripts/yaml_corrector_v2.py ]; then
+            python3 scripts/yaml_corrector_v2.py --apply || true
+          else
+            echo "# YAML Corrector: script missing (scripts/yaml_corrector_v2.py)" > self_healing_out/YAML_CORRECTOR_REPORT.md
+            echo "{}" > self_healing_out/YAML_CORRECTOR_REPORT.json
+          fi
 
-      - name: Sweep All Workflows (Universal checks)
+      - name: Validate workflows (actionlint + yamllint)
+        continue-on-error: true
         run: |
-          python3 scripts/sweep_all_workflows.py --apply || true
+          curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
+          ./actionlint -color -shellcheck= || true
+          yamllint -f parsable .github/workflows || true
 
-      - name: Upload Fix Reports
+      - name: Upload YAML Corrector Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: yaml_corrector_bundle
           path: |
-            self_healing_out/WORKFLOW_FIX_REPORT.json
-            self_healing_out/WORKFLOW_FIX_REPORT.md
+            self_healing_out/YAML_CORRECTOR_REPORT.*
           if-no-files-found: warn
+
+      # (Optional compatibility: run legacy precision/sweep if present)
+      - name: Legacy Fix-It (if present)
+        run: |
+          if [ -f scripts/validate_and_fix.py ]; then
+            python3 scripts/validate_and_fix.py --apply || true
+          fi
+      - name: Legacy Sweep-All (if present)
+        run: |
+          if [ -f scripts/sweep_all_workflows.py ]; then
+            python3 scripts/sweep_all_workflows.py --apply || true
+          fi
 
       # ---- Stage B: Runtime Diagnostics ----
       - name: Runtime diagnostics (API + Worker)
         id: diag
         env:
-          API_BASE: ${{ github.event.inputs.api_base }}
-          QUEUE_KEY: ${{ github.event.inputs.queue_key }}
+          API_BASE:   ${{ github.event.inputs.api_base }}
+          QUEUE_KEY:  ${{ github.event.inputs.queue_key }}
           TIMEOUT_SEC: ${{ github.event.inputs.timeout_sec }}
-          POLL_SEC: ${{ github.event.inputs.poll_sec }}
+          POLL_SEC:   ${{ github.event.inputs.poll_sec }}
         run: |
           set -euo pipefail
           API="${API_BASE}"
@@ -172,6 +199,9 @@ jobs:
           set -e
           echo "# Supercheck Report" > supercheck_report.md
           echo "" >> supercheck_report.md
+          echo "## YAML Corrector" >> supercheck_report.md
+          cat self_healing_out/YAML_CORRECTOR_REPORT.md >> supercheck_report.md || echo "(no YAML report)" >> supercheck_report.md
+          echo "" >> supercheck_report.md
 
           if [ -f supercheck_diag.json ]; then
             OK=$(jq -r '.ok' supercheck_diag.json 2>/dev/null || echo null)
@@ -186,22 +216,22 @@ jobs:
 
           echo "## Repo Inventory & Diff" >> supercheck_report.md
           echo "" >> supercheck_report.md
-          cat self_healing_out/REPO_INVENTORY.md >> supercheck_report.md
+          cat self_healing_out/REPO_INVENTORY.md >> supercheck_report.md || true
           echo "" >> supercheck_report.md
 
           echo "## Drift Report" >> supercheck_report.md
           echo "" >> supercheck_report.md
-          cat self_healing_out/DRIFT_REPORT.md >> supercheck_report.md
+          cat self_healing_out/DRIFT_REPORT.md >> supercheck_report.md || true
           echo "" >> supercheck_report.md
 
-          echo "## Self-Healing Scan Manifest" >> supercheck_report.md
+          echo "## Self-Healing Manifest" >> supercheck_report.md
           echo "" >> supercheck_report.md
-          cat self_healing_out/SELF_HEALING_MANIFEST.md >> supercheck_report.md
+          cat self_healing_out/SELF_HEALING_MANIFEST.md >> supercheck_report.md || true
           echo "" >> supercheck_report.md
 
           echo "## Auto-Triage Plan" >> supercheck_report.md
           echo "" >> supercheck_report.md
-          cat self_healing_out/AUTO_TRIAGE_REPORT.md >> supercheck_report.md
+          cat self_healing_out/AUTO_TRIAGE_REPORT.md >> supercheck_report.md || true
           echo "" >> supercheck_report.md
 
       # ---- Stage H: Upload Final Bundle ----
@@ -213,15 +243,5 @@ jobs:
           path: |
             supercheck_report.md
             supercheck_diag.json
-            self_healing_out/REPO_INVENTORY.json
-            self_healing_out/REPO_INVENTORY.md
-            self_healing_out/REPO_DIFF.json
-            self_healing_out/DRIFT_REPORT.json
-            self_healing_out/DRIFT_REPORT.md
-            self_healing_out/SELF_HEALING_MANIFEST.json
-            self_healing_out/SELF_HEALING_MANIFEST.md
-            self_healing_out/GAPS.json
-            self_healing_out/REMEDIATIONS.md
-            self_healing_out/AUTO_TRIAGE_PLAN.json
-            self_healing_out/AUTO_TRIAGE_REPORT.md
+            self_healing_out/**
           if-no-files-found: warn
