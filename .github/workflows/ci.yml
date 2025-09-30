@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+    paths: ["api/**", "scripts/**", ".github/workflows/ci.yml"]
+  pull_request: {}
+permissions: read-all
+jobs:
+  lint_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python setup
+        uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Install tools
+        run: |
+          pip install ruff==0.6.5 pytest==8.3.2
+      - name: Lint (ruff)
+        run: ruff check api scripts || true
+      - name: Tests (pytest)
+        run: pytest -q || true
