@@ -1,0 +1,143 @@
+name: Universal YAML Corrector
+
+on:
+  workflow_dispatch:
+    inputs:
+      root:
+        description: "Subtree to scan (default: repo root)"
+        required: false
+        default: "."
+      apply:
+        description: "Apply fixes and commit"
+        required: false
+        default: "true"
+      commit_message:
+        description: "Commit message used when apply=true"
+        required: false
+        default: "chore(yaml-corrector): normalize YAML and known repairs"
+  push:
+    paths:
+      - ".github/trigger/yaml-corrector/**"
+
+permissions:
+  contents: write
+
+jobs:
+  correct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed universal corrector
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out
+          cat > scripts/yaml_corrector.py <<'PY'
+#!/usr/bin/env python3
+import os, re, json, sys
+from pathlib import Path
+
+ROOT = Path(os.getenv("ROOT_DIR","."))  # can be "."
+APPLY = os.getenv("APPLY","false").lower()=="true"
+OUT  = Path("self_healing_out"); OUT.mkdir(parents=True, exist_ok=True)
+
+# Same rule set as Fix-It (keep in sync)
+rules = [
+    {
+        "name": "env-value spacing before ${{ ... }}",
+        "pattern": re.compile(r'^(\s*[-\w]+):\{\{\s', re.M),
+        "repl": r'\1: ${{ ',
+    },
+    {
+        "name": "CodeQL category literal",
+        "pattern": re.compile(r'(^\s*category:\s*")[/\\]?language:matrix(")', re.M),
+        "repl": r'\1/language:${{ matrix.language }}\2',
+    },
+]
+
+TOKENS = {"PY","SH","BASH","EOF"}
+def fix_heredoc_endings(txt):
+    lines = txt.splitlines(keepends=True)
+    changed = False
+    for i, line in enumerate(lines):
+        raw = line.rstrip("\n")
+        stripped = raw.strip()
+        if stripped in TOKENS and raw != stripped:
+            lines[i] = stripped + "\n"
+            changed = True
+    return "".join(lines), changed
+
+def normalize_line_endings(txt):
+    return (txt.replace("\r",""), True) if "\r" in txt else (txt, False)
+
+def tabs_to_spaces(txt):
+    return (txt.replace("\t","  "), True) if "\t" in txt else (txt, False)
+
+def apply_rules(txt):
+    changed=False; details=[]
+    for r in rules:
+        new = r["pattern"].sub(r["repl"], txt)
+        if new != txt:
+            txt=new; changed=True; details.append(r["name"])
+    new, ch = fix_heredoc_endings(txt); 
+    if ch: txt=new; changed=True; details.append("heredoc terminators flush-left")
+    new, ch = normalize_line_endings(txt); 
+    if ch: txt=new; changed=True; details.append("normalize CRLF to LF")
+    new, ch = tabs_to_spaces(txt); 
+    if ch: txt=new; changed=True; details.append("tabs -> spaces")
+    return txt, changed, details
+
+def main():
+    targets=[]
+    for p in ROOT.rglob("*"):
+        if not p.is_file(): continue
+        if p.suffix.lower() in (".yml",".yaml"):
+            targets.append(p)
+    results=[]
+    for p in sorted(targets):
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        fixed, changed, details = apply_rules(src)
+        if changed and APPLY:
+            p.write_text(fixed, encoding="utf-8")
+        results.append({"path": p.as_posix(), "changed": changed, "applied": APPLY and changed, "rules": details})
+    (OUT/"YAML_CORRECTOR.json").write_text(json.dumps({"root": str(ROOT), "results": results}, indent=2), encoding="utf-8")
+    # Grouped MD
+    changed = [r for r in results if r["changed"]]
+    md=["# Universal YAML Corrector", f"- root: `{ROOT}`", f"- files scanned: {len(results)}", f"- changed: {len(changed)}", ""]
+    for r in changed:
+        md.append(f"- `{r['path']}`  (applied={r['applied']})  rules={', '.join(r['rules'])}")
+    if not changed: md.append("- No changes.")
+    (OUT/"YAML_CORRECTOR.md").write_text("\n".join(md)+"\n", encoding="utf-8")
+
+if __name__ == "__main__":
+    main()
+PY
+
+      - name: Run corrector
+        env:
+          APPLY: ${{ github.event.inputs.apply }}
+          ROOT_DIR: ${{ github.event.inputs.root }}
+        run: |
+          set -e
+          python3 scripts/yaml_corrector.py
+
+      - name: Commit changes (if apply=true)
+        if: ${{ github.event.inputs.apply == 'true' }}
+        run: |
+          set -e
+          git config user.name  "yaml-corrector-bot"
+          git config user.email "bot@stegverse.local"
+          if git status --porcelain | grep -qE '(^ M|^\?\?|\sM\s)'; then
+            git add -A
+            git commit -m "${{ github.event.inputs.commit_message }}"
+            git push || true
+          else
+            echo "No YAML changes to commit."
+          fi
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaml_corrector_report
+          path: self_healing_out/**
+          if-no-files-found: warn
