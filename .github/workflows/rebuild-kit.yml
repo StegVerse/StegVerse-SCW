@@ -185,10 +185,10 @@ SH
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: last_two_<rebuild-kit>
+          name: last_two_<rebuild>
           path: |
-            self_healing_out/LAST_TWO_<rebuild-kit>.json
-            self_healing_out/LAST_TWO_<rebuild-kit>.md
+            self_healing_out/LAST_TWO_<rebuild>.json
+            self_healing_out/LAST_TWO_<rebuild>.md
           if-no-files-found: warn
 
       - name: Upload bundle artifact
