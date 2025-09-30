@@ -1,109 +1,77 @@
-#!/usr/bin/env python3
-import os, sys, time, json, traceback, threading
+# worker.py
+from __future__ import annotations
+import os, time, json, traceback
 import redis
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-QUEUE_KEY = os.getenv("RUNS_QUEUE_KEY", "queue:runs")  # use same in API & Actions
+RUNS_QUEUE = os.getenv("RUNS_QUEUE", "runs")
+DLQ_QUEUE = os.getenv("RUNS_DLQ", "runs:dead")
+MAX_RETRIES = int(os.getenv("RUNS_MAX_RETRIES", "3"))           # per message
+POLL_TIMEOUT = int(os.getenv("RUNS_POLL_TIMEOUT_SEC", "5"))     # BRPOP timeout
 
-# metric keys
-KEY_PROCESSED = os.getenv("RUNS_PROCESSED_KEY", "metrics:runs:processed")
-KEY_FAILED    = os.getenv("RUNS_FAILED_KEY",    "metrics:runs:failed")
-KEY_HEARTBEAT = os.getenv("WORKER_HEARTBEAT_KEY","worker:heartbeat")
+r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
-LEGACY_KEYS = ["runs"]  # any old queue keys to migrate
+def log_run(run_id: str, line: str) -> None:
+    r.lpush(f"run:{run_id}:logs", line)
+    r.hset(f"run:{run_id}", mapping={"updated_at": str(time.time())})
 
-def log(msg, **kw):
-    print(json.dumps({"ts": int(time.time()), "msg": msg, **kw}), flush=True)
+def set_status(run_id: str, status: str) -> None:
+    r.hset(f"run:{run_id}", mapping={"status": status, "updated_at": str(time.time())})
 
-def rclient():
-    return redis.from_url(REDIS_URL, decode_responses=True)
-
-def ensure_queue_is_list(r: redis.Redis):
-    """Guarantee QUEUE_KEY is a list; migrate/rename bad legacy keys safely."""
-    try:
-        t = r.type(QUEUE_KEY)
-        t = t.decode() if isinstance(t, (bytes, bytearray)) else t
-    except Exception as e:
-        log("redis_type_check_failed", error=str(e)); return
-    if t not in (None, "none", "list"):
-        backup = f"badtype:{QUEUE_KEY}:{int(time.time())}"
-        try:
-            r.rename(QUEUE_KEY, backup)
-            log("renamed_bad_queue_key", from_key=QUEUE_KEY, to_key=backup, original_type=t)
-        except redis.ResponseError:
-            pass
-    if not r.exists(QUEUE_KEY):
-        r.lpush(QUEUE_KEY, "__init__"); r.lpop(QUEUE_KEY); log("initialized_queue_key", key=QUEUE_KEY)
-    # migrate legacy list if new empty
-    if r.llen(QUEUE_KEY) == 0:
-        for k in LEGACY_KEYS:
-            t_legacy = r.type(k)
-            t_legacy = t_legacy.decode() if isinstance(t_legacy, (bytes, bytearray)) else t_legacy
-            if t_legacy == "list" and r.llen(k) > 0:
-                try:
-                    r.rename(k, QUEUE_KEY)
-                    log("migrated_legacy_queue", from_key=k, to_key=QUEUE_KEY)
-                    break
-                except redis.ResponseError:
-                    pass
-            elif t_legacy not in (None, "none"):
-                backup = f"badtype:{k}:{int(time.time())}"
-                try:
-                    r.rename(k, backup)
-                    log("renamed_bad_legacy_key", from_key=k, to_key=backup, original_type=t_legacy)
-                except redis.ResponseError:
-                    pass
-
-def heartbeat_loop():
-    r = rclient()
-    while True:
-        try:
-            r.set(KEY_HEARTBEAT, int(time.time()), ex=300)  # 5-min TTL
-        except Exception as e:
-            log("heartbeat_error", error=str(e))
-        time.sleep(30)
-
-def process_job(payload: str):
-    """Replace with your real job logic."""
-    log("processing", payload=payload)
-    # simulate work
-    time.sleep(1)
+def execute(payload: dict) -> str:
+    """
+    Your actual execution logic goes here.
+    Return a string result; raise Exception for retryable failures.
+    """
+    lang = payload.get("language", "python")
+    code = payload.get("code", "")
+    # Simple demo: echo back
+    time.sleep(0.5)
+    return f"[{lang}] OK len(code)={len(code)}"
 
 def main():
-    log("worker_start", queue=QUEUE_KEY, url=REDIS_URL)
-    r = rclient()
-    ensure_queue_is_list(r)
-
-    # start heartbeat thread
-    t = threading.Thread(target=heartbeat_loop, daemon=True)
-    t.start()
-
+    print(f"Worker started. Listening on queue '{RUNS_QUEUE}'...")
     while True:
+        item = r.brpop(RUNS_QUEUE, timeout=POLL_TIMEOUT)
+        if not item:
+            continue
+        _, raw = item
         try:
-            item = r.brpop(QUEUE_KEY, timeout=5)
-            if item is None:
-                continue
-            _, payload = item
-            try:
-                process_job(payload)
-                r.incr(KEY_PROCESSED)
-            except Exception as job_err:
-                r.incr(KEY_FAILED)
-                log("job_failed", error=str(job_err), tb=traceback.format_exc(), payload=payload)
-        except redis.ResponseError as e:
-            if "WRONGTYPE" in str(e).upper():
-                log("wrongtype_detected_repairing", error=str(e))
-                ensure_queue_is_list(r)
-                time.sleep(0.5)
-                continue
-            log("redis_response_error", error=str(e))
-            time.sleep(1)
+            payload = json.loads(raw)
+        except Exception:
+            # Bad JSON → cannot process; dead-letter it
+            r.lpush(DLQ_QUEUE, raw)
+            continue
+
+        run_id = payload.get("run_id") or "unknown"
+        attempt = int(payload.get("_attempt", 0))
+        set_status(run_id, "running")
+        log_run(run_id, f"Attempt {attempt+1}")
+
+        try:
+            result = execute(payload)
+            r.set(f"run:{run_id}:result", result)
+            set_status(run_id, "succeeded")
+            log_run(run_id, "DONE")
+            # (Optional) increment a Prometheus counter via a sidecar; here we just log
         except Exception as e:
-            log("unhandled_exception", error=str(e), tb=traceback.format_exc())
-            time.sleep(1)
+            attempt += 1
+            payload["_attempt"] = attempt
+            log_run(run_id, f"ERROR: {e}\n{traceback.format_exc()}")
+            if attempt < MAX_RETRIES:
+                # Exponential backoff (cap at 30s)
+                delay = min(2 ** attempt, 30)
+                time.sleep(delay)
+                r.lpush(RUNS_QUEUE, json.dumps(payload))
+                set_status(run_id, "queued")
+            else:
+                set_status(run_id, "failed")
+                r.lpush(DLQ_QUEUE, json.dumps(payload))
 
 if __name__ == "__main__":
     try:
-        main()
-    except KeyboardInterrupt:
-        log("worker_stop"); sys.exit(0)
+        r.ping()
+    except Exception as e:
+        print(f"Redis not reachable: {e}")
+        time.sleep(2)
+    main()
