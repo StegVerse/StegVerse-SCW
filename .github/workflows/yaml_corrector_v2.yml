@@ -1,0 +1,89 @@
+name: YAML Corrector v2 (Precision + Sweep)
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**/*.yml"
+      - ".github/workflows/**/*.yaml"
+      - "infra/**/*.yml"
+      - "infra/**/*.yaml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "**/*.yml"
+      - "**/*.yaml"
+  schedule:
+    - cron: "17 3 * * *"   # nightly safety net
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  actions: read
+  checks: write
+  security-events: write
+
+concurrency:
+  group: yaml-corrector-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  correct:
+    runs-on: ubuntu-latest
+    if: ${{ github.actor != 'yaml-corrector-bot' && github.actor != 'fix-it-bot' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-311-${{ hashFiles('scripts/requirements-yaml.txt') }}
+
+      - name: Install deps
+        run: pip install -r scripts/requirements-yaml.txt
+
+      - name: Run YAML Corrector
+        env:
+          APPLY: "true"
+        run: |
+          mkdir -p self_healing_out
+          python3 scripts/yaml_corrector_v2.py --apply || true
+
+      - name: Validate workflows (actionlint + yamllint)
+        continue-on-error: true
+        run: |
+          curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
+          ./actionlint -color -shellcheck= || true
+          yamllint -f parsable .github/workflows || true
+
+      - name: Commit or PR changes
+        run: |
+          git config user.name "yaml-corrector-bot"
+          git config user.email "bot@stegverse.local"
+          if git diff --quiet; then echo "No changes"; exit 0; fi
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "Skipping auto-commit (PR mode)."
+            exit 0
+          fi
+          git add -A
+          git commit -m "chore(yaml): normalize & repair [skip ci]"
+          git push origin HEAD:main || true
+
+      - name: Upload Corrector Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaml_corrector_bundle
+          path: self_healing_out/**
+          if-no-files-found: warn
+
+      - name: Summarize
+        if: always()
+        run: |
+          echo "## YAML Corrector Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Repo: $GITHUB_REPOSITORY" >> $GITHUB_STEP_SUMMARY
+          echo "- Run:  $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> $GITHUB_STEP_SUMMARY
