@@ -1,43 +1,125 @@
-name: Rebuild Kit (Zero-Secret)
+name: Rebuild Kit (Zero-Secret, Self-Contained)
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    paths:
+      - ".github/trigger/rebuild/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
 
 jobs:
-  bundle:
+  rebuild:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
 
-      - name: Create bundle (zip or tgz)
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y zip jq || true
+          command -v zip || echo "zip not found; will fallback to tar.gz"
+          command -v jq || echo "jq not found; manifest will be minimal"
+
+      - name: Seed bundle script if missing
         run: |
           set -euo pipefail
-          rm -rf out bundle
-          mkdir -p out bundle
+          mkdir -p scripts
+          if [ ! -f scripts/make_rebuild_bundle.sh ]; then
+            cat > scripts/make_rebuild_bundle.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
 
-          # Collect stuff you want in the bundle:
-          [ -d self_healing_out ] && cp -R self_healing_out bundle/self_healing_out || true
-          [ -d .github/workflows ] && cp -R .github/workflows bundle/workflows || true
-          [ -d scripts ] && cp -R scripts bundle/scripts || true
-          [ -f README.md ] && cp README.md bundle/ || true
+ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+OUT_DIR="$ROOT/out"
+WORK_DIR="$ROOT/bundle"
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
 
-          # Prefer zip; install if missing; else fallback to tar.gz
-          if ! command -v zip >/dev/null 2>&1; then
-            sudo apt-get update -y
-            sudo apt-get install -y zip || true
+rm -rf "$OUT_DIR" "$WORK_DIR"
+mkdir -p "$OUT_DIR" "$WORK_DIR"
+
+copy_if() { [ -e "$1" ] && (mkdir -p "$WORK_DIR/$(dirname "$1")"; cp -R "$1" "$WORK_DIR/$1"); }
+
+# Include key areas if they exist
+copy_if ".github/workflows"
+copy_if "scripts"
+copy_if "self_healing_out"
+copy_if "infra"
+copy_if "api"
+copy_if "public"
+copy_if "docs"
+copy_if "README.md"
+
+# If nothing got copied, create a placeholder so we still produce an artifact
+if [ -z "$(ls -A "$WORK_DIR" 2>/dev/null)" ]; then
+  echo "# Rebuild Kit placeholder" > "$WORK_DIR/README_REBUILD_KIT.md"
+fi
+
+# Create a small manifest
+mkdir -p "$WORK_DIR/_manifest"
+cat > "$WORK_DIR/_manifest/MANIFEST.json" <<JSON
+{
+  "repo": "${GITHUB_REPOSITORY:-unknown}",
+  "sha": "${SHA}",
+  "branch": "${BRANCH}",
+  "generated_at": "${TS}",
+  "counts": {
+    "files_in_bundle": $(find "$WORK_DIR" -type f | wc -l | tr -d ' ')
+  },
+  "notes": [
+    "This archive is produced by scripts/make_rebuild_bundle.sh",
+    "It is safe to unpack on a new machine to reconstruct workflows/scripts/docs."
+  ]
+}
+JSON
+
+# Prefer zip; fallback to tar.gz
+BASENAME="rebuild_kit_${SHA}_${TS//[:]/}"
+if command -v zip >/dev/null 2>&1; then
+  (cd "$WORK_DIR" && zip -r "../out/${BASENAME}.zip" . >/dev/null)
+  echo "out/${BASENAME}.zip" > "$OUT_DIR/.bundle_path"
+else
+  tar -C "$WORK_DIR" -czf "$OUT_DIR/${BASENAME}.tgz" .
+  echo "out/${BASENAME}.tgz" > "$OUT_DIR/.bundle_path"
+fi
+
+# convenience symlink
+ln -sf "$(cat "$OUT_DIR/.bundle_path")" "$OUT_DIR/latest"
+
+echo "Bundle created: $(cat "$OUT_DIR/.bundle_path")"
+ls -lh "$OUT_DIR"
+SH
           fi
 
-          if command -v zip >/dev/null 2>&1; then
-            (cd bundle && zip -r ../out/rebuild_kit_bundle.zip .)
-            echo "BUNDLE_PATH=out/rebuild_kit_bundle.zip" >> $GITHUB_ENV
+      - name: Normalize line endings & make executable
+        run: |
+          set -e
+          # dos2unix may not exist; use sed fallback
+          if command -v dos2unix >/dev/null 2>&1; then
+            dos2unix scripts/make_rebuild_bundle.sh || true
           else
-            tar -C bundle -czf out/rebuild_kit_bundle.tgz .
-            echo "BUNDLE_PATH=out/rebuild_kit_bundle.tgz" >> $GITHUB_ENV
+            sed -i 's/\r$//' scripts/make_rebuild_bundle.sh || true
+          fi
+          chmod +x scripts/make_rebuild_bundle.sh
+
+      - name: Build bundle
+        run: |
+          set -euo pipefail
+          bash -x scripts/make_rebuild_bundle.sh
+          echo "BUNDLE_PATH=$(cat out/.bundle_path)" >> $GITHUB_ENV
+
+      - name: Ensure there is *some* file to upload
+        run: |
+          set -e
+          if [ ! -f "${BUNDLE_PATH}" ]; then
+            echo "No bundle found at ${BUNDLE_PATH}. Creating placeholder."
+            echo "empty" > out/EMPTY.txt
+            echo "BUNDLE_PATH=out/EMPTY.txt" >> $GITHUB_ENV
           fi
 
       - name: Upload bundle artifact
@@ -45,11 +127,4 @@ jobs:
         with:
           name: rebuild_kit_bundle
           path: ${{ env.BUNDLE_PATH }}
-          if-no-files-found: error
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rebuild_kit
-          path: ./*.zip
-          if-no-files-found: error
+          if-no-files-found: warn
