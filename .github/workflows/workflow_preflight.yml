@@ -1,99 +1,130 @@
 name: Workflow Preflight (Validate & Fix)
 
 on:
-  workflow_dispatch:
-    inputs:
-      apply_fixes:
-        description: "Apply fixes in-place (otherwise: dry run only)"
-        required: false
-        default: "true"
-      auto_commit:
-        description: "Commit/push normalized workflows to main"
-        required: false
-        default: "true"
+  push:
+    paths: [".github/trigger/preflight/**"]
+  workflow_dispatch: {}
 
 permissions:
   contents: write
-  pull-requests: write
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   preflight:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Ensure tools
         run: |
           set -e
-          sudo apt-get update
-          sudo apt-get install -y jq curl
-          python3 -V
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl python3-pip || true
+          pip3 install --user yamllint
 
-      # --- Seed a minimal fallback so we always produce a report, even if the real script isn't present ---
-      - name: Seed fallback validator if missing
+      # Seed the shared trigger logger so this workflow logs its own usage
+      - name: Seed usage logger
         run: |
           set -e
-          mkdir -p scripts self_healing_out .github/workflows
-          if [ ! -f scripts/validate_and_fix.py ]; then
-            cat > scripts/validate_and_fix.py <<'PY'
-#\!/usr/bin/env python3
-import os, json, sys
+          mkdir -p scripts
+          if [ ! -f scripts/log_trigger_event.sh ]; then
+            cat > scripts/log_trigger_event.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+WF_NAME="${1:-unknown_workflow}"
+TRIG_DIR="${2:-.github/trigger}"
+EXTRA_TAG="${3:-}"
+ROOT="$(pwd)"
+OUT_DIR="${ROOT}/self_healing_out"
+LEDGER_DIR="${ROOT}/.github/trigger/LOGS"
+mkdir -p "${OUT_DIR}" "${LEDGER_DIR}"
+SHA="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
+ACTOR="${GITHUB_ACTOR:-unknown}"
+TS_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+BEFORE="${GITHUB_EVENT_BEFORE:-}"
+if [ -z "${BEFORE}" ] && git rev-parse HEAD~1 >/dev/null 2>&1; then BEFORE="$(git rev-parse HEAD~1)"; fi
+CHANGES="$(git diff --name-status "${BEFORE}" HEAD -- "${TRIG_DIR}" 2>/dev/null || true)"
+LINE="$(echo "${CHANGES}" | head -n1 || true)"
+STATUS="$(echo "${LINE}" | awk '{print $1}' || true)"
+PATH_CHANGED="$(echo "${LINE}" | awk '{print $2}' || true)"
+PURPOSE="unknown"
+case "${STATUS}" in
+  A) PURPOSE="breadcrumb_new" ;;
+  M) PURPOSE="test_edit" ;;
+  D) PURPOSE="cleanup" ;;
+  *) PURPOSE="unknown" ;;
+esac
+if [[ "${PATH_CHANGED}" =~ run-[0-9]+\.txt$ ]]; then PURPOSE="test_edit"; fi
+if [[ "${PATH_CHANGED}" =~ run-20[0-9]{6} ]]; then PURPOSE="breadcrumb_new"; fi
+if [ -n "${PATH_CHANGED}" ] && [ -f "${PATH_CHANGED}" ]; then
+  if grep -qiE 'breadcrumb|keep|save' "${PATH_CHANGED}" 2>/dev/null; then PURPOSE="breadcrumb_new"; fi
+  if grep -qiE 'test|debug|again' "${PATH_CHANGED}" 2>/dev/null; then PURPOSE="test_edit"; fi
+fi
+JSON_LINE=$(cat <<EOF
+{"ts":"${TS_UTC}","workflow":"${WF_NAME}","branch":"${BRANCH}","sha":"${SHA}","actor":"${ACTOR}","trigger_dir":"${TRIG_DIR}","status":"${STATUS}","path":"${PATH_CHANGED}","purpose":"${PURPOSE}","tag":"${EXTRA_TAG}"}
+EOF
+)
+echo "${JSON_LINE}" >> "${OUT_DIR}/TRIGGER_EVENTS.jsonl"
+LEDGER_FILE="${LEDGER_DIR}/ledger-$(date -u +%Y%m).jsonl"
+echo "${JSON_LINE}" >> "${LEDGER_FILE}"
+echo "${JSON_LINE}"
+SH
+            chmod +x scripts/log_trigger_event.sh
+          fi
+
+      - name: Log trigger usage
+        run: scripts/log_trigger_event.sh "preflight" ".github/trigger/preflight" ""
+
+      # Minimal validator + fixer (YAML spacing & :${{ → : ${{)
+      - name: Seed validator
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out
+          cat > scripts/validate_and_fix.py <<'PY'
+#!/usr/bin/env python3
+import re, json
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]
-WF   = ROOT / ".github" / "workflows"
-OUT  = ROOT / "self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
-files = sorted([p.as_posix() for p in WF.glob("*.y*ml")]) if WF.exists() else []
-summary = {"files": len(files), "changed": 0, "invalid_before": 0, "invalid_after": 0, "applied": "--apply" in sys.argv, "note": "fallback stub ran (real validator not yet committed)"}
-(OUT/"WORKFLOW_FIX_REPORT.json").write_text(json.dumps({"summary": summary, "results": [{"path":f, "changed": False, "before_valid": True, "after_valid": True, "text_stats":{}, "yaml_stats":{}} for f in files]}, indent=2), encoding="utf-8")
-(OUT/"WORKFLOW_FIX_REPORT.md").write_text("# Workflow Fix Report\n\n- Fallback stub executed (real validator missing)\n- Files found: **{}**\n".format(len(files)), encoding="utf-8")
-print(json.dumps(summary, indent=2))
+root = Path(__file__).resolve().parents[1]
+wf = root/".github/workflows"
+out = root/"self_healing_out"; out.mkdir(parents=True, exist_ok=True)
+files = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml")))
+changed = 0; results=[]
+def fix_text(t):
+    t2 = re.sub(r"(^\\s*[A-Za-z0-9_]+\\s*):\\s*\\$\\{\\{", lambda m: m.group(0).replace(":${{", ": ${{"), t, flags=re.M)
+    return t2.replace("\\t", "  ")
+for p in files:
+    txt = p.read_text(encoding="utf-8", errors="ignore")
+    fixed = fix_text(txt)
+    ch = (fixed != txt)
+    if ch:
+        p.write_text(fixed, encoding="utf-8"); changed += 1
+    results.append({"path": p.as_posix(), "changed": ch})
+(out/"WORKFLOW_FIX_REPORT.json").write_text(json.dumps({"changed": changed,"results":results}, indent=2), encoding="utf-8")
+(out/"WORKFLOW_FIX_REPORT.md").write_text(f"# Workflow Fix Report\\n\\n- Files: {len(files)}\\n- Changed: {changed}\\n", encoding="utf-8")
+print(json.dumps({"changed":changed,"files":len(files)}))
 PY
-            chmod +x scripts/validate_and_fix.py
-          fi
 
-      - name: Validate & (optionally) Auto-Fix Workflows
-        env:
-          APPLY: ${{ github.event.inputs.apply_fixes }}
+      - name: Validate & auto-fix (spacing)
         run: |
           set -e
-          if [ "$APPLY" = "true" ]; then
-            python3 scripts/validate_and_fix.py --apply || true
-          else
-            python3 scripts/validate_and_fix.py || true
-          fi
+          python3 scripts/validate_and_fix.py || true
 
-      - name: Commit Fixed Workflows (if auto_commit=true AND apply_fixes=true)
-        if: ${{ github.event.inputs.auto_commit == 'true' && github.event.inputs.apply_fixes == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Lint with actionlint & yamllint
+        continue-on-error: true
         run: |
           set -e
-          git config user.name "workflow-fix-bot"
-          git config user.email "bot@stegverse.local"
-          git add .github/workflows/*.yml .github/workflows/*.yaml || true
-          if git diff --cached --quiet; then
-            echo "No workflow changes to commit."
-          else
-            git commit -m "chore: normalize workflows (auto-fix common YAML issues)"
-            git push origin HEAD:main || true
-          fi
+          curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
+          ./actionlint -color -shellcheck= || true
+          ~/.local/bin/yamllint -f parsable .github/workflows || true
 
-      # --- Always create an artifact, even if earlier steps failed ---
-      - name: Ensure report dir even on failure
-        if: always()
-        run: |
-          set -e
-          mkdir -p self_healing_out
-          [ -f self_healing_out/WORKFLOW_FIX_REPORT.md ] || echo "# Workflow Fix Report\n\n(no report generated—validator likely failed early)" > self_healing_out/WORKFLOW_FIX_REPORT.md
-          echo "== workflows ==" > self_healing_out/TREE_WORKFLOWS.txt
-          ls -la .github/workflows >> self_healing_out/TREE_WORKFLOWS.txt 2>&1 || true
-
-      - name: Upload Fix Report (always)
-        if: always()
+      - name: Upload report
         uses: actions/upload-artifact@v4
         with:
-          name: workflow_fix_report
+          name: workflow_preflight_report
           path: |
-            self_healing_out/**
+            self_healing_out/WORKFLOW_FIX_REPORT.*
           if-no-files-found: warn
