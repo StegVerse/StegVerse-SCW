@@ -113,10 +113,10 @@ PY
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: last_two_<workflow_preflight>
+          name: last_two_<preflight>
           path: |
-            self_healing_out/LAST_TWO_<workflow_preflight>.json
-            self_healing_out/LAST_TWO_<workflow_preflight>.md
+            self_healing_out/LAST_TWO_<preflight>.json
+            self_healing_out/LAST_TWO_<preflight>.md
           if-no-files-found: warn
 
       - name: Ensure report dir even on failure
