@@ -1,0 +1,169 @@
+name: Fix-It (Targeted YAML Repairs)
+
+on:
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: "Comma/space separated list of YAML files to fix (e.g. .github/workflows/one_button_supercheck.yml)"
+        required: true
+        default: ".github/workflows/one_button_supercheck.yml"
+      apply:
+        description: "Apply fixes and commit (true) or just report (false)"
+        required: false
+        default: "true"
+      commit_message:
+        description: "Commit message to use when apply=true"
+        required: false
+        default: "chore(fix-it): normalize YAML + known repairs"
+
+  push:
+    paths:
+      - ".github/trigger/fixit/**"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve target list
+        id: t
+        run: |
+          set -e
+          mkdir -p self_healing_out
+          LIST="${{ github.event.inputs.paths }}"
+          if [ -z "$LIST" ]; then
+            echo "paths=.github/workflows/one_button_supercheck.yml" >> $GITHUB_OUTPUT
+          else
+            # split by comma or space
+            echo "$LIST" | tr ',' ' ' | xargs -n1 echo > self_healing_out/targets.txt
+            echo "paths=$(tr '\n' ' ' < self_healing_out/targets.txt)" >> $GITHUB_OUTPUT
+          fi
+          echo "Targets:"
+          cat self_healing_out/targets.txt || true
+
+      - name: Seed fixer
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out
+          cat > scripts/yaml_fixer.py <<'PY'
+#!/usr/bin/env python3
+import sys, re, json, os
+from pathlib import Path
+
+APPLY = os.getenv("APPLY","false").lower() == "true"
+
+rules = [
+    {
+        "name": "env-value spacing before ${{ ... }}",
+        "desc": "Change KEY:${{ ... }} -> KEY: ${{ ... }}",
+        "pattern": re.compile(r'^(\s*[-\w]+):\{\{\s', re.M),
+        "repl": r'\1: ${{ ',
+    },
+    {
+        "name": "CodeQL category literal",
+        "desc": 'category: "/language:matrix" -> category: "/language:${{ matrix.language }}"',
+        "pattern": re.compile(r'(^\s*category:\s*")[/\\]?language:matrix(")', re.M),
+        "repl": r'\1/language:${{ matrix.language }}\2',
+    },
+]
+
+# Heredoc terminators that must be flush-left.
+TOKENS = {"PY","SH","BASH","EOF"}
+def fix_heredoc_endings(txt):
+    lines = txt.splitlines(keepends=True)
+    changed = False
+    for i, line in enumerate(lines):
+        raw = line.rstrip("\n")
+        stripped = raw.strip()
+        if stripped in TOKENS and raw != stripped:
+            # remove leading/trailing spaces around token
+            lines[i] = stripped + "\n"
+            changed = True
+    return "".join(lines), changed
+
+def normalize_line_endings(txt):
+    # Remove CRs, keep LFs
+    if "\r" in txt:
+        return txt.replace("\r",""), True
+    return txt, False
+
+def tabs_to_spaces(txt):
+    if "\t" in txt:
+        return txt.replace("\t","  "), True
+    return txt, False
+
+def apply_rules(txt):
+    changed = False
+    details = []
+    for r in rules:
+        new = r["pattern"].sub(r["repl"], txt)
+        if new != txt:
+            details.append(r["name"])
+            txt = new
+            changed = True
+    new, ch = fix_heredoc_endings(txt); 
+    if ch: details.append("heredoc terminators flush-left"); txt=new; changed=True
+    new, ch = normalize_line_endings(txt); 
+    if ch: details.append("normalize CRLF to LF"); txt=new; changed=True
+    new, ch = tabs_to_spaces(txt); 
+    if ch: details.append("tabs -> spaces"); txt=new; changed=True
+    return txt, changed, details
+
+def main(paths):
+    results=[]
+    for p in paths:
+        path = Path(p)
+        if not path.exists():
+            results.append({"path": p, "exists": False, "changed": False, "applied": False, "rules":[]})
+            continue
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        fixed, changed, details = apply_rules(src)
+        if changed and APPLY:
+            path.write_text(fixed, encoding="utf-8")
+        results.append({"path": p, "exists": True, "changed": changed, "applied": APPLY and changed, "rules": details})
+    outdir = Path("self_healing_out"); outdir.mkdir(parents=True, exist_ok=True)
+    (outdir/"FIX_IT_REPORT.json").write_text(json.dumps({"results":results}, indent=2), encoding="utf-8")
+    md=["# Fix-It Report",""]
+    for r in results:
+        flag = "✅" if r["changed"] else "—"
+        if not r["exists"]:
+            md.append(f"- ❌ `{r['path']}` — file not found"); continue
+        md.append(f"- {flag} `{r['path']}`  (applied={r['applied']})  rules={', '.join(r['rules']) or '—'}")
+    (outdir/"FIX_IT_REPORT.md").write_text("\n".join(md)+"\n", encoding="utf-8")
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+PY
+
+      - name: Run fixer
+        env:
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -e
+          python3 scripts/yaml_fixer.py ${{ steps.t.outputs.paths }}
+
+      - name: Commit changes (if apply=true)
+        if: ${{ github.event.inputs.apply == 'true' }}
+        run: |
+          set -e
+          git config user.name  "fix-it-bot"
+          git config user.email "bot@stegverse.local"
+          if git status --porcelain | grep -qE '(^ M|^\?\?|\sM\s)'; then
+            git add -A
+            git commit -m "${{ github.event.inputs.commit_message }}"
+            git push || true
+          else
+            echo "No changes to commit."
+          fi
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fix_it_report
+          path: self_healing_out/**
+          if-no-files-found: warn
