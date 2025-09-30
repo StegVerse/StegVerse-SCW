@@ -1,0 +1,4 @@
+*  @stegverse/maintainers
+.github/**  @stegverse/devops
+api/**      @stegverse/backend
+ui/**       @stegverse/frontend
