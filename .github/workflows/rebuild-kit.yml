@@ -1,4 +1,4 @@
-name: Rebuild Kit (Zero-Secret, Self-Contained, Auto-Healed)
+name: Rebuild Kit (Zero-Secret, Auto-Healed, With Breadcrumbs)
 
 on:
   push:
@@ -23,17 +23,21 @@ jobs:
           sudo apt-get install -y zip jq || true
           python3 -V
 
-      # --- Fix-It precision scan ---
+      # --- Fix-It precision scan (if script exists) ---
       - name: Run Fix-It (precision repair)
         run: |
           mkdir -p self_healing_out
-          python3 scripts/validate_and_fix.py --apply || true
+          if [ -f scripts/validate_and_fix.py ]; then
+            python3 scripts/validate_and_fix.py --apply || true
+          fi
 
-      # --- Sweep-All broad scan ---
+      # --- Sweep-All broad scan (if script exists) ---
       - name: Run Sweep-All (broad repair)
         run: |
           mkdir -p self_healing_out
-          python3 scripts/sweep_all_workflows.py --apply || true
+          if [ -f scripts/sweep_all_workflows.py ]; then
+            python3 scripts/sweep_all_workflows.py --apply || true
+          fi
 
       # --- Breadcrumb logger ---
       - name: Log trigger metadata
@@ -41,18 +45,17 @@ jobs:
           mkdir -p self_healing_out
           TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           SHA="$(git rev-parse --short HEAD)"
-          echo "timestamp=$TS" >> $GITHUB_ENV
-          echo "commit=$SHA" >> $GITHUB_ENV
-          # Capture trigger files and contents
           LOG_JSON="self_healing_out/REBUILD_TRIGGER_LOG.json"
           LOG_MD="self_healing_out/REBUILD_TRIGGER_LOG.md"
           jq -n --arg ts "$TS" --arg sha "$SHA" --arg repo "$GITHUB_REPOSITORY" \
+            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --argjson triggers "$(jq -R -s -c 'split("\n")|map(select(length>0))' <<< "$(cat .github/trigger/rebuild/* 2>/dev/null || true)")" \
-            '{repo:$repo, sha:$sha, timestamp:$ts, triggers:$triggers}' > "$LOG_JSON"
+            '{repo:$repo, sha:$sha, timestamp:$ts, run_url:$run_url, triggers:$triggers}' > "$LOG_JSON"
           echo "# Rebuild Trigger Log" > "$LOG_MD"
           echo "- Repo: $GITHUB_REPOSITORY" >> "$LOG_MD"
           echo "- Commit: $SHA" >> "$LOG_MD"
           echo "- Timestamp: $TS" >> "$LOG_MD"
+          echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> "$LOG_MD"
           echo "- Trigger files:" >> "$LOG_MD"
           for f in .github/trigger/rebuild/*; do
             [ -f "$f" ] || continue
@@ -115,7 +118,6 @@ cat > "$WORK_DIR/_manifest/MANIFEST.json" <<JSON
   },
   "notes": [
     "This archive was produced after Fix-It + Sweep-All auto-healing.",
-    "Safe to unpack on a new machine to reconstruct workflows/scripts/docs.",
     "Includes breadcrumb trigger logs for traceability."
   ]
 }
