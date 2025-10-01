@@ -1,0 +1,108 @@
+name: Universal Fix-It (YAML auto-corrector)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_and_commit:
+        description: "Apply fixes and commit to main (true/false)"
+        required: false
+        default: "false"
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+      - "scripts/yaml_corrector*.py"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+      - "scripts/yaml_corrector*.py"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: fixit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fixit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          python3 -V
+          python3 -m pip install --upgrade pip
+          pip install ruamel.yaml yamllint
+
+      - name: Seed corrector if missing
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out
+          if [ ! -f scripts/yaml_corrector_v2.py ] && [ -f scripts/yaml_corrector.py ]; then
+            # Minimal shim so either name works
+            cat > scripts/yaml_corrector_v2.py <<'PY'
+#!/usr/bin/env python3
+import runpy, sys, pathlib
+me = pathlib.Path(__file__).resolve()
+legacy = me.with_name("yaml_corrector.py")
+if not legacy.exists():
+    print("ERROR: scripts/yaml_corrector.py not found", file=sys.stderr)
+    sys.exit(1)
+sys.argv = ["yaml_corrector.py"] + ([ "--apply" ] if "--apply" in sys.argv else [])
+runpy.run_path(str(legacy), run_name="__main__")
+PY
+            chmod +x scripts/yaml_corrector_v2.py
+          fi
+
+      - name: Run YAML Corrector v2 (apply)
+        run: |
+          mkdir -p self_healing_out
+          if [ -f scripts/yaml_corrector_v2.py ]; then
+            python3 scripts/yaml_corrector_v2.py --apply || true
+          elif [ -f scripts/yaml_corrector.py ]; then
+            python3 scripts/yaml_corrector.py --apply || true
+          else
+            echo "# YAML Corrector missing" > self_healing_out/YAML_CORRECTOR_REPORT.md
+            echo "{}" > self_healing_out/YAML_CORRECTOR_REPORT.json
+          fi
+
+      - name: Validate workflows (yamllint)
+        continue-on-error: true
+        run: |
+          yamllint -f parsable .github/workflows || true
+
+      - name: Upload Fix-It Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: universal_fixit_bundle
+          path: |
+            self_healing_out/YAML_CORRECTOR_REPORT.*
+          if-no-files-found: warn
+
+      - name: Commit normalized workflows (optional)
+        if: ${{ github.event.inputs.apply_and_commit == 'true' && github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          git config user.name "fixit-bot"
+          git config user.email "bot@stegverse.local"
+          git add .github/workflows/*.yml .github/workflows/*.yaml || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "fixit: normalize workflows via YAML Corrector v2"
+          git push origin HEAD:main || true
