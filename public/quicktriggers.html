@@ -26,7 +26,7 @@
 <body>
   <h1>StegVerse Quick Triggers</h1>
   <div class="note">Tap a trigger to open GitHub with the file path + content prefilled. Commit to run the workflow.<br>
-    Status shows the most recent run (✅ success / ❌ failure / ⏳ unknown).</div>
+    Status shows the most recent run (✅ success / ❌ failure / ⏳ none yet).</div>
 
   <div id="grid" class="grid"></div>
 
@@ -35,14 +35,13 @@
 <script>
 /**
  * Configure repos & workflows here.
- * You can duplicate this file across repos; links are absolute.
  */
 const CONFIG = [
   {
     repo: "StegVerse/StegVerse-SCW",
     workflows: [
       {
-        name: "Supercheck",
+        name: "Supercheck (Local)",
         wf_filename: "one_button_supercheck.yml",
         triggerPath: ".github/trigger/supercheck",
         lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_supercheck.md",
@@ -64,13 +63,29 @@ const CONFIG = [
         lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_rebuild.md",
         newFileUrl: "https://github.com/StegVerse/StegVerse-SCW/new/main?filename=.github/trigger/rebuild/run-%F0%9F%9A%80.txt&message=Trigger%20rebuild%20kit&value=go",
         actionsUrl: "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/rebuild_kit.yml"
+      },
+      {
+        name: "Supercheck (Remote Healer)",
+        wf_filename: "supercheck_remote.yml",
+        triggerPath: ".github/trigger/supercheck-remote",
+        lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_supercheck-remote.md",
+        newFileUrl: "https://github.com/StegVerse/StegVerse-SCW/new/main?filename=.github/trigger/supercheck-remote/run-%F0%9F%9A%80.txt&message=Trigger%20supercheck-remote&value=go",
+        actionsUrl: "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/supercheck_remote.yml"
+      },
+      {
+        name: "StegTalk Writer",
+        wf_filename: "stegtalk_writer.yml",
+        triggerPath: ".github/trigger/stegtalk",
+        lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_stegtalk.md",
+        newFileUrl: "https://github.com/StegVerse/StegVerse-SCW/new/main?filename=.github/trigger/stegtalk/run-%F0%9F%9A%80.txt&message=Trigger%20StegTalk%20writer&value=go",
+        actionsUrl: "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/stegtalk_writer.yml"
       }
     ]
   },
-  // Duplicate this block for StegVerse/site once it’s enabled:
+  // Duplicate and adapt for StegVerse/site when enabled:
   // {
   //   repo: "StegVerse/site",
-  //   workflows: [ ... same structure, URLs with /site/ ... ]
+  //   workflows: [ ... ]
   // }
 ];
 
