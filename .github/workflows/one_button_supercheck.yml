@@ -8,7 +8,7 @@ on:
         required: false
         default: ""
       queue_key:
-        description: "Worker queue key (informational for downstream)"
+        description: "Worker queue key (informational)"
         required: false
         default: "queue:runs"
       timeout_sec:
@@ -44,110 +44,105 @@ concurrency:
   group: supercheck-${{ github.ref }}
   cancel-in-progress: true
 
-# ---------- Jobs ----------
+jobs:
+  # 0) Baseline tools for all jobs
+  setup:
+    uses: ./.github/workflows/_reusables/setup-tools.yml
+    with:
+      actionlint: true
+      yamllint:   true
+      jq:         true
+      curl:       true
+      zip:        true
 
-# 0) Baseline toolchain for everything else (actionlint, yamllint, jq/curl/zip)
-setup:
-  uses: ./.github/workflows/_reusables/setup-tools.yml
-  with:
-    actionlint: true
-    yamllint:   true
-    jq:         true
-    curl:       true
-    zip:        true
+  # 1) Breadcrumb logging
+  log_trigger:
+    needs: [setup]
+    uses: ./.github/workflows/_reusables/log-trigger.yml
+    with:
+      label: supercheck
 
-# 1) Breadcrumb logging
-log_trigger:
-  needs: [setup]
-  uses: ./.github/workflows/_reusables/log-trigger.yml
-  with:
-    label: supercheck
+  # 2) YAML Corrector + linters (always first)
+  yamlfix:
+    needs: [setup]
+    uses: ./.github/workflows/_reusables/yaml-corrector.yml
+    with:
+      apply: true
 
-# 2) YAML Corrector + Linters (always first)
-yamlfix:
-  needs: [setup]
-  uses: ./.github/workflows/_reusables/yaml-corrector.yml
-  with:
-    apply: true
+  # 3) Runtime diagnostics (optional; only if api_base provided)
+  diag:
+    needs: [setup]
+    uses: ./.github/workflows/_reusables/runtime-diagnostics.yml
+    with:
+      api_base:    ${{ github.event.inputs.api_base }}
+      queue_key:   ${{ github.event.inputs.queue_key }}
+      timeout_sec: ${{ github.event.inputs.timeout_sec }}
+      poll_sec:    ${{ github.event.inputs.poll_sec }}
+    timeout-minutes: 8
 
-# 3) Runtime diagnostics (optional; runs only if api_base is provided)
-diag:
-  needs: [setup]
-  uses: ./.github/workflows/_reusables/runtime-diagnostics.yml
-  with:
-    api_base:    ${{ github.event.inputs.api_base }}
-    queue_key:   ${{ github.event.inputs.queue_key }}
-    timeout_sec: ${{ github.event.inputs.timeout_sec }}
-    poll_sec:    ${{ github.event.inputs.poll_sec }}
-  # Give network hiccups room without hanging forever
-  timeout-minutes: 8
+  # 4) Repo audit & drift (with safe seeding)
+  audit:
+    name: Repo Inventory + Drift + Self-Healing Scan
+    needs: [setup, yamlfix]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-# 4) Repo audit & drift (with safe seeding if scripts missing)
-audit:
-  name: Repo Inventory + Drift + Self-Healing Scan
-  needs: [setup, yamlfix]
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-
-    - name: Seed helper scripts if missing
-        # Keep the pipeline robust even if scripts aren't there yet
-      run: |
-        set -e
-        mkdir -p scripts self_healing_out
-        seed_py(){ f="$1"; shift; [ -f "scripts/$f" ] && return 0; cat > "scripts/$f" <<'PY'
+      - name: Seed helper scripts if missing
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out
+          seed_py(){ f="$1"; shift; [ -f "scripts/$f" ] && return 0; cat > "scripts/$f" <<'PY'
 # !/usr/bin/env python3
 from pathlib import Path; import time
 ROOT=Path(__file__).resolve().parents[1]; OUT=ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
 (Path(OUT)/f"__placeholder_{__file__.split('/')[-1]}.md").write_text(f"Ran placeholder at {time.time()}\n")
 print("OK")
 PY
-        }
-        seed_py repo_audit.py
-        seed_py topic_drift_audit.py
-        seed_py collect_self_healing.py
+          }
+          seed_py repo_audit.py
+          seed_py topic_drift_audit.py
+          seed_py collect_self_healing.py
 
-    - name: Repo Inventory & Diff
-      run: python3 scripts/repo_audit.py
+      - name: Repo Inventory & Diff
+        run: python3 scripts/repo_audit.py
 
-    - name: Topic Drift Auditor
-      run: python3 scripts/topic_drift_audit.py
+      - name: Topic Drift Auditor
+        run: python3 scripts/topic_drift_audit.py
 
-    - name: Self-Healing Scan (manifest)
-      run: python3 scripts/collect_self_healing.py
+      - name: Self-Healing Scan (manifest)
+        run: python3 scripts/collect_self_healing.py
 
-    - name: Upload repo audit bundle
-      uses: ./.github/workflows/_reusables/upload-bundle.yml
-      with:
-        name: repo_audit_bundle
-        paths: |
-          self_healing_out/REPO_INVENTORY.*
-          self_healing_out/REPO_DIFF.json
-          self_healing_out/DRIFT_REPORT.*
-          self_healing_out/SELF_HEALING_MANIFEST.*
+      - name: Upload repo audit bundle
+        uses: ./.github/workflows/_reusables/upload-bundle.yml
+        with:
+          name: repo_audit_bundle
+          paths: |
+            self_healing_out/REPO_INVENTORY.*
+            self_healing_out/REPO_DIFF.json
+            self_healing_out/DRIFT_REPORT.*
+            self_healing_out/SELF_HEALING_MANIFEST.*
 
-# 5) Auto-triage (plan + optional apply), then artifact
-triage:
-  name: Auto-Triage (plan + optional apply)
-  needs: [audit]
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
+  # 5) Auto-triage (plan + optional apply), then artifact
+  triage:
+    name: Auto-Triage (plan + optional apply)
+    needs: [audit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-    # PyYAML is required for auto_triage.py to read .steg/INTENT.yml
-    - name: Install deps (PyYAML)
-      run: |
-        python3 -m pip install --upgrade pip
-        pip install pyyaml
+      - name: Install deps (PyYAML)
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install pyyaml
 
-    # Ensure intent + triage rules exist (do NOT overwrite if already present)
-    - name: Ensure intent & triage rules
-      run: |
-        set -e
-        mkdir -p .steg scripts self_healing_out
+      - name: Ensure intent & triage rules
+        run: |
+          set -e
+          mkdir -p .steg scripts self_healing_out
 
-        if [ ! -f .steg/INTENT.yml ]; then
-          cat > .steg/INTENT.yml <<'YML'
+          if [ ! -f .steg/INTENT.yml ]; then
+            cat > .steg/INTENT.yml <<'YML'
 version: 1
 required:
   dirs: ["scripts", ".github/workflows", "self_healing_out"]
@@ -169,10 +164,10 @@ attic_policy:
     - "tests/**"
     - "ATTIC/**"
 YML
-        fi
+          fi
 
-        if [ ! -f scripts/triage_rules.json ]; then
-          cat > scripts/triage_rules.json <<'JSON'
+          if [ ! -f scripts/triage_rules.json ]; then
+            cat > scripts/triage_rules.json <<'JSON'
 {
   "version": 1,
   "attic": {
@@ -188,12 +183,11 @@ YML
   }
 }
 JSON
-        fi
+          fi
 
-        # Safety: don't overwrite your real script; only warn if missing
-        if [ ! -f scripts/auto_triage.py ]; then
-          echo "::warning ::scripts/auto_triage.py not found; seeding no-op placeholder."
-          cat > scripts/auto_triage.py <<'PY'
+          if [ ! -f scripts/auto_triage.py ]; then
+            echo "::warning ::scripts/auto_triage.py not found; seeding no-op placeholder."
+            cat > scripts/auto_triage.py <<'PY'
 #!/usr/bin/env python3
 import os, json
 from pathlib import Path
@@ -204,111 +198,141 @@ plan = {"remove_forbidden": [], "move_to_attic": [], "scaffold_dirs": [], "scaff
 (OUT/"AUTO_TRIAGE_REPORT.md").write_text("# Auto-Triage Plan\n\n(no-op placeholder)\n", encoding="utf-8")
 print("OK")
 PY
-          chmod +x scripts/auto_triage.py
-        fi
+            chmod +x scripts/auto_triage.py
+          fi
 
-    - name: Run auto_triage (apply optional)
-      env:
-        APPLY: ${{ github.event.inputs.auto_apply }}
-      run: |
-        if [ "${APPLY}" = "true" ]; then
-          APPLY=1 python3 scripts/auto_triage.py
-        else
-          python3 scripts/auto_triage.py
-        fi
+      - name: Run auto_triage (apply optional)
+        env:
+          APPLY: ${{ github.event.inputs.auto_apply }}
+        run: |
+          if [ "${APPLY}" = "true" ]; then
+            APPLY=1 python3 scripts/auto_triage.py
+          else
+            python3 scripts/auto_triage.py
+          fi
 
-    - name: Upload auto-triage bundle
-      uses: ./.github/workflows/_reusables/upload-bundle.yml
-      with:
-        name: auto_triage_bundle
-        paths: |
-          self_healing_out/AUTO_TRIAGE_PLAN.json
-          self_healing_out/AUTO_TRIAGE_REPORT.md# 6) Commit to main or open PR (only if auto_apply requested)
-commit_or_pr:
-  needs: [triage]
-  if: ${{ github.event.inputs.auto_apply == 'true' }}
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - name: Commit to main or open PR
-      uses: ./.github/actions/commit-or-pr
-      with:
-        push_to_main: ${{ github.event.inputs.auto_commit }}
-        branch_base:  main
-        commit_message: "supercheck(auto): safe triage (scaffold/move ATTIC/remove forbidden)"
-        pr_title:  "Supercheck: safe triage (auto)"
-        pr_body:   "This PR was created by One-Button Supercheck.\n\n- Scaffolds missing files/dirs\n- Moves extras to ATTIC with @attic headers\n- Removes forbidden files\n\nReview artifacts for details."
+      - name: Upload auto-triage bundle
+        uses: ./.github/workflows/_reusables/upload-bundle.yml
+        with:
+          name: auto_triage_bundle
+          paths: |
+            self_healing_out/AUTO_TRIAGE_PLAN.json
+            self_healing_out/AUTO_TRIAGE_REPORT.md
 
-# 7) Assemble one human-readable report (downloads prior artifacts)
-assemble:
-  name: Assemble Supercheck Report
-  needs: [yamlfix, diag, audit, triage]
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
+  # 6) Commit or PR changes (only if auto_apply)
+  commit_or_pr:
+    name: Commit or PR changes
+    needs: [triage]
+    if: ${{ github.event.inputs.auto_apply == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        pattern: |
-          yaml_corrector_bundle
-          runtime_diag
-          repo_audit_bundle
-          auto_triage_bundle
-        path: _in
-        merge-multiple: true
+      - name: Commit to main or open PR
+        env:
+          DO_COMMIT: ${{ github.event.inputs.auto_commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          git config user.name "supercheck-bot"
+          git config user.email "bot@stegverse.local"
 
-    - name: Build report (markdown)
-      run: |
-        set -e
-        mkdir -p out self_healing_out
-        RPT="out/supercheck_report.md"
-        echo "# Supercheck Report" > "$RPT"
-        echo "" >> "$RPT"
+          if [ "$DO_COMMIT" = "true" ]; then
+            git add -A
+            git commit -m "supercheck(auto): apply safe triage (scaffold/move ATTIC/remove forbidden)" || echo "No changes"
+            git push origin HEAD:main || true
+          else
+            BR="supercheck/triage-${GITHUB_RUN_ID}"
+            git checkout -b "$BR"
+            git add -A
+            git commit -m "supercheck(auto): apply safe triage (scaffold/move ATTIC/remove forbidden)" || echo "No changes"
+            git push origin "$BR" || true
 
-        echo "## YAML Corrector" >> "$RPT"
-        cat _in/YAML_CORRECTOR_REPORT.md 2>/dev/null || echo "(no YAML report)" >> "$RPT"
-        echo "" >> "$RPT"
+            TITLE="Supercheck: safe triage (auto)"
+            BODY="This PR was created by One-Button Supercheck.
 
-        if [ -f "_in/supercheck_diag.json" ]; then
-          OK="$(jq -r '.ok' _in/supercheck_diag.json 2>/dev/null || echo null)"
-          BADGE="(skipped)"
-          [ "$OK" = "true" ] && BADGE="✅ PASS"
-          [ "$OK" = "false" ] && BADGE="❌ FAIL"
-          echo "## API/Worker Diagnostics — $BADGE" >> "$RPT"
+- Scaffolds missing files/dirs
+- Moves extras to ATTIC with @attic headers
+- Removes forbidden files
+
+Review the 'supercheck_bundle' artifact for details."
+
+            curl -sS -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main","maintainer_can_modify":true}')" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
+
+  # 7) Assemble one human-readable report (downloads prior artifacts)
+  assemble:
+    name: Assemble Supercheck Report
+    needs: [yamlfix, diag, audit, triage]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: |
+            yaml_corrector_bundle
+            runtime_diag
+            repo_audit_bundle
+            auto_triage_bundle
+          path: _in
+          merge-multiple: true
+
+      - name: Build report (markdown)
+        run: |
+          set -e
+          mkdir -p out self_healing_out
+          RPT="out/supercheck_report.md"
+          echo "# Supercheck Report" > "$RPT"
           echo "" >> "$RPT"
-          jq -S . _in/supercheck_diag.json | head -c 180000 | sed 's/^/    /' >> "$RPT"
+
+          echo "## YAML Corrector" >> "$RPT"
+          cat _in/YAML_CORRECTOR_REPORT.md 2>/dev/null || echo "(no YAML report)" >> "$RPT"
           echo "" >> "$RPT"
-        fi
 
-        echo "## Repo Inventory & Diff" >> "$RPT"
-        cat _in/REPO_INVENTORY.md 2>/dev/null || echo "(no inventory)" >> "$RPT"
-        echo "" >> "$RPT"
+          if [ -f "_in/supercheck_diag.json" ]; then
+            OK="$(jq -r '.ok' _in/supercheck_diag.json 2>/dev/null || echo null)"
+            BADGE="(skipped)"
+            [ "$OK" = "true" ] && BADGE="✅ PASS"
+            [ "$OK" = "false" ] && BADGE="❌ FAIL"
+            echo "## API/Worker Diagnostics — $BADGE" >> "$RPT"
+            echo "" >> "$RPT"
+            jq -S . _in/supercheck_diag.json | head -c 180000 | sed 's/^/    /' >> "$RPT"
+            echo "" >> "$RPT"
+          fi
 
-        echo "## Drift Report" >> "$RPT"
-        cat _in/DRIFT_REPORT.md 2>/dev/null || echo "(no drift report)" >> "$RPT"
-        echo "" >> "$RPT"
+          echo "## Repo Inventory & Diff" >> "$RPT"
+          cat _in/REPO_INVENTORY.md 2>/dev/null || echo "(no inventory)" >> "$RPT"
+          echo "" >> "$RPT"
 
-        echo "## Self-Healing Manifest" >> "$RPT"
-        cat _in/SELF_HEALING_MANIFEST.md 2>/dev/null || echo "(no manifest)" >> "$RPT"
-        echo "" >> "$RPT"
+          echo "## Drift Report" >> "$RPT"
+          cat _in/DRIFT_REPORT.md 2>/dev/null || echo "(no drift report)" >> "$RPT"
+          echo "" >> "$RPT"
 
-        echo "## Auto-Triage Plan" >> "$RPT"
-        cat _in/AUTO_TRIAGE_REPORT.md 2>/dev/null || echo "(no auto-triage report)" >> "$RPT"
-        echo "" >> "$RPT"
+          echo "## Self-Healing Manifest" >> "$RPT"
+          cat _in/SELF_HEALING_MANIFEST.md 2>/dev/null || echo "(no manifest)" >> "$RPT"
+          echo "" >> "$RPT"
 
-    - name: Upload consolidated bundle
-      uses: ./.github/workflows/_reusables/upload-bundle.yml
-      with:
-        name: supercheck_bundle
-        paths: |
-          out/supercheck_report.md
-          _in/**
+          echo "## Auto-Triage Plan" >> "$RPT"
+          cat _in/AUTO_TRIAGE_REPORT.md 2>/dev/null || echo "(no auto-triage report)" >> "$RPT"
+          echo "" >> "$RPT"
 
-# 8) Last-two telemetry (final status)
-telemetry:
-  needs: [assemble]
-  uses: ./.github/workflows/_reusables/telemetry.yml
-  with:
-    basename: supercheck
-    status: ${{ needs.assemble.result }}
+      - name: Upload consolidated bundle
+        uses: ./.github/workflows/_reusables/upload-bundle.yml
+        with:
+          name: supercheck_bundle
+          paths: |
+            out/supercheck_report.md
+            _in/**
+
+  # 8) Last-two telemetry (final status)
+  telemetry:
+    needs: [assemble]
+    uses: ./.github/workflows/_reusables/telemetry.yml
+    with:
+      basename: supercheck
+      status: ${{ needs.assemble.result }}
