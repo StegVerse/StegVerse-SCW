@@ -1,0 +1,61 @@
+name: _Reusable — Telemetry (breadcrumb + last-two)
+
+on:
+  workflow_call:
+    inputs:
+      basename:
+        description: "Safe name slug used for filenames/artifacts (e.g., supercheck|preflight|rebuild)"
+        required: true
+        type: string
+      status:
+        description: "Caller job result (e.g., success|failure|cancelled)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  write-telemetry:
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record outcome (last-two)
+        run: |
+          set -e
+          mkdir -p self_healing_out
+
+          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          SHA="$(git rev-parse --short HEAD || echo unknown)"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          ACTOR="${GITHUB_ACTOR}"
+          BASENAME="${{ inputs.basename }}"
+
+          LEDGER="self_healing_out/TRIGGER_EVENTS_${BASENAME}.jsonl"
+          echo "{\"ts\":\"$TS\",\"status\":\"${{ inputs.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"$ACTOR\"}" >> "$LEDGER"
+
+          LAST_JSON="self_healing_out/LAST_TWO_${BASENAME}.json"
+          LAST_MD="self_healing_out/LAST_TWO_${BASENAME}.md"
+
+          tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
+
+          {
+            echo "### Last two ${BASENAME} outcomes"
+            jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
+          } > "$LAST_MD"
+
+      - name: Upload last-two summary (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: last_two_${{ inputs.basename }}
+          path: |
+            self_healing_out/LAST_TWO_${{ inputs.basename }}.json
+            self_healing_out/LAST_TWO_${{ inputs.basename }}.md
+          if-no-files-found: warn
