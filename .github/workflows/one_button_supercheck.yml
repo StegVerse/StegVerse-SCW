@@ -247,12 +247,12 @@ jobs:
           echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
 
           # Rebuild "last two" JSON + MD
-          LAST_JSON="self_healing_out/LAST_TWO_<NAME>.json"
-          LAST_MD="self_healing_out/LAST_TWO_<NAME>.md"
+          LAST_JSON="self_healing_out/LAST_TWO_supercheck.json"
+          LAST_MD="self_healing_out/LAST_TWO_supercheck.md"
           tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
 
           {
-            echo "### Last two <NAME> outcomes"
+            echo "### Last two Supercheck outcomes"
             jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
           } > "$LAST_MD"
 
@@ -260,10 +260,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: last_two_<supercheck>
+          name: last_two_supercheck
           path: |
-            self_healing_out/LAST_TWO_<supercheck>.json
-            self_healing_out/LAST_TWO_<supercheck>.md
+            self_healing_out/LAST_TWO_supercheck.json
+            self_healing_out/LAST_TWO_supercheck.md
           if-no-files-found: warn
 
       # ---- Stage H: Upload Final Bundle ----
