@@ -28,7 +28,6 @@ on:
         required: false
         default: "false"
 
-  # File-based triggers (mobile friendly)
   push:
     branches: [ "main" ]
     paths:
@@ -43,6 +42,10 @@ permissions:
 concurrency:
   group: supercheck-${{ github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   supercheck:
@@ -133,7 +136,6 @@ jobs:
           report='{"api_base":"'"$API"'","steps":[],"ok":false}'
 
           add(){  # $1=name, $2=true/false, $3=json-or-empty, $4=error-string-optional
-            # if $3 is empty -> data=null, else parse as JSON
             if [ -n "${3:-}" ]; then DATA_JSON="$3"; else DATA_JSON="null"; fi
             report="$(jq -c \
               --arg n "$1" \
@@ -186,8 +188,10 @@ jobs:
           seed_py(){ f="$1"; shift; [ -f "scripts/$f" ] && return 0; cat > "scripts/$f" <<'PY'
 # !/usr/bin/env python3
 # minimal placeholder; replace with repo version when available
-from pathlib import Path; import json, time, os
-ROOT=Path(__file__).resolve().parents[1]; OUT=ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+from pathlib import Path; import time
+ROOT=Path(__file__).resolve().parents[1]
+OUT=ROOT/"self_healing_out"
+OUT.mkdir(parents=True, exist_ok=True)
 (Path(OUT)/f"{__file__.split('/')[-1]}.md").write_text(f"Ran placeholder for {__file__} at {time.time()}\n")
 print("OK")
 PY
@@ -196,7 +200,7 @@ PY
           seed_py topic_drift_audit.py
           seed_py collect_self_healing.py
           seed_py auto_triage.py
-      
+
       # ---- Stage C: Repo Audit & Drift ----
       - name: Repo Inventory & Diff
         run: python3 scripts/repo_audit.py
@@ -284,14 +288,6 @@ PY
           cat self_healing_out/AUTO_TRIAGE_REPORT.md >> supercheck_report.md || true
           echo "" >> supercheck_report.md
 
-      - name: telemetry
-        needs: [supercheck]
-        if: always()
-        uses: ./.github/workflows/_reusables/telemetry.yml
-        with:
-          basename: supercheck
-          status: ${{ needs.supercheck.result }}
-
       # ---- Stage H: Upload Final Bundle ----
       - name: Upload Supercheck Bundle
         if: always()
@@ -303,3 +299,11 @@ PY
             supercheck_diag.json
             self_healing_out/**
           if-no-files-found: warn
+
+  telemetry:
+    needs: [supercheck]
+    if: always()
+    uses: ./.github/workflows/_reusables/telemetry.yml
+    with:
+      basename: supercheck
+      status: ${{ needs.supercheck.result }}
