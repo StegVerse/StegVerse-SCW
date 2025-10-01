@@ -1,170 +1,204 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>StegVerse Quick Triggers</title>
 <style>
-  body { font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 16px; background:#fafafa; color:#222; }
-  h1 { font-size: 22px; margin: 0 0 12px; }
-  .note { color:#666; font-size: 13px; margin-bottom: 16px; }
-  .grid { display: grid; gap: 12px; }
-  .card { background:#fff; border-radius:12px; padding:14px 14px; box-shadow:0 2px 10px rgba(0,0,0,0.06); }
-  .row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-  .title { font-weight: 600; font-size:16px; }
-  .status { font-size: 18px; min-width: 24px; text-align:right; }
-  .btns { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
-  a.btn { display:inline-block; text-decoration:none; background:#111; color:#fff;
-          padding:10px 12px; border-radius:10px; font-weight:600; font-size:14px; }
-  a.btn.secondary { background:#3b82f6; }
-  a.btn.ghost { background:#e5e7eb; color:#111; }
-  .md { margin-top:10px; font-size:13px; color:#333; white-space:pre-wrap; background:#f7f7f7; padding:10px; border-radius:8px; }
-  footer { margin-top: 20px; font-size:12px; color:#666; }
+  :root {
+    --bg:#0f1115; --card:#141821; --text:#e7ecf3; --muted:#9aa4b2; --accent:#3ea6ff; --ok:#23d18b; --bad:#ff5f56;
+  }
+  html,body{background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,sans-serif;margin:0}
+  .wrap{max-width:920px;margin:24px auto;padding:0 16px}
+  h1{font-weight:700;font-size:1.6rem;margin:8px 0 4px}
+  p.lead{color:var(--muted);margin:0 0 18px}
+  .repo{background:var(--card);border-radius:14px;padding:16px 14px;margin:14px 0;box-shadow:0 2px 14px rgba(0,0,0,.25)}
+  .repo h2{font-size:1.1rem;margin:0 0 8px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
+  .btn{appearance:none;border:0;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+  .primary{background:#111827;color:#fff;border:1px solid #222c3a}
+  .primary:hover{background:#0c1320}
+  .accent{background:var(--accent);color:#04121f}
+  .ghost{background:transparent;border:1px solid #2a3242;color:var(--text)}
+  .tag{font-size:.85rem;border:1px solid #2a3242;border-radius:8px;padding:4px 8px;color:var(--muted)}
+  .status{margin-top:8px;border-top:1px dashed #253042;padding-top:8px;color:var(--muted);font-size:.95rem}
+  .status ul{margin:6px 0 0 18px;padding:0}
+  .status li{margin:2px 0}
+  .ok{color:var(--ok)} .bad{color:var(--bad)} .wait{color:#e0c66c}
+  .hint{font-size:.9rem;color:var(--muted);margin-top:6px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .footer{color:#718096;font-size:.85rem;margin:24px 0 12px}
 </style>
 </head>
 <body>
+<div class="wrap">
   <h1>StegVerse Quick Triggers</h1>
-  <div class="note">Tap a trigger to open GitHub with the file path + content prefilled. Commit to run the workflow.<br>
-    Status shows the most recent run (✅ success / ❌ failure / ⏳ none yet).</div>
+  <p class="lead">Tap a trigger to open the GitHub edit screen for the trigger file. <b>Commit changes</b> to fire the workflow.
+    Latest results (last two runs) are shown below each trigger.</p>
 
-  <div id="grid" class="grid"></div>
+  <div id="mount"></div>
 
-  <footer>Last refreshed: <span id="ts"></span></footer>
+  <div class="footer">No tokens used. API results cached in your browser for 2 minutes to avoid rate limits.</div>
+</div>
 
 <script>
-/**
- * Configure repos & workflows here.
- */
-const CONFIG = [
+/** ======== CONFIG (edit me) ======== **/
+const OWNER = "StegVerse";
+const REPO  = "StegVerse-SCW";
+
+// Each entry renders one card on the page.
+const WORKFLOWS = [
   {
-    repo: "StegVerse/StegVerse-SCW",
-    workflows: [
-      {
-        name: "Supercheck (Local)",
-        wf_filename: "one_button_supercheck.yml",
-        triggerPath: ".github/trigger/supercheck",
-        lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_supercheck.md",
-        newFileUrl: "https://github.com/StegVerse/StegVerse-SCW/new/main?filename=.github/trigger/supercheck/run-%F0%9F%9A%80.txt&message=Trigger%20supercheck&value=go",
-        actionsUrl: "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/one_button_supercheck.yml"
-      },
-      {
-        name: "Preflight",
-        wf_filename: "workflow_preflight.yml",
-        triggerPath: ".github/trigger/preflight",
-        lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_preflight.md",
-        newFileUrl: "https://github.com/StegVerse/StegVerse-SCW/new/main?filename=.github/trigger/preflight/run-%F0%9F%9A%80.txt&message=Trigger%20preflight&value=go",
-        actionsUrl: "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflow_preflight.yml"
-      },
-      {
-        name: "Rebuild Kit",
-        wf_filename: "rebuild_kit.yml",
-        triggerPath: ".github/trigger/rebuild",
-        lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_rebuild.md",
-        newFileUrl: "https://github.com/StegVerse/StegVerse-SCW/new/main?filename=.github/trigger/rebuild/run-%F0%9F%9A%80.txt&message=Trigger%20rebuild%20kit&value=go",
-        actionsUrl: "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/rebuild_kit.yml"
-      },
-      {
-        name: "Supercheck (Remote Healer)",
-        wf_filename: "supercheck_remote.yml",
-        triggerPath: ".github/trigger/supercheck-remote",
-        lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_supercheck-remote.md",
-        newFileUrl: "https://github.com/StegVerse/StegVerse-SCW/new/main?filename=.github/trigger/supercheck-remote/run-%F0%9F%9A%80.txt&message=Trigger%20supercheck-remote&value=go",
-        actionsUrl: "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/supercheck_remote.yml"
-      },
-      {
-        name: "StegTalk Writer",
-        wf_filename: "stegtalk_writer.yml",
-        triggerPath: ".github/trigger/stegtalk",
-        lastTwoMd: "https://raw.githubusercontent.com/StegVerse/StegVerse-SCW/main/self_healing_out/LAST_TWO_stegtalk.md",
-        newFileUrl: "https://github.com/StegVerse/StegVerse-SCW/new/main?filename=.github/trigger/stegtalk/run-%F0%9F%9A%80.txt&message=Trigger%20StegTalk%20writer&value=go",
-        actionsUrl: "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/stegtalk_writer.yml"
-      }
-    ]
+    label: "Supercheck",
+    workflowFile: ".github/workflows/one_button_supercheck.yml",
+    triggerPath:  ".github/trigger/supercheck/run-%F0%9F%9A%80.txt", // URL-encoded 🚀
+    triggerContent: "go\n",
+    viewRunsUrl: `https://github.com/${OWNER}/${REPO}/actions/workflows/one_button_supercheck.yml`,
+    triggerFolderUrl: `https://github.com/${OWNER}/${REPO}/tree/main/.github/trigger/supercheck`
   },
-  // Duplicate and adapt for StegVerse/site when enabled:
-  // {
-  //   repo: "StegVerse/site",
-  //   workflows: [ ... ]
-  // }
+  {
+    label: "Preflight",
+    workflowFile: ".github/workflows/workflow_preflight.yml",
+    triggerPath:  ".github/trigger/preflight/run-1.txt",
+    triggerContent: "go\n",
+    viewRunsUrl: `https://github.com/${OWNER}/${REPO}/actions/workflows/workflow_preflight.yml`,
+    triggerFolderUrl: `https://github.com/${OWNER}/${REPO}/tree/main/.github/trigger/preflight`
+  },
+  {
+    label: "Rebuild Kit",
+    workflowFile: ".github/workflows/rebuild_kit.yml",
+    triggerPath:  ".github/trigger/rebuild/run-1.txt",
+    triggerContent: "go\n",
+    viewRunsUrl: `https://github.com/${OWNER}/${REPO}/actions/workflows/rebuild_kit.yml`,
+    triggerFolderUrl: `https://github.com/${OWNER}/${REPO}/tree/main/.github/trigger/rebuild`
+  }
 ];
 
-function el(tag, cls, txt){ const e=document.createElement(tag); if(cls) e.className=cls; if(txt) e.textContent=txt; return e; }
-
-async function fetchText(url){
-  try{
-    const r = await fetch(url, {cache: "no-store"});
-    if(!r.ok) throw new Error(r.status);
-    return await r.text();
-  }catch(e){ return ""; }
+// GitHub “new file” URL helper (prefill path + body)
+function editNewFileUrl(path, content, message="trigger: run") {
+  // For “create new file” with preset path we use /new/<branch>?filename=…&value=…
+  const base = `https://github.com/${OWNER}/${REPO}/new/main`;
+  const params = new URLSearchParams({
+    filename: path,
+    value: content,
+    message
+  });
+  return `${base}?${params.toString()}`;
 }
 
-function parseStatus(md){
-  // expects lines like: "- **SUCCESS** — 2025-... (run) by actor"
-  const m = md.match(/\*\*(SUCCESS|FAILURE|CANCELLED|NEUTRAL|TIMED_OUT)\*\*/i);
-  if(!m) return "unknown";
-  const s = m[1].toUpperCase();
-  if(s==="SUCCESS") return "success";
-  if(s==="FAILURE"||s==="CANCELLED"||s==="TIMED_OUT") return "failure";
-  return "unknown";
+/** ======== RENDER ======== **/
+const el = (t, props={}, ...kids) => {
+  const n = document.createElement(t);
+  Object.entries(props).forEach(([k,v])=>{
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (k === "href") n.setAttribute("href", v);
+    else n[k]=v;
+  });
+  kids.forEach(k => n.append(k));
+  return n;
+};
+
+function render() {
+  const mount = document.getElementById("mount");
+  mount.innerHTML = "";
+  // Repo header
+  mount.append(
+    el("div", {class:"repo"},
+      el("h2", {}, `${OWNER}/${REPO}`),
+      el("div", {class:"hint"}, "Open trigger file → Commit to run (GitHub will ask you to log in if needed).")
+    )
+  );
+
+  WORKFLOWS.forEach(w => {
+    const card = el("div", {class:"repo"});
+    card.append(el("h2", {}, w.label));
+
+    const triggerHref = editNewFileUrl(w.triggerPath, w.triggerContent, `chore(trigger): ${w.label.toLowerCase()}`);
+    const row = el("div", {class:"row"},
+      el("a", {class:"btn primary", href: triggerHref, target:"_blank"},
+        "Open trigger file → Commit to run"),
+      el("a", {class:"btn accent", href: w.viewRunsUrl, target:"_blank"}, "View Runs"),
+      el("a", {class:"btn ghost", href: w.triggerFolderUrl, target:"_blank"}, "Open Trigger Folder"),
+      el("span", {class:"tag mono"}, w.workflowFile)
+    );
+    card.append(row);
+
+    const status = el("div", {class:"status"}, "Fetching recent runs…");
+    card.append(status);
+    mount.append(card);
+
+    // Fill last-two status
+    fetchLastTwoRuns(OWNER, REPO, w.workflowFile).then(data=>{
+      status.innerHTML = formatRunsHtml(data);
+    }).catch(err=>{
+      status.innerHTML = `<span class="bad">Couldn’t load runs</span> <span class="mono">${err.message}</span>`;
+    });
+  });
 }
 
-function statusEmoji(s){
-  if(s==="success") return "✅";
-  if(s==="failure") return "❌";
-  return "⏳";
-}
+/** ======== DATA (no token) ======== **/
+const CACHE_TTL_MS = 120000; // 2 minutes
+function cacheKey(f){ return `runs:${OWNER}/${REPO}:${f}`; }
 
-async function build(){
-  const grid = document.getElementById("grid");
-  for(const group of CONFIG){
-    const head = el("div","card");
-    head.appendChild(el("div","title",group.repo));
-    grid.appendChild(head);
-
-    for(const w of group.workflows){
-      const card = el("div","card");
-      const top = el("div","row");
-      const left = el("div","title", w.name);
-      const right = el("div","status","⏳");
-      top.appendChild(left); top.appendChild(right);
-      card.appendChild(top);
-
-      const btns = el("div","btns");
-      const runBtn = el("a","btn","Trigger (go)");
-      runBtn.href = w.newFileUrl; runBtn.target="_blank";
-
-      const runsBtn = el("a","btn secondary","View Runs");
-      runsBtn.href = w.actionsUrl; runsBtn.target="_blank";
-
-      const editBtn = el("a","btn ghost","Open Trigger Folder");
-      editBtn.href = `https://github.com/${group.repo}/tree/main/${w.triggerPath}`;
-      editBtn.target = "_blank";
-
-      btns.appendChild(runBtn);
-      btns.appendChild(runsBtn);
-      btns.appendChild(editBtn);
-      card.appendChild(btns);
-
-      const mdDiv = el("div","md","Loading last two outcomes...");
-      card.appendChild(mdDiv);
-
-      grid.appendChild(card);
-
-      // load last-two and set status
-      const md = await fetchText(w.lastTwoMd);
-      if(md.trim()){
-        mdDiv.textContent = md.trim();
-        right.textContent = statusEmoji(parseStatus(md));
-      }else{
-        mdDiv.textContent = "(no history yet)";
-        right.textContent = "⏳";
-      }
-    }
+async function fetchLastTwoRuns(owner, repo, workflowPath) {
+  const key = cacheKey(workflowPath);
+  const now = Date.now();
+  const cached = localStorage.getItem(key);
+  if (cached) {
+    try {
+      const obj = JSON.parse(cached);
+      if (obj.t + CACHE_TTL_MS > now) return obj.d;
+    } catch {}
   }
-  document.getElementById("ts").textContent = new Date().toISOString();
+
+  // GitHub API endpoint for runs of a workflow by file name
+  const api = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowPath)}/runs?per_page=2`;
+  const r = await fetch(api, {headers:{'Accept':'application/vnd.github+json'}});
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  const d = (j.workflow_runs || []).slice(0,2).map(x => ({
+    status: x.conclusion || x.status, // completed|success|failure|queued|in_progress
+    when:   x.run_started_at || x.created_at,
+    html_url: x.html_url
+  }));
+  localStorage.setItem(key, JSON.stringify({t: now, d}));
+  return d;
 }
-build();
+
+function fmtWhen(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString([], {hour12:false});
+  } catch { return iso || ""; }
+}
+
+function emoji(status) {
+  if (!status) return "⏳";
+  const s = status.toLowerCase();
+  if (s.includes("success")) return "✅";
+  if (s.includes("failure") || s.includes("cancel")) return "❌";
+  if (s.includes("queued") || s.includes("in_progress")) return "⏳";
+  return "ℹ️";
+}
+
+function klass(status){
+  if (!status) return "wait";
+  const s = status.toLowerCase();
+  if (s.includes("success")) return "ok";
+  if (s.includes("failure") || s.includes("cancel")) return "bad";
+  return "wait";
+}
+
+function formatRunsHtml(runs) {
+  if (!runs || runs.length === 0) return "(no history yet)";
+  const lis = runs.map(r =>
+    `<li class="${klass(r.status)}">${emoji(r.status)} <a href="${r.html_url}" target="_blank">run</a> — <span class="mono">${(r.status||'').replaceAll('_',' ')}</span> · <span class="mono">${fmtWhen(r.when)}</span></li>`
+  ).join("");
+  return `<ul>${lis}</ul>`;
+}
+
+render();
 </script>
 </body>
 </html>
