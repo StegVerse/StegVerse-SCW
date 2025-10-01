@@ -1,0 +1,47 @@
+name: _reusable: Setup Tools
+on:
+  workflow_call:
+    inputs:
+      actionlint:   {type: boolean, default: true}
+      yamllint:     {type: boolean, default: true}
+      zip:          {type: boolean, default: true}
+      jq:           {type: boolean, default: true}
+      curl:         {type: boolean, default: true}
+      python:       {type: boolean, default: true}
+    outputs:
+      python_version:
+        description: "python3 --version"
+        value: ${{ jobs.setup.outputs.python_version }}
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      python_version: ${{ steps.pyver.outputs.ver }}
+    steps:
+      - name: Apt & CLI tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            $([ "${{ inputs.zip }}"    = 'true' ] && echo zip) \
+            $([ "${{ inputs.jq }}"     = 'true' ] && echo jq) \
+            $([ "${{ inputs.curl }}"   = 'true' ] && echo curl) \
+          || true
+
+      - name: Install yamllint (pip)
+        if: ${{ inputs.yamllint }}
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yamllint
+
+      - name: Install actionlint
+        if: ${{ inputs.actionlint }}
+        run: |
+          curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
+          echo "$PWD" >> $GITHUB_PATH
+
+      - id: pyver
+        if: ${{ inputs.python }}
+        run: |
+          echo "ver=$(python3 --version 2>&1)" >> $GITHUB_OUTPUT
