@@ -1,4 +1,4 @@
-name: Rebuild Kit (Zero-Secret, Auto-Healed, With Breadcrumbs)
+name: Rebuild Kit (Zero-Secret, Self-Contained)
 
 on:
   push:
@@ -7,7 +7,11 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   rebuild:
@@ -21,49 +25,8 @@ jobs:
           set -e
           sudo apt-get update -y
           sudo apt-get install -y zip jq || true
-          python3 -V
-
-      # --- Fix-It precision scan (if script exists) ---
-      - name: Run Fix-It (precision repair)
-        run: |
-          mkdir -p self_healing_out
-          if [ -f scripts/validate_and_fix.py ]; then
-            python3 scripts/validate_and_fix.py --apply || true
-          fi
-
-      # --- Sweep-All broad scan (if script exists) ---
-      - name: Run Sweep-All (broad repair)
-        run: |
-          mkdir -p self_healing_out
-          if [ -f scripts/sweep_all_workflows.py ]; then
-            python3 scripts/sweep_all_workflows.py --apply || true
-          fi
-
-      # --- Breadcrumb logger ---
-      - name: Log trigger metadata
-        run: |
-          mkdir -p self_healing_out
-          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          SHA="$(git rev-parse --short HEAD)"
-          LOG_JSON="self_healing_out/REBUILD_TRIGGER_LOG.json"
-          LOG_MD="self_healing_out/REBUILD_TRIGGER_LOG.md"
-          jq -n --arg ts "$TS" --arg sha "$SHA" --arg repo "$GITHUB_REPOSITORY" \
-            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --argjson triggers "$(jq -R -s -c 'split("\n")|map(select(length>0))' <<< "$(cat .github/trigger/rebuild/* 2>/dev/null || true)")" \
-            '{repo:$repo, sha:$sha, timestamp:$ts, run_url:$run_url, triggers:$triggers}' > "$LOG_JSON"
-          echo "# Rebuild Trigger Log" > "$LOG_MD"
-          echo "- Repo: $GITHUB_REPOSITORY" >> "$LOG_MD"
-          echo "- Commit: $SHA" >> "$LOG_MD"
-          echo "- Timestamp: $TS" >> "$LOG_MD"
-          echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> "$LOG_MD"
-          echo "- Trigger files:" >> "$LOG_MD"
-          for f in .github/trigger/rebuild/*; do
-            [ -f "$f" ] || continue
-            echo "  - $f" >> "$LOG_MD"
-            echo "    \`\`\`" >> "$LOG_MD"
-            cat "$f" >> "$LOG_MD"
-            echo "    \`\`\`" >> "$LOG_MD"
-          done
+          command -v zip || echo "zip not found; will fallback to tar.gz"
+          command -v jq || echo "jq not found; manifest will be minimal"
 
       - name: Seed bundle script if missing
         run: |
@@ -96,16 +59,12 @@ copy_if "public"
 copy_if "docs"
 copy_if "README.md"
 
-# Always include trigger logs
-copy_if "self_healing_out/REBUILD_TRIGGER_LOG.json"
-copy_if "self_healing_out/REBUILD_TRIGGER_LOG.md"
-
-# If nothing got copied, create a placeholder
+# If nothing got copied, create a placeholder so we still produce an artifact
 if [ -z "$(ls -A "$WORK_DIR" 2>/dev/null)" ]; then
   echo "# Rebuild Kit placeholder" > "$WORK_DIR/README_REBUILD_KIT.md"
 fi
 
-# Create manifest
+# Create a small manifest
 mkdir -p "$WORK_DIR/_manifest"
 cat > "$WORK_DIR/_manifest/MANIFEST.json" <<JSON
 {
@@ -117,8 +76,8 @@ cat > "$WORK_DIR/_manifest/MANIFEST.json" <<JSON
     "files_in_bundle": $(find "$WORK_DIR" -type f | wc -l | tr -d ' ')
   },
   "notes": [
-    "This archive was produced after Fix-It + Sweep-All auto-healing.",
-    "Includes breadcrumb trigger logs for traceability."
+    "This archive is produced by scripts/make_rebuild_bundle.sh",
+    "It is safe to unpack on a new machine to reconstruct workflows/scripts/docs."
   ]
 }
 JSON
@@ -133,6 +92,7 @@ else
   echo "out/${BASENAME}.tgz" > "$OUT_DIR/.bundle_path"
 fi
 
+# convenience symlink
 ln -sf "$(cat "$OUT_DIR/.bundle_path")" "$OUT_DIR/latest"
 
 echo "Bundle created: $(cat "$OUT_DIR/.bundle_path")"
@@ -142,7 +102,12 @@ SH
 
       - name: Normalize line endings & make executable
         run: |
-          sed -i 's/\r$//' scripts/make_rebuild_bundle.sh || true
+          set -e
+          if command -v dos2unix >/dev/null 2>&1; then
+            dos2unix scripts/make_rebuild_bundle.sh || true
+          else
+            sed -i 's/\r$//' scripts/make_rebuild_bundle.sh || true
+          fi
           chmod +x scripts/make_rebuild_bundle.sh
 
       - name: Build bundle
@@ -153,43 +118,12 @@ SH
 
       - name: Ensure there is *some* file to upload
         run: |
+          set -e
           if [ ! -f "${BUNDLE_PATH}" ]; then
             echo "No bundle found at ${BUNDLE_PATH}. Creating placeholder."
             echo "empty" > out/EMPTY.txt
             echo "BUNDLE_PATH=out/EMPTY.txt" >> $GITHUB_ENV
           fi
-
-      - name: Record outcome (last-two)
-        if: always()
-        run: |
-          set -e
-          mkdir -p self_healing_out
-          echo "STATUS=${{ job.status }}" >> $GITHUB_ENV
-          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          SHA="$(git rev-parse --short HEAD || echo unknown)"
-          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          LEDGER="self_healing_out/TRIGGER_EVENTS_${{ github.workflow }}.jsonl"
-          echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
-
-          # Rebuild "last two" JSON + MD
-          LAST_JSON="self_healing_out/LAST_TWO_rebuild.json"
-          LAST_MD="self_healing_out/LAST_TWO_rebuild.md"
-          tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
-
-          {
-            echo "### Last two Rebuild outcomes"
-            jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
-          } > "$LAST_MD"
-
-      - name: Upload last-two summary (always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: last_two_rebuild
-          path: |
-            self_healing_out/LAST_TWO_rebuild.json
-            self_healing_out/LAST_TWO_rebuild.md
-          if-no-files-found: warn
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
@@ -197,3 +131,11 @@ SH
           name: rebuild_kit_bundle
           path: ${{ env.BUNDLE_PATH }}
           if-no-files-found: warn
+
+  telemetry:
+    needs: [rebuild]
+    if: always()
+    uses: ./.github/workflows/_reusables/telemetry.yml
+    with:
+      basename: rebuild
+      status: ${{ needs.rebuild.result }}
