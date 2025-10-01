@@ -1,0 +1,79 @@
+# StegVerse intent contract — read by guard + auto-triage + supercheck
+version: 1
+
+goals:
+  primary:
+    - "Keep the SCW (StegVerse-SCW) deployable and self-healing."
+    - "Prefer automation + reproducibility over manual steps."
+  secondary:
+    - "Minimize drift and duplicated work; archive experiments to ATTIC/ with context."
+    - "Protect secrets; never store plaintext credentials in repo."
+
+risk_policy:
+  # Level → which changes may auto-apply without human review
+  levels:
+    low:
+      examples:
+        - "Fix YAML syntax, quoting, indentation"
+        - "Add missing workflow triggers"
+        - "Move extra files to ATTIC/ with header"
+      auto_apply: true
+    medium:
+      examples:
+        - "Edit GitHub workflow job logic (non-deploying)"
+        - "Refactor scripts in scripts/** with test coverage"
+      auto_apply: false
+      require_review_from: ["@StegVerse/owners"]
+    high:
+      examples:
+        - "Modify infra/deploy configs, Render hooks, DNS/CDN, secrets integration"
+        - "Change API/worker runtime"
+      auto_apply: false
+      require_review_from: ["@StegVerse/owners"]
+      require_two_maintainers: true
+
+required:
+  dirs: ["scripts", ".github/workflows", "self_healing_out"]
+  files:
+    - ".github/workflows/one_button_supercheck.yml"
+    - ".github/workflows/workflow_preflight.yml"
+    - ".github/workflows/rebuild_kit.yml"
+
+forbidden_globs:
+  - "**/*.env"
+  - "**/secrets.*"
+  - "**/*.pem"
+  - "**/*.key"
+  - "**/*.crt"
+  - "private/**"
+
+review_paths:
+  # Any changes under these paths bump risk to 'high' and block auto-apply
+  - "infra/**"
+  - "api/**"
+  - "worker/**"
+  - "render.yaml"
+  - "netlify.toml"
+  - "vercel.json"
+
+attic_policy:
+  enable: true
+  header:
+    why: "Parked by auto-triage per INTENT"
+    how_to_restore: "Move out of ATTIC/ and re-link imports if needed"
+  exclude:
+    - "docs/**"
+    - "tests/**"
+    - "ATTIC/**"
+
+labels:
+  keeper: "intent:keeper"
+  attic: "intent:attic"
+  risky: "intent:risky"
+
+# Optional: tags used by topic_drift to correlate ideas/threads
+idea_tags:
+  - "stegtalk-core"
+  - "yaml-hygiene"
+  - "self-healing"
+  - "render-stability"
