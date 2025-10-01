@@ -6,107 +6,142 @@
 <title>StegVerse Quick Triggers</title>
 <style>
   :root {
-    --bg:#0f1115; --card:#141821; --text:#e7ecf3; --muted:#9aa4b2; --accent:#3ea6ff; --ok:#23d18b; --bad:#ff5f56;
+    --bg:#0f1115; --card:#141821; --text:#e7ecf3; --muted:#9aa4b2; --accent:#3ea6ff;
+    --ok:#23d18b; --bad:#ff5f56; --warn:#e0c66c; --line:#253042;
   }
-  html,body{background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,sans-serif;margin:0}
-  .wrap{max-width:920px;margin:24px auto;padding:0 16px}
-  h1{font-weight:700;font-size:1.6rem;margin:8px 0 4px}
-  p.lead{color:var(--muted);margin:0 0 18px}
+  html,body{background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,sans-serif;margin:0}
+  .wrap{max-width:980px;margin:24px auto;padding:0 16px}
+  h1{font-weight:700;font-size:1.6rem;margin:6px 0 2px}
+  p.lead{color:var(--muted);margin:0 0 14px}
+  .statusbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0 16px}
+  .chip{border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:.9rem;background:#0d121a;color:var(--muted)}
+  .chip b{color:var(--text)}
+  .ok{color:var(--ok)} .bad{color:var(--bad)} .wait{color:var(--warn)}
   .repo{background:var(--card);border-radius:14px;padding:16px 14px;margin:14px 0;box-shadow:0 2px 14px rgba(0,0,0,.25)}
-  .repo h2{font-size:1.1rem;margin:0 0 8px}
+  .repo h2{font-size:1.12rem;margin:0 0 8px}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
   .btn{appearance:none;border:0;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
   .primary{background:#111827;color:#fff;border:1px solid #222c3a}
   .primary:hover{background:#0c1320}
   .accent{background:var(--accent);color:#04121f}
   .ghost{background:transparent;border:1px solid #2a3242;color:var(--text)}
-  .tag{font-size:.85rem;border:1px solid #2a3242;border-radius:8px;padding:4px 8px;color:var(--muted)}
-  .status{margin-top:8px;border-top:1px dashed #253042;padding-top:8px;color:var(--muted);font-size:.95rem}
+  .hint{font-size:.9rem;color:var(--muted)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .status{margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;color:var(--muted);font-size:.95rem}
   .status ul{margin:6px 0 0 18px;padding:0}
   .status li{margin:2px 0}
-  .ok{color:var(--ok)} .bad{color:var(--bad)} .wait{color:#e0c66c}
-  .hint{font-size:.9rem;color:var(--muted);margin-top:6px}
-  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-  .footer{color:#718096;font-size:.85rem;margin:24px 0 12px}
+  .smallchips{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .footer{color:#718096;font-size:.85rem;margin:20px 0 12px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>StegVerse Quick Triggers</h1>
-  <p class="lead">Tap a trigger to open the GitHub edit screen for the trigger file. <b>Commit changes</b> to fire the workflow.
-    Latest results (last two runs) are shown below each trigger.</p>
+  <p class="lead">
+    Tap <b>Open trigger file → Commit to run</b> (push-trigger) or use <b>Run workflow</b> (manual
+    <span class="mono">workflow_dispatch</span>). Last two results are fetched below each card.
+  </p>
+
+  <!-- Global live status -->
+  <div id="statusbar" class="statusbar">
+    <span class="chip">API: <b id="apiStat" class="wait">…</b></span>
+    <span class="chip">Rate limit rem: <b id="rateLeft" class="wait">…</b></span>
+    <span class="chip">GitHub Status: <b id="ghStatus" class="wait">…</b></span>
+  </div>
 
   <div id="mount"></div>
 
-  <div class="footer">No tokens used. API results cached in your browser for 2 minutes to avoid rate limits.</div>
+  <div class="footer">No tokens used. Results cached locally for ~2 minutes to avoid rate limits.</div>
 </div>
 
 <script>
-/** ======== CONFIG (edit me) ======== **/
+/** ======== CONFIG ======== **/
 const OWNER = "StegVerse";
 const REPO  = "StegVerse-SCW";
 
-// Each entry renders one card on the page.
+/* Backup repo for mirrored trigger folders (auto-linked if primary trigger folder missing) */
+const BACKUP = {
+  owner: "StegVerse",
+  repo:  "StegVerse-Trigger-Backups",
+  subdir: "StegVerse-SCW"   // mirror puts this repo's triggers under this subdir
+};
+
+/* Workflows to control from this page */
 const WORKFLOWS = [
   {
     label: "Supercheck",
     workflowFile: ".github/workflows/one_button_supercheck.yml",
     triggerPath:  ".github/trigger/supercheck/run-%F0%9F%9A%80.txt", // URL-encoded 🚀
-    triggerContent: "go\n",
-    viewRunsUrl: `https://github.com/${OWNER}/${REPO}/actions/workflows/one_button_supercheck.yml`,
-    triggerFolderUrl: `https://github.com/${OWNER}/${REPO}/tree/main/.github/trigger/supercheck`
+    triggerContent: "go\n"
   },
   {
     label: "Preflight",
     workflowFile: ".github/workflows/workflow_preflight.yml",
     triggerPath:  ".github/trigger/preflight/run-1.txt",
-    triggerContent: "go\n",
-    viewRunsUrl: `https://github.com/${OWNER}/${REPO}/actions/workflows/workflow_preflight.yml`,
-    triggerFolderUrl: `https://github.com/${OWNER}/${REPO}/tree/main/.github/trigger/preflight`
+    triggerContent: "go\n"
   },
   {
     label: "Rebuild Kit",
     workflowFile: ".github/workflows/rebuild_kit.yml",
     triggerPath:  ".github/trigger/rebuild/run-1.txt",
-    triggerContent: "go\n",
-    viewRunsUrl: `https://github.com/${OWNER}/${REPO}/actions/workflows/rebuild_kit.yml`,
-    triggerFolderUrl: `https://github.com/${OWNER}/${REPO}/tree/main/.github/trigger/rebuild`
-  }
+    triggerContent: "go\n"
+  },
 ];
 
-// GitHub “new file” URL helper (prefill path + body)
-function editNewFileUrl(path, content, message="trigger: run") {
-  // For “create new file” with preset path we use /new/<branch>?filename=…&value=…
+/** ======== HELPERS ======== **/
+function wfRunsUrl(workflowPath){
+  return `https://github.com/${OWNER}/${REPO}/actions/workflows/${encodeURIComponent(workflowPath)}`;
+}
+function triggerFolderUrl(triggerPath){
+  const folder = triggerPath.split("/").slice(0,-1).join("/");
+  return `https://github.com/${OWNER}/${REPO}/tree/main/${folder}`;
+}
+// “Create new file” UI with preset path & contents (push-trigger flow)
+function editNewFileUrl(path, content, message="trigger: run"){
   const base = `https://github.com/${OWNER}/${REPO}/new/main`;
-  const params = new URLSearchParams({
-    filename: path,
-    value: content,
-    message
-  });
+  const params = new URLSearchParams({ filename: path, value: content, message });
   return `${base}?${params.toString()}`;
+}
+const el = (t, props={}, ...kids) => {
+  const n = document.createElement(t);
+  for (const [k,v] of Object.entries(props)){
+    if (k==="class") n.className = v;
+    else if (k==="href") n.setAttribute("href", v);
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2).toLowerCase(), v);
+    else n[k]=v;
+  }
+  kids.forEach(k=>n.append(k));
+  return n;
+};
+function emoji(status){
+  if(!status) return "⏳";
+  const s = (status||"").toLowerCase();
+  if (s.includes("success")) return "✅";
+  if (s.includes("failure") || s.includes("cancel")) return "❌";
+  if (s.includes("queued") || s.includes("in_progress")) return "⏳";
+  return "ℹ️";
+}
+function klass(status){
+  if(!status) return "wait";
+  const s = status.toLowerCase();
+  if (s.includes("success")) return "ok";
+  if (s.includes("failure") || s.includes("cancel")) return "bad";
+  return "wait";
+}
+function fmtWhen(iso){
+  try{ return new Date(iso).toLocaleString([], {hour12:false}); }catch{ return iso||""; }
 }
 
 /** ======== RENDER ======== **/
-const el = (t, props={}, ...kids) => {
-  const n = document.createElement(t);
-  Object.entries(props).forEach(([k,v])=>{
-    if (k === "class") n.className = v;
-    else if (k.startsWith("on")) n.addEventListener(k.slice(2).toLowerCase(), v);
-    else if (k === "href") n.setAttribute("href", v);
-    else n[k]=v;
-  });
-  kids.forEach(k => n.append(k));
-  return n;
-};
-
-function render() {
-  const mount = document.getElementById("mount");
+const mount = document.getElementById("mount");
+function render(){
   mount.innerHTML = "";
-  // Repo header
+
+  // Repo header card
   mount.append(
     el("div", {class:"repo"},
       el("h2", {}, `${OWNER}/${REPO}`),
-      el("div", {class:"hint"}, "Open trigger file → Commit to run (GitHub will ask you to log in if needed).")
+      el("div", {class:"hint"}, "Open trigger file → Commit to run. Or use the green “Run workflow” on the workflow page.")
     )
   );
 
@@ -115,90 +150,152 @@ function render() {
     card.append(el("h2", {}, w.label));
 
     const triggerHref = editNewFileUrl(w.triggerPath, w.triggerContent, `chore(trigger): ${w.label.toLowerCase()}`);
+    const runsHref    = wfRunsUrl(w.workflowFile);
+    const folderHref  = triggerFolderUrl(w.triggerPath);
+
     const row = el("div", {class:"row"},
       el("a", {class:"btn primary", href: triggerHref, target:"_blank"},
         "Open trigger file → Commit to run"),
-      el("a", {class:"btn accent", href: w.viewRunsUrl, target:"_blank"}, "View Runs"),
-      el("a", {class:"btn ghost", href: w.triggerFolderUrl, target:"_blank"}, "Open Trigger Folder"),
-      el("span", {class:"tag mono"}, w.workflowFile)
+      el("a", {class:"btn accent", href: runsHref, target:"_blank"}, "Run workflow"),
+      el("a", {class:"btn ghost", href: runsHref, target:"_blank"}, "View runs"),
+      el("a", {class:"btn ghost", href: folderHref, target:"_blank", id:`openFolder-${w.label}`}, "Open trigger folder"),
+      el("span", {class:"chip mono"}, w.workflowFile)
     );
     card.append(row);
 
+    // Small availability chips (Workflow file / Trigger folder)
+    const chips = el("div", {class:"smallchips"},
+      el("span", {class:"chip wait", id:`wf-${w.label}`}, "Workflow file: …"),
+      el("span", {class:"chip wait", id:`tg-${w.label}`}, "Trigger folder: …")
+    );
+    card.append(chips);
+
+    // Last two runs
     const status = el("div", {class:"status"}, "Fetching recent runs…");
     card.append(status);
     mount.append(card);
 
-    // Fill last-two status
-    fetchLastTwoRuns(OWNER, REPO, w.workflowFile).then(data=>{
-      status.innerHTML = formatRunsHtml(data);
-    }).catch(err=>{
-      status.innerHTML = `<span class="bad">Couldn’t load runs</span> <span class="mono">${err.message}</span>`;
+    // Fetch last two runs
+    fetchLastTwoRuns(w.workflowFile)
+      .then(data => status.innerHTML = formatRunsHtml(data))
+      .catch(err => status.innerHTML = `<span class="bad">Couldn’t load runs</span> <span class="mono">(${err.message})</span>`);
+
+    // Probe workflow file
+    probeExists(w.workflowFile, true).then(ok => {
+      const e = document.getElementById(`wf-${w.label}`);
+      e.textContent = `Workflow file: ${ok ? "OK" : "missing"}`;
+      e.className = `chip ${ok ? "ok" : "bad"}`;
+    }).catch(() => {
+      const e = document.getElementById(`wf-${w.label}`);
+      e.textContent = "Workflow file: unknown";
+      e.className = "chip wait";
+    });
+
+    // Probe trigger folder; if missing, link to backup mirror
+    const tfolder = w.triggerPath.split("/").slice(0,-1).join("/");
+    probeExists(tfolder, false).then(ok => {
+      const e = document.getElementById(`tg-${w.label}`);
+      e.textContent = `Trigger folder: ${ok ? "OK" : "missing"}`;
+      e.className = `chip ${ok ? "ok" : "wait"}`; // warn color if missing
+
+      if (!ok) {
+        const backupUrl = `https://github.com/${BACKUP.owner}/${BACKUP.repo}/tree/main/${encodeURIComponent(BACKUP.subdir)}/${tfolder}`;
+        const btn = document.getElementById(`openFolder-${w.label}`);
+        btn.textContent = "Open backup folder";
+        btn.href = backupUrl;
+      }
+    }).catch(() => {
+      const e = document.getElementById(`tg-${w.label}`);
+      e.textContent = "Trigger folder: unknown";
+      e.className = "chip wait";
     });
   });
 }
 
 /** ======== DATA (no token) ======== **/
-const CACHE_TTL_MS = 120000; // 2 minutes
-function cacheKey(f){ return `runs:${OWNER}/${REPO}:${f}`; }
-
-async function fetchLastTwoRuns(owner, repo, workflowPath) {
-  const key = cacheKey(workflowPath);
-  const now = Date.now();
-  const cached = localStorage.getItem(key);
-  if (cached) {
-    try {
-      const obj = JSON.parse(cached);
-      if (obj.t + CACHE_TTL_MS > now) return obj.d;
-    } catch {}
-  }
-
-  // GitHub API endpoint for runs of a workflow by file name
-  const api = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowPath)}/runs?per_page=2`;
-  const r = await fetch(api, {headers:{'Accept':'application/vnd.github+json'}});
+const TTL = 120000; // 2 minutes
+function cache(key, val){ localStorage.setItem(key, JSON.stringify({t:Date.now(), v:val})); }
+function getCache(key){
+  try{
+    const o = JSON.parse(localStorage.getItem(key)||"");
+    if (o.t + TTL > Date.now()) return o.v;
+  }catch{}
+  return null;
+}
+async function fetchJSON(url){
+  const r = await fetch(url, {headers:{Accept:"application/vnd.github+json"}});
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const j = await r.json();
-  const d = (j.workflow_runs || []).slice(0,2).map(x => ({
-    status: x.conclusion || x.status, // completed|success|failure|queued|in_progress
-    when:   x.run_started_at || x.created_at,
+  return r.json();
+}
+async function fetchLastTwoRuns(workflowPath){
+  const key = `runs:${OWNER}/${REPO}:${workflowPath}`;
+  const c = getCache(key);
+  if (c) return c;
+  const api = `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${encodeURIComponent(workflowPath)}/runs?per_page=2`;
+  const j = await fetchJSON(api);
+  const d = (j.workflow_runs||[]).slice(0,2).map(x => ({
+    status: x.conclusion || x.status,
+    when: x.run_started_at || x.created_at,
     html_url: x.html_url
   }));
-  localStorage.setItem(key, JSON.stringify({t: now, d}));
+  cache(key, d);
   return d;
 }
-
-function fmtWhen(iso) {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString([], {hour12:false});
-  } catch { return iso || ""; }
-}
-
-function emoji(status) {
-  if (!status) return "⏳";
-  const s = status.toLowerCase();
-  if (s.includes("success")) return "✅";
-  if (s.includes("failure") || s.includes("cancel")) return "❌";
-  if (s.includes("queued") || s.includes("in_progress")) return "⏳";
-  return "ℹ️";
-}
-
-function klass(status){
-  if (!status) return "wait";
-  const s = status.toLowerCase();
-  if (s.includes("success")) return "ok";
-  if (s.includes("failure") || s.includes("cancel")) return "bad";
-  return "wait";
-}
-
-function formatRunsHtml(runs) {
-  if (!runs || runs.length === 0) return "(no history yet)";
+function formatRunsHtml(runs){
+  if (!runs || runs.length===0) return "(no history yet)";
   const lis = runs.map(r =>
     `<li class="${klass(r.status)}">${emoji(r.status)} <a href="${r.html_url}" target="_blank">run</a> — <span class="mono">${(r.status||'').replaceAll('_',' ')}</span> · <span class="mono">${fmtWhen(r.when)}</span></li>`
   ).join("");
   return `<ul>${lis}</ul>`;
 }
+// Probe existence: isFile=true (expect type=file), false (expect directory -> array)
+async function probeExists(path, isFile){
+  const key = `exists:${OWNER}/${REPO}:${path}:${isFile?"f":"d"}`;
+  const c = getCache(key); if (c!=null) return c;
+  const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(path)}`;
+  try{
+    const j = await fetchJSON(url);
+    const ok = isFile ? (j && j.type==="file") : Array.isArray(j);
+    cache(key, ok);
+    return ok;
+  }catch{
+    cache(key, false);
+    return false;
+  }
+}
+
+/** ======== GLOBAL STATUS ======== **/
+async function loadGlobalStatus(){
+  const apiEl = document.getElementById("apiStat");
+  const rateEl = document.getElementById("rateLeft");
+  const ghEl = document.getElementById("ghStatus");
+
+  // 1) REST API reachability + remaining unauthenticated limit
+  try{
+    const j = await fetchJSON("https://api.github.com/rate_limit");
+    const rem = j.resources && j.resources.core ? j.resources.core.remaining : null;
+    apiEl.textContent = "OK"; apiEl.className = "ok";
+    rateEl.textContent = rem==null ? "n/a" : String(rem);
+    rateEl.className = (rem==null ? "wait" : (rem>5 ? "ok" : "wait"));
+  }catch{
+    apiEl.textContent = "down"; apiEl.className = "bad";
+    rateEl.textContent = "—"; rateEl.className = "bad";
+  }
+
+  // 2) GitHub global service status
+  try{
+    const s = await (await fetch("https://www.githubstatus.com/api/v2/summary.json")).json();
+    const ind = (s.status && s.status.indicator) ? s.status.indicator : "unknown";
+    const desc = (s.status && s.status.description) ? s.status.description : "Unknown";
+    ghEl.textContent = desc;
+    ghEl.className = (ind==="none" ? "ok" : (ind==="minor" || ind==="maintenance" ? "wait" : "bad"));
+  }catch{
+    ghEl.textContent = "unavailable"; ghEl.className = "wait";
+  }
+}
 
 render();
+loadGlobalStatus();
 </script>
 </body>
 </html>
