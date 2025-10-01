@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "attic": {
+    "move_if_globs": [
+      "experiments/**",
+      "tmp/**",
+      "scratch/**"
+    ],
+    "exclude_globs": [
+      "docs/**",
+      "tests/**"
+    ]
+  },
+  "remove_forbidden": [
+    "**/*.env",
+    "**/secrets.*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.crt",
+    "private/**"
+  ],
+  "scaffold": {
+    "dirs": ["scripts", ".github/workflows"],
+    "files": []
+  }
+}
