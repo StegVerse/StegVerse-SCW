@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "fixes": [
+    {
+      "id": "yaml_quote_secrets",
+      "match": { "file_glob": ".github/workflows/*.yml", "contains": ["${{", "secrets."] },
+      "description": "Quote GitHub expressions using secrets to avoid truthy errors",
+      "action": { "type": "regex_replace", "pattern": "(if:\\s*)(secrets\\.[^\\s]+)", "repl": "\\1\"\\2\"" },
+      "risk": "low"
+    },
+    {
+      "id": "artifact_name_sanitize",
+      "match": { "file_glob": ".github/workflows/*.yml", "contains": ["upload-artifact"] },
+      "description": "Remove illegal characters in artifact names",
+      "action": { "type": "yaml_patch", "path": "jobs..steps[].with.name", "sanitize": true },
+      "risk": "low"
+    }
+  ]
+}
