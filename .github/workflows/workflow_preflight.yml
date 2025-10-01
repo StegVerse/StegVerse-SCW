@@ -1,4 +1,4 @@
-name: Workflow Preflight (Validate & Fix + Breadcrumb)
+name: Workflow Preflight (Validate & Fix)
 
 on:
   workflow_dispatch:
@@ -18,34 +18,34 @@ on:
 
 permissions:
   contents: write
-  checks: write
+  pull-requests: write
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   preflight:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Ensure tools
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y jq curl || true
+          sudo apt-get install -y jq curl
           python3 -V
 
-      - name: Log trigger (breadcrumb trail)
-        run: |
-          mkdir -p self_healing_out
-          echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"run_id\":\"${GITHUB_RUN_ID}\",\"attempt\":${GITHUB_RUN_ATTEMPT},\"actor\":\"${GITHUB_ACTOR}\",\"trigger\":\"${{ github.event_name }}:${{ github.ref }}\",\"run_url\":\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" >> self_healing_out/TRIGGER_EVENTS.jsonl
-
-      # Seed minimal fallback (only if your repo doesn't already have the script)
+      # Fallback validator (ensures we always emit a report)
       - name: Seed fallback validator if missing
         run: |
           set -e
           mkdir -p scripts self_healing_out .github/workflows
           if [ ! -f scripts/validate_and_fix.py ]; then
             cat > scripts/validate_and_fix.py <<'PY'
-#!/usr/bin/env python3
+#\!/usr/bin/env python3
 import os, json, sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,41 +83,9 @@ PY
           if git diff --cached --quiet; then
             echo "No workflow changes to commit."
           else
-            git commit -m "chore: normalize workflows (auto-fix common YAML issues) [skip ci]"
+            git commit -m "chore: normalize workflows (auto-fix common YAML issues)"
             git push origin HEAD:main || true
           fi
-
-      - name: Record outcome (last-two)
-        if: always()
-        run: |
-          set -e
-          mkdir -p self_healing_out
-          echo "STATUS=${{ job.status }}" >> $GITHUB_ENV
-          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          SHA="$(git rev-parse --short HEAD || echo unknown)"
-          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          LEDGER="self_healing_out/TRIGGER_EVENTS_${{ github.workflow }}.jsonl"
-          echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
-
-          # Rebuild "last two" JSON + MD
-          LAST_JSON="self_healing_out/LAST_TWO_preflight.json"
-          LAST_MD="self_healing_out/LAST_TWOpreflight.md"
-          tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
-
-          {
-            echo "### Last two Preflight outcomes"
-            jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
-          } > "$LAST_MD"
-
-      - name: Upload last-two summary (always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: last_two_preflight
-          path: |
-            self_healing_out/LAST_TWO_preflight.json
-            self_healing_out/LAST_TWO_preflight.md
-          if-no-files-found: warn
 
       - name: Ensure report dir even on failure
         if: always()
@@ -136,3 +104,11 @@ PY
           path: |
             self_healing_out/**
           if-no-files-found: warn
+
+  telemetry:
+    needs: [preflight]
+    if: always()
+    uses: ./.github/workflows/_reusables/telemetry.yml
+    with:
+      basename: preflight
+      status: ${{ needs.preflight.result }}
