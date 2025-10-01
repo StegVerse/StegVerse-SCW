@@ -100,12 +100,12 @@ PY
           echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
 
           # Rebuild "last two" JSON + MD
-          LAST_JSON="self_healing_out/LAST_TWO_<NAME>.json"
-          LAST_MD="self_healing_out/LAST_TWO_<NAME>.md"
+          LAST_JSON="self_healing_out/LAST_TWO_preflight.json"
+          LAST_MD="self_healing_out/LAST_TWOpreflight.md"
           tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
 
           {
-            echo "### Last two <NAME> outcomes"
+            echo "### Last two Preflight outcomes"
             jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
           } > "$LAST_MD"
 
@@ -113,10 +113,10 @@ PY
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: last_two_<preflight>
+          name: last_two_preflight
           path: |
-            self_healing_out/LAST_TWO_<preflight>.json
-            self_healing_out/LAST_TWO_<preflight>.md
+            self_healing_out/LAST_TWO_preflight.json
+            self_healing_out/LAST_TWO_preflight.md
           if-no-files-found: warn
 
       - name: Ensure report dir even on failure
