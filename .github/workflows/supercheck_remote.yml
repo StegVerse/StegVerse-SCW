@@ -1,0 +1,28 @@
+name: Supercheck (Remote Healer)
+
+on:
+  workflow_dispatch:
+    inputs:
+      auto_apply:
+        required: false
+        default: "false"
+      auto_commit:
+        required: false
+        default: "false"
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/trigger/supercheck-remote/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  security-events: write
+
+jobs:
+  remote-supercheck:
+    uses: StegVerse/stegverse-healer/.github/workflows/supercheck_core.yml@v1
+    with:
+      auto_apply: ${{ github.event.inputs.auto_apply || 'false' }}
+      auto_commit: ${{ github.event.inputs.auto_commit || 'false' }}
