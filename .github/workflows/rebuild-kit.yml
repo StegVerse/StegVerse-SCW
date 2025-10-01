@@ -172,12 +172,12 @@ SH
           echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
 
           # Rebuild "last two" JSON + MD
-          LAST_JSON="self_healing_out/LAST_TWO_<NAME>.json"
-          LAST_MD="self_healing_out/LAST_TWO_<NAME>.md"
+          LAST_JSON="self_healing_out/LAST_TWO_rebuild.json"
+          LAST_MD="self_healing_out/LAST_TWO_rebuild.md"
           tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
 
           {
-            echo "### Last two <NAME> outcomes"
+            echo "### Last two Rebuild outcomes"
             jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
           } > "$LAST_MD"
 
@@ -185,10 +185,10 @@ SH
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: last_two_<rebuild>
+          name: last_two_rebuild
           path: |
-            self_healing_out/LAST_TWO_<rebuild>.json
-            self_healing_out/LAST_TWO_<rebuild>.md
+            self_healing_out/LAST_TWO_rebuild.json
+            self_healing_out/LAST_TWO_rebuild.md
           if-no-files-found: warn
 
       - name: Upload bundle artifact
