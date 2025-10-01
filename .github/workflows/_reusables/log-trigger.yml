@@ -1,0 +1,15 @@
+name: _reusable: Log Trigger
+on:
+  workflow_call:
+    inputs:
+      label:
+        type: string
+        default: default
+jobs:
+  log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Append trigger event line
+        run: |
+          mkdir -p self_healing_out
+          echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"run_id\":\"${GITHUB_RUN_ID}\",\"attempt\":${GITHUB_RUN_ATTEMPT},\"actor\":\"${GITHUB_ACTOR}\",\"workflow\":\"${{ inputs.label }}\",\"event\":\"${GITHUB_EVENT_NAME}\",\"ref\":\"${GITHUB_REF}\",\"run_url\":\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" >> self_healing_out/TRIGGER_EVENTS.jsonl
