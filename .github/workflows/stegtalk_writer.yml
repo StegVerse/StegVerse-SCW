@@ -1,0 +1,136 @@
+name: StegTalk Writer
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/trigger/stegtalk/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  write-stegtalk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure Python
+        run: python3 -V
+
+      - name: Seed generator if missing
+        run: |
+          mkdir -p scripts
+          if [ ! -f scripts/generate_stegtalk.py ]; then
+            cat > scripts/generate_stegtalk.py <<'PY'
+#!/usr/bin/env python3
+import os, textwrap, pathlib, time, json
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+def write(p: pathlib.Path, body: str):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    existing = p.read_text(encoding="utf-8") if p.exists() else ""
+    if existing != body:
+        p.write_text(body, encoding="utf-8")
+        return True
+    return False
+
+def main():
+    changed = []
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    api_main = textwrap.dedent('''\
+    # api/stegtalk_main.py
+    import os
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app = FastAPI(title="StegTalk API", version="0.1.0")
+
+    UI_ORIGINS = [o.strip() for o in os.getenv("UI_ORIGINS", "").split(",") if o.strip()]
+    CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL","0") == "1"
+    if CORS_ALLOW_ALL:
+        app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+    else:
+        app.add_middleware(CORSMiddleware, allow_origins=UI_ORIGINS or ["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+
+    @app.get("/healthz")
+    def healthz():
+        return {"ok": True, "service": "stegtalk", "ts": __import__("time").time()}
+
+    @app.get("/v1/stegtalk/echo")
+    def echo(q: str = "hello"):
+        return {"echo": q}
+    ''')
+
+    worker_py = textwrap.dedent('''\
+    # worker_stegtalk.py
+    import os, time, json, queue, threading
+
+    Q = queue.Queue()
+
+    def worker():
+        while True:
+            try:
+                item = Q.get(timeout=1)
+            except queue.Empty:
+                continue
+            # simulate processing
+            time.sleep(0.2)
+            print("Processed:", item)
+
+    if __name__ == "__main__":
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        for i in range(5):
+            Q.put({"i": i, "task": "demo"})
+        t.join(timeout=2)
+    ''')
+
+    reqs = "fastapi\nuvicorn\n"
+
+    files = {
+        ROOT/"api"/"stegtalk_main.py": api_main,
+        ROOT/"worker_stegtalk.py": worker_py,
+        ROOT/"api"/"requirements.txt": reqs,
+    }
+
+    for p, body in files.items():
+        if write(p, body):
+            changed.append(str(p.relative_to(ROOT)))
+
+    outdir = ROOT/"self_healing_out"; outdir.mkdir(parents=True, exist_ok=True)
+    log = {"ts": ts, "generated": changed}
+    (outdir/"STEGTALK_GENERATE.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
+    print(json.dumps(log, indent=2))
+
+if __name__ == "__main__":
+    main()
+PY
+          fi
+
+      - name: Generate/Update StegTalk
+        run: python3 scripts/generate_stegtalk.py
+
+      - name: Commit StegTalk updates (if any)
+        run: |
+          set -e
+          git config user.name "stegtalk-writer-bot"
+          git config user.email "bot@stegverse.local"
+          git add api/stegtalk_main.py api/requirements.txt worker_stegtalk.py self_healing_out/STEGTALK_GENERATE.json || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "stegtalk(writer): sync generated files"
+            git push origin HEAD:main || true
+          fi
+
+      - name: Upload writer log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stegtalk_writer
+          path: self_healing_out/STEGTALK_GENERATE.json
+          if-no-files-found: warn
