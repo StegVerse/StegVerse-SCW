@@ -1,0 +1,70 @@
+name: _reusable: Runtime Diagnostics (API + Worker)
+on:
+  workflow_call:
+    inputs:
+      api_base:    { type: string, required: false, default: "" }
+      queue_key:   { type: string, required: false, default: "queue:runs" }
+      timeout_sec: { type: string, required: false, default: "75" }
+      poll_sec:    { type: string, required: false, default: "3" }
+    outputs:
+      ok:
+        value: ${{ jobs.diag.outputs.ok }}
+      diag_path:
+        value: ${{ jobs.diag.outputs.diag_path }}
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.outs.outputs.ok }}
+      diag_path: ${{ steps.outs.outputs.path }}
+    steps:
+      - name: Run diagnostics
+        id: run
+        env:
+          API_BASE:   ${{ inputs.api_base }}
+          TIMEOUT_SEC: ${{ inputs.timeout_sec }}
+          POLL_SEC:   ${{ inputs.poll_sec }}
+        run: |
+          set -euo pipefail
+          API="${API_BASE}"
+          if [ -z "$API" ]; then
+            echo '{"ok":null,"skipped":true}' > supercheck_diag.json
+            exit 0
+          fi
+          sudo apt-get update -y >/dev/null 2>&1 || true
+          sudo apt-get install -y curl jq >/dev/null 2>&1 || true
+          API="$(echo "$API" | sed 's:/*$::')"
+          get(){ curl -sS -w "\n%{http_code}" "$1"; }
+          post(){ curl -sS -w "\n%{http_code}" -X POST "$1" -H "Content-Type: application/json" -d "{}"; }
+          pass=true; report='{"api_base":"'"$API"'","steps":[],"ok":false}'
+          add(){ report=$(jq -c --arg n "$1" --argjson ok $2 --argjson data "$3" --arg e "${4:-}" '.steps += [{"name":$n,"ok":$ok,"data":$data,"error":(($e|length>0)?$e:null)}]' <<<"$report"); }
+          read -r b s < <(get "$API/v1/ops/health");   if [ "$s" = "200" ]; then add "GET /v1/ops/health" true  "$(echo "$b"|jq -cS .)" ""; else add "GET /v1/ops/health" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(get "$API/v1/ops/env/required"); if [ "$s" = "200" ]; then add "GET /v1/ops/env/required" true "$(echo "$b"|jq -cS .)" ""; else add "GET /v1/ops/env/required" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(get "$API/v1/ops/metrics");  if [ "$s" = "200" ]; then PB=$(echo "$b"|jq -r '.processed // 0'); add "GET /v1/ops/metrics (before)" true "$(echo "$b"|jq -cS .)" ""; else PB=0; add "GET /v1/ops/metrics (before)" false null "HTTP $s"; pass=false; fi
+          read -r b s < <(post "$API/v1/ops/queue/test"); if [ "$s" = "200" ] && [ "$(echo "$b"|jq -r '.queued // false')" = "true" ]; then add "POST /v1/ops/queue/test" true "$(echo "$b"|jq -cS .)" ""; else add "POST /v1/ops/queue/test" false null "HTTP $s"; pass=false; fi
+          end=$(( $(date +%s) + ${TIMEOUT_SEC} )); snaps="[]"; PA="$PB"
+          if [ "$pass" = true ]; then
+            while [ $(date +%s) -lt "$end" ]; do
+              sleep "${POLL_SEC}"
+              read -r b s < <(get "$API/v1/ops/metrics")
+              if [ "$s" = "200" ]; then snaps=$(jq -c --argjson s "$(echo "$b"|jq -cS .)" '.+=[ $s ]' <<<"$snaps"); val=$(echo "$b"|jq -r '.processed // 0'); PA=$val; [ "$PA" -gt "$PB" ] && break; fi
+            done
+            ok=$([ "$PA" -gt "$PB" ] && echo true || echo false)
+            add "Poll metrics until processed increases" "$ok" "$snaps" "before=$PB after=$PA"
+            [ "$ok" = true ] || pass=false
+          fi
+          report=$(jq -c --argjson ok $([ "$pass" = true ] && echo true || echo false) '.ok=$ok' <<<"$report")
+          echo "$report" | jq -S . > supercheck_diag.json
+      - id: outs
+        run: |
+          OK="false"
+          if jq -e '.ok==true' supercheck_diag.json >/dev/null 2>&1; then OK="true"; fi
+          echo "ok=$OK" >> $GITHUB_OUTPUT
+          echo "path=supercheck_diag.json" >> $GITHUB_OUTPUT
+      - name: Upload diag
+        uses: ./.github/workflows/_reusables/upload-bundle.yml
+        with:
+          name: runtime_diag
+          paths: |
+            supercheck_diag.json
