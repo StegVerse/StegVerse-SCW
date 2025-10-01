@@ -1,0 +1,47 @@
+name: _reusable: YAML Corrector + Linters
+on:
+  workflow_call:
+    inputs:
+      apply:
+        type: boolean
+        default: true
+jobs:
+  yamlfix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/workflows/_reusables/setup-tools.yml
+
+      - name: Install ruamel.yaml
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install ruamel.yaml
+
+      - name: Run YAML Corrector
+        run: |
+          mkdir -p self_healing_out
+          if [ -f scripts/yaml_corrector_v2.py ]; then
+            if ${{ inputs.apply }}; then
+              python3 scripts/yaml_corrector_v2.py --apply || true
+            else
+              python3 scripts/yaml_corrector_v2.py || true
+            fi
+          else
+            echo "# YAML Corrector: script missing (scripts/yaml_corrector_v2.py)" > self_healing_out/YAML_CORRECTOR_REPORT.md
+            echo "{}" > self_healing_out/YAML_CORRECTOR_REPORT.json
+          fi
+
+      - name: Lint with actionlint + yamllint
+        continue-on-error: true
+        run: |
+          ./actionlint -color -shellcheck= || true
+          yamllint -f parsable .github/workflows || true
+
+      - name: Upload YAML bundle
+        uses: ./.github/workflows/_reusables/upload-bundle.yml
+        with:
+          name: yaml_corrector_bundle
+          paths: |
+            self_healing_out/YAML_CORRECTOR_REPORT.*
+            .github/workflows/**
