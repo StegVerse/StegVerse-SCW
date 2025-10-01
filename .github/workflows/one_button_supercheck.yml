@@ -284,37 +284,13 @@ PY
           cat self_healing_out/AUTO_TRIAGE_REPORT.md >> supercheck_report.md || true
           echo "" >> supercheck_report.md
 
-      - name: Record outcome (last-two)
+      - name: telemetry
+        needs: [supercheck]
         if: always()
-        run: |
-          set -e
-          mkdir -p self_healing_out
-          echo "STATUS=${{ job.status }}" >> $GITHUB_ENV
-          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          SHA="$(git rev-parse --short HEAD || echo unknown)"
-          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          LEDGER="self_healing_out/TRIGGER_EVENTS_${{ github.workflow }}.jsonl"
-          echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
-
-          # Rebuild "last two" JSON + MD
-          LAST_JSON="self_healing_out/LAST_TWO_supercheck.json"
-          LAST_MD="self_healing_out/LAST_TWO_supercheck.md"
-          tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
-
-          {
-            echo "### Last two Supercheck outcomes"
-            jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
-          } > "$LAST_MD"
-
-      - name: Upload last-two summary (always)
-        if: always()
-        uses: actions/upload-artifact@v4
+        uses: ./.github/workflows/_reusables/telemetry.yml
         with:
-          name: last_two_supercheck
-          path: |
-            self_healing_out/LAST_TWO_supercheck.json
-            self_healing_out/LAST_TWO_supercheck.md
-          if-no-files-found: warn
+          basename: supercheck
+          status: ${{ needs.supercheck.result }}
 
       # ---- Stage H: Upload Final Bundle ----
       - name: Upload Supercheck Bundle
