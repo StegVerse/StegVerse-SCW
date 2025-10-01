@@ -1,0 +1,47 @@
+name: Intent Guard
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+  push:
+    paths:
+      - ".github/trigger/intent/**"
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    uses: ./.github/workflows/_reusables/setup-tools.yml
+    with:
+      actionlint: false
+      yamllint:   false
+      jq:         true
+      curl:       false
+      zip:        false
+
+  guard:
+    needs: [setup]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install pyyaml
+      - name: Run intent guard
+        run: |
+          python3 scripts/intent_guard.py || true
+      - name: Upload report
+        uses: ./.github/workflows/_reusables/upload-bundle.yml
+        with:
+          name: intent_guard
+          paths: |
+            self_healing_out/INTENT_GUARD.*
+      - name: Fail if guard errors detected
+        run: |
+          jq -e '.errors | length == 0' self_healing_out/INTENT_GUARD.json >/dev/null || {
+            echo "::error::Intent guard found errors."
+            exit 1
+          }
