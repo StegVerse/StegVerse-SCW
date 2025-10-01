@@ -1,0 +1,76 @@
+name: Backup Trigger Folders
+
+on:
+  push:
+    paths:
+      - ".github/trigger/**"
+  schedule:
+    - cron: "37 3 * * *"  # nightly mirror
+  workflow_dispatch: {}
+
+permissions:
+  contents: read  # read current repo
+
+env:
+  BACKUP_OWNER: StegVerse
+  BACKUP_REPO:  StegVerse-Trigger-Backups
+  # where to place the mirrored tree in the backup repo
+  BACKUP_SUBDIR: StegVerse-SCW
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare bundle of trigger folders
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # Collect only trigger trees; extend if you add more
+          if [ -d ".github/trigger" ]; then
+            tar -czf out/trigger.tgz .github/trigger
+          else
+            echo "No .github/trigger directory in source."
+            # still create an empty placeholder to keep the job green
+            mkdir -p .github/trigger; tar -czf out/trigger.tgz .github/trigger
+          fi
+
+      - name: Checkout backup repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BACKUP_OWNER }}/${{ env.BACKUP_REPO }}
+          token: ${{ secrets.BACKUP_PAT }}
+          path: backup
+
+      - name: Unpack into backup subtree
+        run: |
+          set -euo pipefail
+          DEST="backup/${BACKUP_SUBDIR}"
+          rm -rf "${DEST}"
+          mkdir -p "${DEST}"
+          tar -xzf out/trigger.tgz -C "${DEST}"
+          # Optional: stamp a manifest
+          mkdir -p "${DEST}/_meta"
+          jq -n --arg repo "${{ github.repository }}" \
+                --arg sha  "${{ github.sha }}" \
+                --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{source:$repo, sha:$sha, mirrored_at:$time}' \
+            > "${DEST}/_meta/manifest.json"
+
+      - name: Commit + push backup (only if changed)
+        run: |
+          set -e
+          cd backup
+          git config user.name  "trigger-backup-bot"
+          git config user.email "bot@stegverse.local"
+          if git status --porcelain | grep .; then
+            git add -A
+            git commit -m "mirror: update triggers from ${{ github.repository }}@${{ github.sha }}"
+            git push
+          else
+            echo "No changes to mirror."
+          fi
