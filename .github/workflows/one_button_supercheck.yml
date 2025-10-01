@@ -44,11 +44,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 0) Setup tools (inline)
   setup:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Install base tools
         run: |
           set -e
@@ -56,12 +58,14 @@ jobs:
           sudo apt-get install -y jq curl zip
           python3 -V
 
-  # 1) Breadcrumb logging (inline)
   log_trigger:
     needs: [setup]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Log trigger (breadcrumb)
         run: |
           mkdir -p self_healing_out
@@ -73,12 +77,14 @@ jobs:
           path: self_healing_out/TRIGGER_EVENTS.jsonl
           if-no-files-found: warn
 
-  # 2) YAML Corrector + linters (inline)
   yamlfix:
     needs: [setup]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Install YAML tools
         run: |
           python3 -m pip install --upgrade pip
@@ -106,12 +112,14 @@ jobs:
             self_healing_out/YAML_CORRECTOR_REPORT.*
           if-no-files-found: warn
 
-  # 3) Runtime diagnostics (inline; skipped if no api_base)
   diag:
     needs: [setup]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Runtime diagnostics (API + Worker)
         id: run
         env:
@@ -156,12 +164,14 @@ jobs:
           path: self_healing_out/supercheck_diag.json
           if-no-files-found: warn
 
-  # 4) Repo audit & drift (inline)
   audit:
     needs: [setup, yamlfix]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Seed helper scripts if missing
         run: |
           set -e
@@ -194,12 +204,14 @@ PY
             self_healing_out/SELF_HEALING_MANIFEST.*
           if-no-files-found: warn
 
-  # 5) Auto-triage (inline)
   triage:
     needs: [audit]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Install deps (PyYAML)
         run: |
           python3 -m pip install --upgrade pip
@@ -271,13 +283,15 @@ PY
             self_healing_out/AUTO_TRIAGE_REPORT.md
           if-no-files-found: warn
 
-  # 6) Commit or PR changes (only if auto_apply)
   commit_or_pr:
     needs: [triage]
     if: ${{ github.event.inputs.auto_apply == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Commit to main or open PR
         env:
           DO_COMMIT: ${{ github.event.inputs.auto_commit }}
@@ -310,12 +324,14 @@ Review the 'supercheck_bundle' artifact for details."
               -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main","maintainer_can_modify":true}')" \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
 
-  # 7) Assemble report (inline)
   assemble:
     needs: [yamlfix, diag, audit, triage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -365,12 +381,14 @@ Review the 'supercheck_bundle' artifact for details."
             _in/**
           if-no-files-found: warn
 
-  # 8) Last-two telemetry (inline)
   telemetry:
     needs: [assemble]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
       - name: Record outcome (last-two)
         if: always()
         run: |
