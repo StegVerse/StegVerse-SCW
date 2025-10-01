@@ -8,7 +8,8 @@
     ],
     "exclude_globs": [
       "docs/**",
-      "tests/**"
+      "tests/**",
+      "ATTIC/**"
     ]
   },
   "remove_forbidden": [
@@ -20,7 +21,7 @@
     "private/**"
   ],
   "scaffold": {
-    "dirs": ["scripts", ".github/workflows"],
+    "dirs": ["scripts", ".github/workflows", "self_healing_out"],
     "files": []
   }
 }
