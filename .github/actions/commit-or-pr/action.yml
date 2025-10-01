@@ -1,0 +1,48 @@
+name: "Commit or PR"
+description: "Commit to main or open PR with current changes"
+inputs:
+  push_to_main:
+    description: "If true, push to main; else create PR"
+    required: true
+    default: "false"
+  branch_base:
+    description: "Base branch for PR"
+    required: false
+    default: "main"
+  commit_message:
+    description: "Commit message"
+    required: false
+    default: "chore: automated changes"
+  pr_title:
+    description: "PR title"
+    required: false
+    default: "Automated changes"
+  pr_body:
+    description: "PR body"
+    required: false
+    default: "Opened by automation"
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -e
+        git config user.name  "automation-bot"
+        git config user.email "bot@stegverse.local"
+        if [ "${{ inputs.push_to_main }}" = "true" ]; then
+          git add -A
+          git commit -m "${{ inputs.commit_message }}" || echo "No changes"
+          git push origin HEAD:${{ inputs.branch_base }} || true
+        else
+          BR="auto/${GITHUB_RUN_ID}"
+          git checkout -b "$BR"
+          git add -A
+          git commit -m "${{ inputs.commit_message }}" || echo "No changes"
+          git push origin "$BR" || true
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$(jq -nc --arg t "${{ inputs.pr_title }}" --arg b "${{ inputs.pr_body }}" --arg head "$BR" --arg base "${{ inputs.branch_base }}" '{"title":$t,"body":$b,"head":$head,"base":$base,"maintainer_can_modify":true}')" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
