@@ -37,6 +37,7 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure tools
+        shell: bash
         run: |
           set -e
           sudo apt-get update -y
@@ -45,28 +46,33 @@ jobs:
           python3 -m pip install --upgrade pip
           pip install ruamel.yaml yamllint
 
-      - name: Seed corrector if missing
+      # Write a tiny compatibility shim without using heredoc (mobile-safe)
+      - name: Seed corrector shim if missing
+        shell: bash
         run: |
           set -e
           mkdir -p scripts self_healing_out
           if [ ! -f scripts/yaml_corrector_v2.py ] && [ -f scripts/yaml_corrector.py ]; then
-            # Minimal shim so either name works
-            cat > scripts/yaml_corrector_v2.py <<'PY'
-#!/usr/bin/env python3
-import runpy, sys, pathlib
-me = pathlib.Path(__file__).resolve()
-legacy = me.with_name("yaml_corrector.py")
-if not legacy.exists():
-    print("ERROR: scripts/yaml_corrector.py not found", file=sys.stderr)
-    sys.exit(1)
-sys.argv = ["yaml_corrector.py"] + ([ "--apply" ] if "--apply" in sys.argv else [])
-runpy.run_path(str(legacy), run_name="__main__")
-PY
+            printf '%s\n' \
+'#!/usr/bin/env python3' \
+'import runpy, sys, pathlib' \
+'me = pathlib.Path(__file__).resolve()' \
+'legacy = me.with_name("yaml_corrector.py")' \
+'if not legacy.exists():' \
+'    print("ERROR: scripts/yaml_corrector.py not found", file=sys.stderr)' \
+'    sys.exit(1)' \
+'argv = ["yaml_corrector.py"]' \
+'if "--apply" in sys.argv: argv.append("--apply")' \
+'sys.argv = argv' \
+'runpy.run_path(str(legacy), run_name="__main__")' \
+            > scripts/yaml_corrector_v2.py
             chmod +x scripts/yaml_corrector_v2.py
           fi
 
       - name: Run YAML Corrector v2 (apply)
+        shell: bash
         run: |
+          set -e
           mkdir -p self_healing_out
           if [ -f scripts/yaml_corrector_v2.py ]; then
             python3 scripts/yaml_corrector_v2.py --apply || true
@@ -79,7 +85,9 @@ PY
 
       - name: Validate workflows (yamllint)
         continue-on-error: true
+        shell: bash
         run: |
+          set -e
           yamllint -f parsable .github/workflows || true
 
       - name: Upload Fix-It Report
@@ -87,14 +95,14 @@ PY
         uses: actions/upload-artifact@v4
         with:
           name: universal_fixit_bundle
-          path: |
-            self_healing_out/YAML_CORRECTOR_REPORT.*
+          path: self_healing_out/YAML_CORRECTOR_REPORT.*
           if-no-files-found: warn
 
       - name: Commit normalized workflows (optional)
         if: ${{ github.event.inputs.apply_and_commit == 'true' && github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -e
           git config user.name "fixit-bot"
