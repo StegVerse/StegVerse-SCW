@@ -1,17 +1,15 @@
-## Intent
-What problem does this PR solve toward the 30-day StegTalk goal?
+## Summary
+- [ ] This change aligns with `.steg/INTENT.yml` goals.
 
-## Scope
-- [ ] In scope for current milestone
-- [ ] Out of scope (link idea tag): <tag>
+## Risk & Intent
+- Risk level (pick one): `low` | `medium` | `high`
+- [ ] I reviewed `self_healing_out/INTENT_GUARD.md` output for this PR.
+- [ ] High-risk areas (infra/api/worker/secrets) are **not** modified, or have owner review.
 
-## Alternatives considered
-- …
+## Automation
+- [ ] Supercheck green (YAML Corrector + Audit + Drift)
+- [ ] Preflight green (actionlint + yamllint)
+- [ ] Rebuild Kit artifact produced (if applicable)
 
-## Drift notes
-- Any files moved to ATTIC/ ? Why?
-
-## Checklist
-- [ ] Added/updated ADR (if decision-y)
-- [ ] Added entry in docs/IDEAS.md (if parked)
-- [ ] Builds / smoke tests pass
+## Notes
+(Any context, rollbacks, links)
