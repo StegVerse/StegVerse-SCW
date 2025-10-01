@@ -1,0 +1,28 @@
+name: _reusable: Upload Bundle
+on:
+  workflow_call:
+    inputs:
+      name:   { type: string, required: true }
+      paths:  { type: string, required: true } # newline-separated list
+      if_no_files_found:
+        type: string
+        default: warn   # warn | error | ignore
+    secrets: {}
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sanitize name
+        id: n
+        run: |
+          RAW="${{ inputs.name }}"
+          # Replace spaces and illegal characters for artifact names
+          SAFE="$(echo "$RAW" | tr ' ' '_' | tr -cd '[:alnum:]_.-')"
+          [ -z "$SAFE" ] && SAFE="bundle"
+          echo "safe=$SAFE" >> $GITHUB_OUTPUT
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.n.outputs.safe }}
+          path: ${{ inputs.paths }}
+          if-no-files-found: ${{ inputs.if_no_files_found }}
