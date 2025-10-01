@@ -1,89 +1,223 @@
-name: YAML Corrector v2 (Precision + Sweep)
+#!/usr/bin/env python3
+"""
+YAML Corrector v2 — StegVerse
 
-on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - ".github/workflows/**/*.yml"
-      - ".github/workflows/**/*.yaml"
-      - "infra/**/*.yml"
-      - "infra/**/*.yaml"
-  pull_request:
-    branches: [ "main" ]
-    paths:
-      - "**/*.yml"
-      - "**/*.yaml"
-  schedule:
-    - cron: "17 3 * * *"   # nightly safety net
-  workflow_dispatch: {}
+What it fixes automatically across .github/workflows/*.yml(yaml):
+- RULE-EMBEDDED-CODE-INTO-RUN:
+    Detects raw Python/Bash lines that were put as ad-hoc keys/values and
+    moves them into `run: |` (proper literal block scalar), removing stray keys.
+- RULE-CHECKOUT-CLEAN:
+    Ensures actions/checkout@v4 uses:
+      with:
+        clean: true
+        fetch-depth: 1
+- RULE-UPLOAD-IFNOFILESFOUND:
+    Ensures actions/upload-artifact@v4 has:
+      with:
+        if-no-files-found: warn
+- RULE-FORMAT-COMMENTS:
+    Normalizes accidental multi-line comments that break YAML into safe blocks.
 
-permissions:
-  contents: write
-  actions: read
-  checks: write
-  security-events: write
+Usage:
+  python3 scripts/yaml_corrector_v2.py          # dry run
+  python3 scripts/yaml_corrector_v2.py --apply  # write changes
 
-concurrency:
-  group: yaml-corrector-${{ github.ref }}
-  cancel-in-progress: true
+Outputs:
+  self_healing_out/YAML_CORRECTOR_REPORT.json
+  self_healing_out/YAML_CORRECTOR_REPORT.md
 
-jobs:
-  correct:
-    runs-on: ubuntu-latest
-    if: ${{ github.actor != 'yaml-corrector-bot' && github.actor != 'fix-it-bot' }}
-    steps:
-      - uses: actions/checkout@v4
+Exit code is always 0 (hygiene step).
+"""
+from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import LiteralScalarString
+from pathlib import Path
+import re, json, sys, time, copy
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+ROOT = Path(__file__).resolve().parents[1]
+WF_DIR = ROOT / ".github" / "workflows"
+OUT = ROOT / "self_healing_out"
+OUT.mkdir(parents=True, exist_ok=True)
 
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-311-${{ hashFiles('scripts/requirements-yaml.txt') }}
+yaml = YAML()
+yaml.preserve_quotes = True
+yaml.indent(mapping=2, sequence=2, offset=2)
 
-      - name: Install deps
-        run: pip install -r scripts/requirements-yaml.txt
+# Heuristics to detect embedded code that should be under `run: |`
+CODE_HINTS = re.compile(
+    r"(^\s*#!/usr/bin/env\s+(bash|sh|python3?|node)\b)"
+    r"|(^\s*set\s+-[euxE]+)"
+    r"|(^\s*(python3?|node|npm|pip|uvicorn|gunicorn|curl|bash|sh)\b)"
+    r"|(^\s*(import|from)\s+\w+)"
+    r"|(^\s*echo\s+)"
+    , re.M
+)
 
-      - name: Run YAML Corrector
-        env:
-          APPLY: "true"
-        run: |
-          mkdir -p self_healing_out
-          python3 scripts/yaml_corrector_v2.py --apply || true
+SPECIAL_KEYS = {
+    "name","uses","with","env","id","if","shell","working-directory",
+    "timeout-minutes","continue-on-error"
+}
 
-      - name: Validate workflows (actionlint + yamllint)
-        continue-on-error: true
-        run: |
-          curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
-          ./actionlint -color -shellcheck= || true
-          yamllint -f parsable .github/workflows || true
+def is_str(x): return isinstance(x, str)
 
-      - name: Commit or PR changes
-        run: |
-          git config user.name "yaml-corrector-bot"
-          git config user.email "bot@stegverse.local"
-          if git diff --quiet; then echo "No changes"; exit 0; fi
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "Skipping auto-commit (PR mode)."
-            exit 0
-          fi
-          git add -A
-          git commit -m "chore(yaml): normalize & repair [skip ci]"
-          git push origin HEAD:main || true
+def is_code_like(s: str) -> bool:
+    return is_str(s) and bool(CODE_HINTS.search(s))
 
-      - name: Upload Corrector Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: yaml_corrector_bundle
-          path: self_healing_out/**
-          if-no-files-found: warn
+def normalize_checkout(step: dict, changed: list):
+    uses = step.get("uses")
+    if not is_str(uses): return
+    if not uses.startswith("actions/checkout@"): return
+    withs = step.setdefault("with", {})
+    if not isinstance(withs, dict):
+        withs = {}
+        step["with"] = withs
+    u = False
+    if withs.get("clean") is not True:
+        withs["clean"] = True; u = True
+    if withs.get("fetch-depth") not in (1, "1"):
+        withs["fetch-depth"] = 1; u = True
+    if u: changed.append("RULE-CHECKOUT-CLEAN")
 
-      - name: Summarize
-        if: always()
-        run: |
-          echo "## YAML Corrector Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- Repo: $GITHUB_REPOSITORY" >> $GITHUB_STEP_SUMMARY
-          echo "- Run:  $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> $GITHUB_STEP_SUMMARY
+def normalize_upload_artifact(step: dict, changed: list):
+    uses = step.get("uses")
+    if not is_str(uses): return
+    if not uses.startswith("actions/upload-artifact@"): return
+    withs = step.setdefault("with", {})
+    if not isinstance(withs, dict):
+        withs = {}
+        step["with"] = withs
+    if withs.get("if-no-files-found") not in ("warn","ignore","error"):
+        withs["if-no-files-found"] = "warn"
+        changed.append("RULE-UPLOAD-IFNOFILESFOUND")
+
+def embed_strays_into_run(step: dict, changed: list):
+    # Already correct
+    if "run" in step: return
+    stray_keys = []
+    code_snips = []
+    for k, v in list(step.items()):
+        if k in SPECIAL_KEYS: 
+            continue
+        if is_str(v) and is_code_like(v):
+            stray_keys.append(k)
+            code_snips.append(v)
+
+    if code_snips:
+        joined = "\n\n".join(code_snips)
+        step["run"] = LiteralScalarString(joined)
+        for k in stray_keys:
+            step.pop(k, None)
+        changed.append("RULE-EMBEDDED-CODE-INTO-RUN")
+
+def normalize_comments(step: dict, changed: list):
+    # If someone put a long multi-line comment into a key that isn't recognized,
+    # treat it the same as code: move to run block (it's safer than breaking YAML).
+    if "run" in step: return
+    stray_keys = []
+    snips = []
+    for k, v in list(step.items()):
+        if k in SPECIAL_KEYS: 
+            continue
+        if is_str(v) and ("\n" in v) and v.strip().startswith("#"):
+            stray_keys.append(k)
+            snips.append(v)
+    if snips:
+        step["run"] = LiteralScalarString("\n\n".join(snips))
+        for k in stray_keys: step.pop(k, None)
+        changed.append("RULE-FORMAT-COMMENTS")
+
+def process_workflow(path: Path):
+    txt = path.read_text(encoding="utf-8")
+    data = None
+    try:
+        data = yaml.load(txt)
+    except Exception as e:
+        # Hard load error — capture and return
+        return None, False, [], [f"load-error: {e}"]
+
+    before = copy.deepcopy(data)
+    changes = []
+    errors = []
+
+    try:
+        jobs = data.get("jobs", {})
+        if isinstance(jobs, dict):
+            for _, job in jobs.items():
+                steps = job.get("steps", [])
+                if not isinstance(steps, list): 
+                    continue
+                for step in steps:
+                    if not isinstance(step, dict):
+                        continue
+                    normalize_checkout(step, changes)
+                    normalize_upload_artifact(step, changes)
+                    # Order matters: comments → code (keeps both safe)
+                    normalize_comments(step, changes)
+                    embed_strays_into_run(step, changes)
+    except Exception as e:
+        errors.append(f"walk-error: {e}")
+
+    touched = bool(changes) and (data != before)
+    return data, touched, changes, errors
+
+def main(apply=False):
+    results = []
+    for p in sorted(WF_DIR.glob("*.y*ml")):
+        if not p.is_file():
+            continue
+        try:
+            fixed, touched, rules, errs = process_workflow(p)
+            if fixed is not None and apply and touched:
+                yaml.dump(fixed, p.open("w", encoding="utf-8"))
+            results.append({
+                "path": p.as_posix(),
+                "changed": bool(touched),
+                "rules_applied": sorted(set(rules)),
+                "errors": errs
+            })
+        except Exception as e:
+            results.append({
+                "path": p.as_posix(),
+                "changed": False,
+                "rules_applied": [],
+                "errors": [f"fatal: {e}"]
+            })
+
+    summary = {
+        "ts": int(time.time()),
+        "apply": apply,
+        "files": len(results),
+        "changed": sum(1 for r in results if r["changed"]),
+        "rule_counts": {}
+    }
+    for r in results:
+        for ru in r["rules_applied"]:
+            summary["rule_counts"][ru] = summary["rule_counts"].get(ru, 0) + 1
+
+    # Write reports
+    (OUT/"YAML_CORRECTOR_REPORT.json").write_text(
+        json.dumps({"summary": summary, "results": results}, indent=2),
+        encoding="utf-8"
+    )
+    md = [
+        "# YAML Corrector Report",
+        f"- Time (unix): {summary['ts']}",
+        f"- Files scanned: **{summary['files']}**",
+        f"- Files changed: **{summary['changed']}**",
+    ]
+    if summary["rule_counts"]:
+        md.append("\n## Rules Applied")
+        for k, v in sorted(summary["rule_counts"].items()):
+            md.append(f"- **{k}** × {v}")
+    if any(r["errors"] for r in results):
+        md.append("\n## Errors")
+        for r in results:
+            for e in r["errors"]:
+                md.append(f"- `{r['path']}` — {e}")
+    (OUT/"YAML_CORRECTOR_REPORT.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+
+    print(json.dumps(summary, indent=2))
+    # Always success (hygiene step)
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main(apply=("--apply" in sys.argv)))
