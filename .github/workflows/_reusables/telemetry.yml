@@ -1,4 +1,50 @@
-name: _Reusable — Telemetry (breadcrumb + last-two)
+name: _reusable: Telemetry Last-Two
+on:
+  workflow_call:
+    inputs:
+      basename: { type: string, required: true }
+      status:   { type: string, required: true } # success | failure | cancelled
+    outputs:
+      json_path:
+        value: ${{ jobs.rollup.outputs.json_path }}
+      md_path:
+        value: ${{ jobs.rollup.outputs.md_path }}
+
+jobs:
+  rollup:
+    runs-on: ubuntu-latest
+    outputs:
+      json_path: ${{ steps.outs.outputs.json }}
+      md_path:   ${{ steps.outs.outputs.md }}
+    steps:
+      - name: Build last-two summary
+        run: |
+          set -e
+          mkdir -p self_healing_out
+          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          SHA="$(git rev-parse --short HEAD || echo unknown)"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          LEDGER="self_healing_out/TRIGGER_EVENTS_${{ inputs.basename }}.jsonl"
+          echo "{\"ts\":\"$TS\",\"status\":\"${{ inputs.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"$GITHUB_ACTOR\"}" >> "$LEDGER"
+          LAST_JSON="self_healing_out/LAST_TWO_${{ inputs.basename }}.json"
+          LAST_MD="self_healing_out/LAST_TWO_${{ inputs.basename }}.md"
+          tail -n 2 "$LEDGER" | jq -s '.' > "$LAST_JSON" || echo "[]" > "$LAST_JSON"
+          {
+            echo "### Last two ${{ inputs.basename }} outcomes"
+            jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "$LAST_JSON" 2>/dev/null || true
+          } > "$LAST_MD"
+      - id: outs
+        run: |
+          echo "json=self_healing_out/LAST_TWO_${{ inputs.basename }}.json" >> $GITHUB_OUTPUT
+          echo "md=self_healing_out/LAST_TWO_${{ inputs.basename }}.md" >> $GITHUB_OUTPUT
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: last_two_${{ inputs.basename }}
+          path: |
+            self_healing_out/LAST_TWO_${{ inputs.basename }}.json
+            self_healing_out/LAST_TWO_${{ inputs.basename }}.md
+          if-no-files-found: warnname: _Reusable — Telemetry (breadcrumb + last-two)
 
 on:
   workflow_call:
