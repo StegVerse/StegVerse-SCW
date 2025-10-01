@@ -1,0 +1,20 @@
+{
+  "issues": [
+    {
+      "id": "YAML-001",
+      "name": "Fragile shim writer (printf chain) in workflow run blocks",
+      "match": {
+        "file_glob": ".github/workflows/*.yml",
+        "regex": "(?ms)Seed corrector shim if missing.*?printf\\s+'%s\\\\n'\\s*\\\\"
+      },
+      "fix": {
+        "strategy": "replace-block",
+        "description": "Replace printf chain with quoted heredoc (<<'PY') shim writer."
+      },
+      "links": [
+        "https://docs.github.com/actions/using-workflows/workflow-syntax-for-github-actions#using-a-specific-shell",
+        "https://www.gnu.org/software/bash/manual/bash.html#Here-Documents"
+      ]
+    }
+  ]
+}
