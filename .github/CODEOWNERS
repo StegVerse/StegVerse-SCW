@@ -1,4 +1,9 @@
-*  @stegverse/maintainers
-.github/**  @stegverse/devops
-api/**      @stegverse/backend
-ui/**       @stegverse/frontend
+# High-risk areas require owners to review
+/infra/**           @StegVerse/owners
+/api/**             @StegVerse/owners
+/worker/**          @StegVerse/owners
+/render.yaml        @StegVerse/owners
+/.steg/**           @StegVerse/owners
+
+# Default
+*                  @StegVerse/maintainers
