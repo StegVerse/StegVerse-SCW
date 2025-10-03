@@ -1,0 +1,5 @@
+path: .github/trigger/autopatch/run.txt
+contents:
+rid: RID-2025-10-02-001
+task: STEG-200
+intent: hardening
