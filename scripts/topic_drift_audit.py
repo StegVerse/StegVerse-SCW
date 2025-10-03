@@ -1,53 +1,50 @@
 #!/usr/bin/env python3
 """
-Topic Drift Auditor
-- Scans repo for:
-  * files with @idea:TAG or @attic markers
-  * unused/isolated files by simple heuristics
-- Parses recent git commits for [topic:<tag>] markers
-- Produces self_healing_out/DRIFT_REPORT.{json,md}
-
-Heuristics are intentionally simple & safe (no deletions).
+Topic Drift Audit
+- Scans files for @idea:<tag>, @attic markers
+- Lists possibly-unused Python modules (simple import heuristic)
+- Samples last 200 commit subjects for [topic:<tag>] markers
+Writes DRIFT_REPORT.{json,md}
 """
-import os, re, json, subprocess, time
+import re, json, subprocess, time, os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+OUT = ROOT / "self_healing_out"
+OUT.mkdir(parents=True, exist_ok=True)
 
 IDEA_RE = re.compile(r'@idea:([a-zA-Z0-9_\-]+)')
-ATTIC_RE = re.compile(r'@attic\b')
 TOPIC_RE = re.compile(r'\[topic:([a-zA-Z0-9_\-]+)\]')
+ATTIC_RE = re.compile(r'@attic\b')
+IGNORE_DIRS = {".git","node_modules","__pycache__", ".idea", ".vscode"}
+SCAN_EXTS = {".py",".ts",".tsx",".js",".jsx",".json",".yml",".yaml",".md",".html",".sh"}
 
-IGNORE_DIRS = {".git", "node_modules", "__pycache__", ".idea", ".vscode"}
-CODE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".yml", ".yaml", ".md", ".html", ".sh"}
-
-def list_files():
-    files = []
+def files():
+    out = []
     for p in ROOT.rglob("*"):
         if not p.is_file(): continue
         rel = p.relative_to(ROOT).as_posix()
         parts = rel.split("/")
         if any(seg in IGNORE_DIRS for seg in parts): continue
-        files.append(rel)
-    return files
+        out.append(rel)
+    return out
 
-def scan_markers(files):
+def scan_markers(paths):
     ideas, attic = {}, []
-    for rel in files:
-        if not any(rel.endswith(ext) for ext in CODE_EXTS): continue
+    for rel in paths:
+        if not any(rel.endswith(e) for e in SCAN_EXTS): continue
         try:
-            text = (ROOT/rel).read_text(encoding="utf-8", errors="ignore")
+            txt = (ROOT/rel).read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        for m in IDEA_RE.findall(text):
-            ideas.setdefault(m, []).append(rel)
-        if ATTIC_RE.search(text) or rel.startswith("ATTIC/"):
+        for tag in IDEA_RE.findall(txt):
+            ideas.setdefault(tag, []).append(rel)
+        if rel.startswith("ATTIC/") or ATTIC_RE.search(txt):
             attic.append(rel)
-    return ideas, attic
+    return {k: sorted(v) for k,v in ideas.items()}, sorted(attic)
 
 def git(cmd):
-    return subprocess.check_output(["git"]+cmd, cwd=str(ROOT)).decode().strip()
+    return subprocess.check_output(["git"] + cmd, cwd=str(ROOT)).decode().strip()
 
 def recent_commits(n=200):
     try:
@@ -56,108 +53,76 @@ def recent_commits(n=200):
         return []
     out = []
     for line in log.splitlines():
-        try:
-            sha, date, subj = line.split("\t", 2)
-        except ValueError:
-            continue
-        tags = TOPIC_RE.findall(subj)
-        out.append({"sha":sha, "date":date, "subject":subj, "topics":tags})
+        try: sha, date, subj = line.split("\t", 2)
+        except: continue
+        out.append({"sha":sha, "date":date, "subject":subj, "topics":TOPIC_RE.findall(subj)})
     return out
 
-def simple_unused_heuristics(files):
-    """
-    Gentle heuristic:
-    - mark files under scripts/, docs/, ATTIC/ as not unused
-    - mark isolated .py files not imported by others as 'possibly_unused'
-      (best-effort by keyword search; safe for guidance only)
-    """
-    python_files = [f for f in files if f.endswith(".py")]
-    imports = {f: set() for f in python_files}
-
-    # Build a reverse import map by searching 'import X' / 'from X import'
-    module_names = {f[:-3].replace("/", "."): f for f in python_files if not f.endswith("__init__.py")}
-    for f in python_files:
-        try:
-            text = (ROOT/f).read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        for mod in module_names:
-            # crude search; avoid self-match
-            if module_names[mod] == f: continue
-            if f"import {mod}" in text or f"from {mod} import" in text:
-                imports[module_names[mod]].add(f)
-
-    possibly_unused = []
-    for mod, srcs in imports.items():
-        rel = module_names[mod]
-        if rel.startswith(("scripts/","docs/","ATTIC/")):
-            continue
-        if len(srcs) == 0:
-            possibly_unused.append(rel)
-
-    return sorted(possibly_unused)
+def simple_unused(paths):
+    py = [f for f in paths if f.endswith(".py")]
+    mods = {f[:-3].replace("/","."): f for f in py if not f.endswith("__init__.py")}
+    reverse = {m:set() for m in mods}
+    for f in py:
+        try: t = (ROOT/f).read_text(encoding="utf-8", errors="ignore")
+        except: continue
+        for m in mods:
+            if mods[m] == f: continue
+            if f"import {m}" in t or f"from {m} import" in t:
+                reverse[m].add(f)
+    unused = []
+    for m, srcs in reverse.items():
+        rel = mods[m]
+        if rel.startswith(("scripts/","docs/","ATTIC/")): continue
+        if len(srcs)==0:
+            unused.append(rel)
+    return sorted(unused)
 
 def main():
-    files = list_files()
-    ideas, attic = scan_markers(files)
+    paths = files()
+    ideas, attic = scan_markers(paths)
     commits = recent_commits()
-    unused = simple_unused_heuristics(files)
+    unused = simple_unused(paths)
+    drift_ratio = None
+    if commits:
+        no_topic = sum(1 for c in commits if not c["topics"])
+        drift_ratio = no_topic / max(1,len(commits))
 
-    # Drift metric: % commits without a [topic:...] tag in last 200
-    no_topic = sum(1 for c in commits if not c["topics"])
-    drift_ratio = (no_topic / max(1, len(commits))) if commits else None
-
-    report = {
+    rep = {
         "generated_at": int(time.time()),
-        "files_scanned": len(files),
-        "idea_tags": {k: sorted(v) for k,v in ideas.items()},
-        "attic_files": sorted(attic),
+        "files_scanned": len(paths),
+        "idea_tags": ideas,
+        "attic_files": attic,
         "possibly_unused": unused,
         "commit_topics_last200": commits,
-        "drift_ratio_no_topic": drift_ratio,
-        "guidance": {
-            "topic_tag_hint": "Add [topic:<tag>] in commit subjects to link work to themes.",
-            "attic_hint": "Move paused code to ATTIC/ with @attic header instead of deleting.",
-            "ideas_hint": "Cross-reference @idea:<tag> with docs/IDEAS.md entries."
-        }
+        "drift_ratio_no_topic": drift_ratio
     }
-    (OUT/"DRIFT_REPORT.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (OUT/"DRIFT_REPORT.json").write_text(json.dumps(rep, indent=2), encoding="utf-8")
 
-    # Human-readable MD
-    md = []
-    md.append("# Drift Report\n")
-    md.append(f"- Files scanned: **{len(files)}**")
-    if drift_ratio is not None:
-        md.append(f"- Commits without topic tag: **{int(drift_ratio*100)}%** (last 200)")
-    md.append("\n## Idea tags found")
+    md = [
+        "# Drift Report",
+        f"- Files scanned: **{len(paths)}**",
+        f"- Commits without topic tag: **{int(drift_ratio*100)}%** (last 200)" if drift_ratio is not None else "- Commits without topic tag: —",
+        "",
+        "## Idea tags found"
+    ]
     if ideas:
-        for tag, paths in sorted(report["idea_tags"].items()):
-            md.append(f"- **{tag}** ({len(paths)})")
-            for p in paths[:20]:
+        for tag, lst in sorted(ideas.items()):
+            md.append(f"- **{tag}** ({len(lst)})")
+            for p in lst[:30]:
                 md.append(f"  - `{p}`")
     else:
         md.append("- None")
 
-    md.append("\n## Files in ATTIC/ or marked @attic")
-    if report["attic_files"]:
-        for p in report["attic_files"][:50]:
-            md.append(f"- `{p}`")
-    else:
-        md.append("- None")
+    md += ["", "## Files in ATTIC/ or marked @attic"]
+    md += ([f"- `{p}`" for p in attic[:50]] or ["- None"])
 
-    md.append("\n## Possibly unused Python modules (heuristic)")
-    if unused:
-        for p in unused[:50]:
-            md.append(f"- `{p}`")
-        md.append("\n> Heuristic: verify before archiving to ATTIC/. Not authoritative.")
-    else:
-        md.append("- None")
+    md += ["", "## Possibly unused Python modules (heuristic)"]
+    md += ([f"- `{p}`" for p in unused[:50]] or ["- None"])
 
-    md.append("\n## Recent commit topics (last 20)")
-    for c in commits[:20]:
-        md.append(f"- {c['date']} {c['sha'][:7]} — {c['subject']}  (topics: {', '.join(c['topics']) or '—'})")
+    md += ["", "## Recent commit topics (last 20)"]
+    md += [f"- {c['date']} {c['sha'][:7]} — {c['subject']}  (topics: {', '.join(c['topics']) or '—'})" for c in commits[:20]]
 
-    (OUT/"DRIFT_REPORT.md").write_text("\n".join(md), encoding="utf-8")
+    (OUT/"DRIFT_REPORT.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     print("OK drift_report")
 
 if __name__ == "__main__":
