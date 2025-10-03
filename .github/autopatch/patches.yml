@@ -1,88 +1,320 @@
 # .github/autopatch/patches.yml
 # Each entry is idempotent: if content matches, nothing changes; if missing/stale, it is repaired.
+# Canonical patch manifest for this repo
+# AutoPatch will:
+# - create files that are missing (ensure: present)
+# - normalize content of files that drift (mode: replace)
+# - append/patch blocks inside larger files when needed (mode: patch)
+# - generate a machine + human report artifact
 
-- id: enforce-scripts-readme
-  path: scripts/README.md
-  ensure: present         # present | absent
-  mode: overwrite_if_stale
-  labels: [docs, guard, baseline]
-  content: |
-    # scripts/
+version: 1
+generated_by: "stegverse-autopatch"
+last_reviewed: "2025-10-03"
 
-    This folder collects internal maintenance utilities used by the **StegVerse-SCW** workflows.
+defaults:
+  owner: "stegverse"
+  repo:  "StegVerse-SCW"
+  labels: ["autopatch", "guard"]
+  validate_yaml: true
+  line_endings: "lf"
 
-    - **Categories**
-      - `repo_*.py` — inventory, drift, self-healing collectors
-      - `yaml_*.py` — YAML normalizers/correctors
-      - `auto_*`   — autonomous triage & safe remediation
-      - `make_*`   — package/bundle builders
+patches:
+  # -------------------------------
+  # CI / Workflows documentation
+  # -------------------------------
+  - id: workflows-readme
+    path: .github/workflows/README.md
+    ensure: present
+    mode: replace
+    labels: [docs, ci, workflows]
+    contents: |
+      # CI Workflows (StegVerse-SCW)
 
-    ## Conventions
-    - Keep scripts **pure-Python** (no virtualenv activation in scripts).
-    - All outputs are written to `self_healing_out/` unless a script is a builder (then to `out/`).
-    - Scripts should be idempotent and safe to re-run.
+      This folder contains our core automation:
+      - `supercheck.yml` – one-button health, audits, auto-triage, report bundle.
+      - `universal_fixit.yml` – precision & sweep YAML fixer + reusable validators.
+      - `rebuild.yml` – zero-secret bundle/backup generator.
+      - `preflight.yml` – normalize/validate workflows before other runs.
+      - `_reusables/**` – shared steps (tools, upload, telemetry, sweep).
 
-    ## Do not remove
-    This README is enforced by AutoPatch and will be restored if deleted.
+      ## How to run from mobile
+      1. Commit a file under `.github/trigger/<workflow>/run-*.txt` with contents `go`.
+      2. Or open **Actions → Select workflow → Run workflow**.
 
-- id: enforce-workflows-readme
-  path: .github/workflows/README.md
-  ensure: present
-  mode: overwrite_if_stale
-  labels: [docs, ci, guard]
-  content: |
-    # GitHub Workflows
+      ## Artifacts you should expect
+      - `yaml_corrector_bundle`
+      - `supercheck_bundle`
+      - `workflow_fix_report`
+      - `rebuild_kit_bundle`
 
-    This directory contains automation for StegVerse-SCW, including:
-    - **one_button_supercheck.yml** — single entrypoint: YAML correction → diagnostics → audits → triage → bundle
-    - **universal_fixit.yml** — precision/sweep fixer for common workflow issues
-    - **nightly_snapshot.yml** — safe archive of repo state to artifacts
-    - **rebuild_kit.yml** — creates zero-secret rebuild bundle
-    - **autopatch.yml** — applies and enforces patch manifest
+      If an artifact is missing, see the **Self-Healing** section in the repo README.
 
-    ## Standards
-    - YAML is validated by `actionlint` + `yamllint`.
-    - Secrets usage is linted/guarded; prefer backend KV/indirection.
-    - All jobs must be restart-safe and non-destructive by default.
+  # -------------------------------
+  # Scripts documentation
+  # -------------------------------
+  - id: scripts-readme
+    path: scripts/README.md
+    ensure: present
+    mode: replace
+    labels: [docs, scripts]
+    contents: |
+      # Scripts
 
-    ## Do not remove
-    This README is enforced by AutoPatch and will be restored if deleted.
+      This directory holds helper scripts used by CI and local runs.
 
-- id: enforce-attic-readme
-  path: ATTIC/README.md
-  ensure: present
-  mode: overwrite_if_stale
-  labels: [docs, attic, drift]
-  content: |
-    # ATTIC/
+      - `yaml_corrector_v2.py` – normalizes/repairs GitHub Actions YAML (preferred).
+      - `auto_fix_known_issues.py` – targeted fixes for recurring issues (YAML-001 etc).
+      - `repo_audit.py` – inventory/diff of files (required/recommended/forbidden).
+      - `topic_drift_audit.py` – commit/topic drift & ATTIC markers.
+      - `collect_self_healing.py` – emits SELF_HEALING_MANIFEST + gaps.
+      - `auto_triage.py` – scaffold missing, move extras to ATTIC, remove forbidden.
+      - `make_rebuild_bundle.sh` – assemble portable rebuild kit.
 
-    Items placed here are *parked*, not lost.
-    Auto-triage moves extra or experimental files into `ATTIC/` with a header:
-    ```
-    # @attic
-    # when: YYYY-MM-DD
-    # why: reason
-    # related-idea: tag
-    # how-to-restore: move file out of ATTIC/, re-link imports if needed
-    ```
+      ## Conventions
+      - Scripts must be idempotent (safe to run repeatedly).
+      - Write human-readable reports into `self_healing_out/`.
 
-    - Keep experimental branches short-lived; promote kept ideas into `/scripts` or `/api` with docs.
-    - The attic is included in inventories and bundles for traceability.
+  # -------------------------------
+  # ATTIC documentation
+  # -------------------------------
+  - id: attic-readme
+    path: ATTIC/README.md
+    ensure: present
+    mode: replace
+    labels: [docs, attic]
+    contents: |
+      # ATTIC
 
-    ## Do not remove
-    This README is enforced by AutoPatch and will be restored if deleted.
+      Files moved here are *parked*, not deleted. Each file gains a header:
 
-    - id: supercheck-ensure-telemetry
-  path: .github/workflows/supercheck.yml
-  ensure: present
-  mode: patch
-  labels: [workflow, supercheck, telemetry]
-  patch: |
-    # Ensure telemetry step is present at the end
-    - name: Telemetry (reusable)
-      if: always()
-      uses: ./.github/workflows/_reusables/telemetry.yml
-      with:
-        basename: supercheck
-        status: ${{ job.status }}
-  
+      ```
+      # @attic
+      # when: YYYY-MM-DD
+      # why: Parked by auto-triage
+      # related-idea: auto-attic
+      # how-to-restore: move file out of ATTIC/ and re-link imports if needed
+      ```
+
+      Use `scripts/auto_triage.py` to move files in/out safely.
+
+  # -------------------------------
+  # Ensure self_healing_out is always present
+  # -------------------------------
+  - id: self-healing-dir
+    path: self_healing_out/.gitkeep
+    ensure: present
+    mode: ensure
+    labels: [self-healing, ci]
+    contents: ""
+
+  # -------------------------------
+  # Supercheck must end with telemetry
+  # (adds block if missing; leaves intact if present)
+  # -------------------------------
+  - id: supercheck-ensure-telemetry
+    path: .github/workflows/supercheck.yml
+    ensure: present
+    mode: patch
+    labels: [workflow, supercheck, telemetry]
+    patch: |
+      # --- BEGIN AUTOPATCH: telemetry tail ---
+      - name: Telemetry (reusable)
+        if: always()
+        uses: ./.github/workflows/_reusables/telemetry.yml
+        with:
+          basename: supercheck
+          status: ${{ job.status }}
+      # --- END AUTOPATCH: telemetry tail ---
+
+  # -------------------------------
+  # Supercheck must run YAML Corrector first
+  # (adds the step if missing)
+  # -------------------------------
+  - id: supercheck-ensure-corrector
+    path: .github/workflows/supercheck.yml
+    ensure: present
+    mode: patch
+    labels: [workflow, supercheck, fixer]
+    patch: |
+      # --- BEGIN AUTOPATCH: yaml-corrector-first ---
+      - name: Run YAML Corrector v2 (or legacy)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p self_healing_out scripts
+          if [ -f scripts/yaml_corrector_v2.py ]; then
+            python3 scripts/yaml_corrector_v2.py --apply || echo "YAML Corrector v2 failed" > self_healing_out/YAML_CORRECTOR_REPORT.md
+          elif [ -f scripts/yaml_corrector.py ]; then
+            python3 scripts/yaml_corrector.py --apply || echo "YAML Corrector legacy failed" > self_healing_out/YAML_CORRECTOR_REPORT.md
+          else
+            echo "# YAML Corrector missing" > self_healing_out/YAML_CORRECTOR_REPORT.md
+          fi
+          [ -f self_healing_out/YAML_CORRECTOR_REPORT.json ] || echo '{}' > self_healing_out/YAML_CORRECTOR_REPORT.json
+      # --- END AUTOPATCH: yaml-corrector-first ---
+
+  # -------------------------------
+  # Ensure reusable helpers are present (seed minimal if missing)
+  # -------------------------------
+  - id: reusable-ensure-tools
+    path: .github/workflows/_reusables/ensure-tools.yml
+    ensure: present
+    mode: replace
+    labels: [workflow, reusable]
+    contents: |
+      name: Ensure Tools (Reusable)
+      on:
+        workflow_call:
+          inputs:
+            apt_packages:
+              required: false
+              type: string
+              default: "jq curl"
+            python_packages:
+              required: false
+              type: string
+              default: ""
+            python_version:
+              required: false
+              type: string
+              default: ""
+      jobs:
+        ensure:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Setup Python
+              if: ${{ inputs.python_version != '' }}
+              uses: actions/setup-python@v5
+              with:
+                python-version: ${{ inputs.python_version }}
+
+            - name: Install apt packages
+              run: |
+                sudo apt-get update -y
+                [ -n "${{ inputs.apt_packages }}" ] && sudo apt-get install -y ${{ inputs.apt_packages }} || true
+
+            - name: Install pip packages
+              if: ${{ inputs.python_packages != '' }}
+              run: |
+                python3 -m pip install --upgrade pip
+                pip install ${{ inputs.python_packages }}
+
+  - id: reusable-upload-sweep
+    path: .github/workflows/_reusables/upload-sweep.yml
+    ensure: present
+    mode: replace
+    labels: [workflow, reusable]
+    contents: |
+      name: Upload Sweep (Reusable)
+      on:
+        workflow_call:
+          inputs:
+            name:
+              required: true
+              type: string
+            base_dir:
+              required: true
+              type: string
+            files:
+              required: false
+              type: string
+              default: ""
+            extra_globs:
+              required: false
+              type: string
+              default: ""
+            create_placeholder:
+              required: false
+              type: boolean
+              default: false
+            placeholder_msg:
+              required: false
+              type: string
+              default: "No sweep reports were produced."
+      jobs:
+        upload:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Prepare placeholder (optional)
+              if: ${{ inputs.create_placeholder }}
+              run: |
+                mkdir -p "${{ inputs.base_dir }}"
+                echo "# Sweep Report" > "${{ inputs.base_dir }}/SWEEP_REPORT.md"
+                echo "" >> "${{ inputs.base_dir }}/SWEEP_REPORT.md"
+                echo "${{ inputs.placeholder_msg }}" >> "${{ inputs.base_dir }}/SWEEP_REPORT.md"
+                [ -f "${{ inputs.base_dir }}/SWEEP_REPORT.json" ] || echo '{}' > "${{ inputs.base_dir }}/SWEEP_REPORT.json"
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                name: ${{ inputs.name }}
+                path: |
+                  ${{ inputs.base_dir }}/SWEEP_REPORT*.md
+                  ${{ inputs.base_dir }}/SWEEP_REPORT*.json
+                  ${{ inputs.base_dir }}/${{ inputs.files }}
+                  ${{ inputs.base_dir }}/${{ inputs.extra_globs }}
+                if-no-files-found: warn
+
+  - id: reusable-telemetry
+    path: .github/workflows/_reusables/telemetry.yml
+    ensure: present
+    mode: replace
+    labels: [workflow, reusable, telemetry]
+    contents: |
+      name: Telemetry (Reusable)
+      on:
+        workflow_call:
+          inputs:
+            basename:
+              required: true
+              type: string
+            status:
+              required: true
+              type: string
+      jobs:
+        t:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - name: Record outcome
+              run: |
+                set -e
+                mkdir -p self_healing_out
+                TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                SHA="$(git rev-parse --short HEAD || echo unknown)"
+                RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+                LEDGER="self_healing_out/TRIGGER_EVENTS_${{ inputs.basename }}.jsonl"
+                echo "{\"ts\":\"$TS\",\"status\":\"${{ inputs.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
+                tail -n 2 "$LEDGER" | jq -s '.' > "self_healing_out/LAST_TWO_${{ inputs.basename }}.json" || echo "[]" > "self_healing_out/LAST_TWO_${{ inputs.basename }}.json"
+                {
+                  echo "### Last two ${{ inputs.basename }} outcomes"
+                  jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' "self_healing_out/LAST_TWO_${{ inputs.basename }}.json" 2>/dev/null || true
+                } > "self_healing_out/LAST_TWO_${{ inputs.basename }}.md"
+
+  # -------------------------------
+  # Guard: Keep quick triggers page
+  # -------------------------------
+  - id: quicktriggers
+    path: public/quicktriggers.html
+    ensure: present
+    mode: replace
+    labels: [ui, triggers]
+    contents: |
+      <!doctype html>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>StegVerse Quick Triggers</title>
+      <style>
+        body { font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; max-width: 820px; margin: 24px auto; padding: 0 12px; line-height: 1.45; }
+        .ok { color: #1a7f37; } .bad { color: #d1242f; } .muted { color: #666; }
+        code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; }
+        a.btn { display:inline-block; padding:8px 12px; text-decoration:none; border:1px solid #ccc; border-radius:8px; }
+      </style>
+      <h1>StegVerse Quick Triggers</h1>
+      <p class="muted">Tap a workflow to open its “Run workflow” screen in GitHub.</p>
+      <ul>
+        <li><a class="btn" target="_blank" href="https://github.com/StegVerse/StegVerse-SCW/actions/workflows/supercheck.yml">Run Supercheck</a></li>
+        <li><a class="btn" target="_blank" href="https://github.com/StegVerse/StegVerse-SCW/actions/workflows/universal_fixit.yml">Run Universal Fix-It</a></li>
+        <li><a class="btn" target="_blank" href="https://github.com/StegVerse/StegVerse-SCW/actions/workflows/rebuild.yml">Run Rebuild Kit</a></li>
+      </ul>
+      <hr>
+      <p class="muted">Status: this page is guarded by AutoPatch and will be recreated if missing.</p>
