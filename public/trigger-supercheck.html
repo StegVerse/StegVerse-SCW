@@ -1,0 +1,20 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trigger Supercheck</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:20px}
+  button{padding:12px 16px;font-size:16px}
+  .msg{margin-top:12px}
+</style>
+<h1>Trigger Supercheck</h1>
+<p>This creates <code>.github/trigger/supercheck/run-now.txt</code> with content <code>go</code> via the GitHub “Add file” UI.</p>
+<button id="open">Open “Add file”</button>
+<div class="msg" id="msg"></div>
+<script>
+  // Replace owner/repo below if different
+  const repo = "StegVerse/StegVerse-SCW";
+  const path = ".github/trigger/supercheck/run-now.txt";
+  const url = `https://github.com/${repo}/new/main?filename=${encodeURIComponent(path)}&value=${encodeURIComponent("go")}`;
+  document.getElementById('open').onclick = () => { window.open(url, "_blank"); };
+  document.getElementById('msg').textContent = "Tap the button, then 'Commit new file'.";
+</script>
