@@ -1,0 +1,73 @@
+# .github/autopatch/patches.yml
+# Each entry is idempotent: if content matches, nothing changes; if missing/stale, it is repaired.
+
+- id: enforce-scripts-readme
+  path: scripts/README.md
+  ensure: present         # present | absent
+  mode: overwrite_if_stale
+  labels: [docs, guard, baseline]
+  content: |
+    # scripts/
+
+    This folder collects internal maintenance utilities used by the **StegVerse-SCW** workflows.
+
+    - **Categories**
+      - `repo_*.py` — inventory, drift, self-healing collectors
+      - `yaml_*.py` — YAML normalizers/correctors
+      - `auto_*`   — autonomous triage & safe remediation
+      - `make_*`   — package/bundle builders
+
+    ## Conventions
+    - Keep scripts **pure-Python** (no virtualenv activation in scripts).
+    - All outputs are written to `self_healing_out/` unless a script is a builder (then to `out/`).
+    - Scripts should be idempotent and safe to re-run.
+
+    ## Do not remove
+    This README is enforced by AutoPatch and will be restored if deleted.
+
+- id: enforce-workflows-readme
+  path: .github/workflows/README.md
+  ensure: present
+  mode: overwrite_if_stale
+  labels: [docs, ci, guard]
+  content: |
+    # GitHub Workflows
+
+    This directory contains automation for StegVerse-SCW, including:
+    - **one_button_supercheck.yml** — single entrypoint: YAML correction → diagnostics → audits → triage → bundle
+    - **universal_fixit.yml** — precision/sweep fixer for common workflow issues
+    - **nightly_snapshot.yml** — safe archive of repo state to artifacts
+    - **rebuild_kit.yml** — creates zero-secret rebuild bundle
+    - **autopatch.yml** — applies and enforces patch manifest
+
+    ## Standards
+    - YAML is validated by `actionlint` + `yamllint`.
+    - Secrets usage is linted/guarded; prefer backend KV/indirection.
+    - All jobs must be restart-safe and non-destructive by default.
+
+    ## Do not remove
+    This README is enforced by AutoPatch and will be restored if deleted.
+
+- id: enforce-attic-readme
+  path: ATTIC/README.md
+  ensure: present
+  mode: overwrite_if_stale
+  labels: [docs, attic, drift]
+  content: |
+    # ATTIC/
+
+    Items placed here are *parked*, not lost.
+    Auto-triage moves extra or experimental files into `ATTIC/` with a header:
+    ```
+    # @attic
+    # when: YYYY-MM-DD
+    # why: reason
+    # related-idea: tag
+    # how-to-restore: move file out of ATTIC/, re-link imports if needed
+    ```
+
+    - Keep experimental branches short-lived; promote kept ideas into `/scripts` or `/api` with docs.
+    - The attic is included in inventories and bundles for traceability.
+
+    ## Do not remove
+    This README is enforced by AutoPatch and will be restored if deleted.
