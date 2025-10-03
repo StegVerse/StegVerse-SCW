@@ -1,146 +1,128 @@
 #!/usr/bin/env python3
-import os, sys, json, hashlib, fnmatch, time
+"""
+Repo Audit
+- Inventories repo (size, sha256 sample) -> REPO_INVENTORY.{json,md}
+- Compares against REPO_SPEC.json (if present) -> REPO_DIFF.json
+- Flags forbidden globs, missing required files/dirs, extras
+Safe, stdlib-only.
+"""
+import json, fnmatch, hashlib, time, os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "self_healing_out"
 OUT.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_IGNORE = [".git/**", "**/__pycache__/**", "node_modules/**", ".idea/**", ".vscode/**", ".DS_Store"]
-
-def sha256_file(p: Path, max_bytes=2_000_000):
-    h = hashlib.sha256()
-    try:
-        with open(p, "rb") as f:
-            n=0
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk); n+=len(chunk)
-                if n>=max_bytes: break
-        return h.hexdigest(), n
-    except Exception as e:
-        return f"error:{e}", 0
+DEFAULT_IGNORE = [
+    ".git/**","**/__pycache__/**","node_modules/**",".idea/**",".vscode/**",".DS_Store"
+]
 
 def load_spec():
-    spec_file = ROOT / "REPO_SPEC.json"
-    if spec_file.exists():
-        try:
-            return json.loads(spec_file.read_text(encoding="utf-8"))
-        except Exception as e:
-            return {"_error": f"failed to parse REPO_SPEC.json: {e}"}
-    # no spec => create a minimal default that expects nothing and forbids secrets
-    return {
-        "$schema":"https://stegverse/specs/repo-spec-v1",
+    p = ROOT / "REPO_SPEC.json"
+    base = {
         "ignore_globs": DEFAULT_IGNORE,
         "required_files": [],
         "required_dirs": [],
         "recommended_files": [],
         "forbidden_globs": ["**/*.env","**/secrets.*","**/*.pem","**/*.key","**/*.crt","private/**"]
     }
+    if not p.exists():
+        return base
+    try:
+        spec = json.loads(p.read_text(encoding="utf-8"))
+        for k,v in base.items():
+            spec.setdefault(k, v)
+        return spec
+    except Exception as e:
+        base["_error"] = f"invalid REPO_SPEC.json: {e}"
+        return base
 
-def is_ignored(rel: str, ignore_globs):
-    for pat in ignore_globs:
-        if fnmatch.fnmatch(rel, pat):
-            return True
-    return False
+def match_any(rel, globs):
+    return any(fnmatch.fnmatch(rel, g) for g in globs)
 
-def all_files(ignore_globs):
+def sha256_file(p: Path, cap=2_000_000):
+    h = hashlib.sha256()
+    n = 0
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk); n += len(chunk)
+            if n >= cap: break
+    return h.hexdigest(), n
+
+def main():
+    spec = load_spec()
+    ignore = spec["ignore_globs"]
+
     files = []
     for p in ROOT.rglob("*"):
         if not p.is_file(): continue
         rel = p.relative_to(ROOT).as_posix()
-        if is_ignored(rel, ignore_globs): continue
+        if match_any(rel, ignore): continue
         files.append(rel)
-    return sorted(files)
+    files.sort()
 
-def match_any(rel, patterns):
-    for pat in patterns:
-        if fnmatch.fnmatch(rel, pat) or rel == pat:
-            return True
-    return False
-
-def main():
-    spec = load_spec()
-    ignore = spec.get("ignore_globs") or DEFAULT_IGNORE
-    required_files = spec.get("required_files", [])
-    required_dirs  = spec.get("required_dirs", [])
-    recommended    = spec.get("recommended_files", [])
-    forbidden      = spec.get("forbidden_globs", [])
-
-    files = all_files(ignore)
-    inventory = []
+    inv = []
     for rel in files:
         p = ROOT / rel
-        size = p.stat().st_size
-        digest, read = sha256_file(p)
-        inventory.append({"path": rel, "size": size, "sha256": digest, "sampled_bytes": read})
+        try:
+            digest, sampled = sha256_file(p)
+            size = p.stat().st_size
+        except Exception as e:
+            digest, sampled, size = f"error:{e}", 0, 0
+        inv.append({"path": rel, "size": size, "sha256": digest, "sampled_bytes": sampled})
 
-    # compute missing/extra/forbidden
-    present_set = set(files)
-    required_missing = [f for f in required_files if f not in present_set]
-    dir_missing = [d for d in required_dirs if not (ROOT / d).exists()]
-    recommended_missing = [f for f in recommended if f not in present_set]
-
-    forbidden_hits = []
-    for rel in files:
-        if match_any(rel, forbidden):
-            forbidden_hits.append(rel)
-
-    # "extra" = files that are neither required nor recommended and not ignored by spec
-    wanted = set(required_files) | set(recommended)
+    present = set(files)
+    req_missing = [f for f in spec["required_files"] if f not in present]
+    dir_missing = [d for d in spec["required_dirs"] if not (ROOT / d).exists()]
+    rec_missing = [f for f in spec["recommended_files"] if f not in present]
+    forb_hits = [rel for rel in files if match_any(rel, spec["forbidden_globs"])]
+    wanted = set(spec["required_files"]) | set(spec["recommended_files"])
     extras = [rel for rel in files if rel not in wanted]
 
-    ts = int(time.time())
     inv_json = {
         "repo": os.getenv("GITHUB_REPOSITORY", ROOT.name),
-        "generated_at": ts,
-        "spec_loaded": "REPO_SPEC.json exists" if (ROOT/"REPO_SPEC.json").exists() else "default",
+        "generated_at": int(time.time()),
         "counts": {"files": len(files)},
-        "inventory": inventory
+        "inventory": inv
     }
+    (OUT / "REPO_INVENTORY.json").write_text(json.dumps(inv_json, indent=2), encoding="utf-8")
+
     diff_json = {
         "summary": {
-            "required_missing": len(required_missing),
+            "required_missing": len(req_missing),
             "dir_missing": len(dir_missing),
-            "recommended_missing": len(recommended_missing),
-            "forbidden_hits": len(forbidden_hits),
+            "recommended_missing": len(rec_missing),
+            "forbidden_hits": len(forb_hits),
             "extras": len(extras)
         },
-        "required_missing": required_missing,
+        "required_missing": req_missing,
         "dir_missing": dir_missing,
-        "recommended_missing": recommended_missing,
-        "forbidden_hits": forbidden_hits,
-        "extras": extras
+        "recommended_missing": rec_missing,
+        "forbidden_hits": forb_hits,
+        "extras": extras,
+        "spec_error": spec.get("_error")
     }
+    (OUT / "REPO_DIFF.json").write_text(json.dumps(diff_json, indent=2), encoding="utf-8")
 
-    (OUT/"REPO_INVENTORY.json").write_text(json.dumps(inv_json, indent=2), encoding="utf-8")
-    (OUT/"REPO_DIFF.json").write_text(json.dumps(diff_json, indent=2), encoding="utf-8")
+    # Markdown
+    def sec(title, lst):
+        md.append(f"## {title} ({len(lst)})")
+        if not lst: md.append("- ✅ None"); return
+        for i in lst[:300]: md.append(f"- `{i}`")
 
-    # human-readable
-    md = []
-    md.append(f"# Repo Inventory & Diff — {os.getenv('GITHUB_REPOSITORY', ROOT.name)}")
-    md.append("")
-    md.append(f"- Generated: <t:{ts}:F>")
-    md.append(f"- Files scanned: **{len(files)}**")
-    md.append(f"- Spec: **{'REPO_SPEC.json' if (ROOT/'REPO_SPEC.json').exists() else 'default'}**")
-    md.append("")
-    def section(title, items, limit=None):
-        md.append(f"## {title} ({len(items)})")
-        if not items:
-            md.append("- ✅ None")
-            md.append("")
-            return
-        if limit: items = items[:limit]
-        for it in items:
-            md.append(f"- `{it}`")
-        md.append("")
-    section("Required files missing", required_missing)
-    section("Required directories missing", dir_missing)
-    section("Recommended files missing", recommended_missing[:100], limit=None)
-    section("Forbidden items present", forbidden_hits[:100], limit=None)
-    section("Extras (not required/recommended)", extras[:200], limit=None)
-    (OUT/"REPO_INVENTORY.md").write_text("\n".join(md), encoding="utf-8")
+    md = [f"# Repo Inventory & Diff — {inv_json['repo']}",
+          f"- Files scanned: **{len(files)}**",
+          ""]
+    sec("Required files missing", req_missing)
+    sec("Required directories missing", dir_missing)
+    sec("Recommended files missing", rec_missing)
+    sec("Forbidden items present", forb_hits)
+    sec("Extras (not required/recommended)", extras)
+    if spec.get("_error"):
+        md += ["", f"> Spec error: `{spec['_error']}`"]
+    (OUT / "REPO_INVENTORY.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
-    print("OK: wrote self_healing_out/REPO_INVENTORY.md and REPO_DIFF.json")
+    print("OK repo_audit")
 
 if __name__ == "__main__":
     main()
