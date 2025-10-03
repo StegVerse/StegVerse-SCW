@@ -1,0 +1,7 @@
+workflow_dispatch: {}
+push:
+  branches: [ "main" ]
+  paths:
+    - ".github/trigger/**"
+schedule:
+  - cron: "17 4 * * *"
