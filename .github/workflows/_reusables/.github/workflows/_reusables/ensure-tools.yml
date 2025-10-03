@@ -1,0 +1,36 @@
+name: Ensure Tools
+description: "Reusable step to install apt and pip dependencies."
+
+inputs:
+  apt_packages:
+    required: false
+    default: ""
+  python_packages:
+    required: false
+    default: ""
+  python_version:
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install apt packages
+      shell: bash
+      run: |
+        set -e
+        sudo apt-get update -y
+        [ -n "${{ inputs.apt_packages }}" ] && sudo apt-get install -y ${{ inputs.apt_packages }}
+
+    - name: Setup Python
+      if: ${{ inputs.python_version != '' }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install Python packages
+      shell: bash
+      run: |
+        set -e
+        python3 -m pip install --upgrade pip
+        [ -n "${{ inputs.python_packages }}" ] && pip install ${{ inputs.python_packages }}
