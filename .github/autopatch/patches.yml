@@ -121,11 +121,23 @@ patches:
                 echo "{\"ts\":\"$TS\",\"status\":\"${{ inputs.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
                 tail -n 2 "$LEDGER" | jq -s '.' > "self_healing_out/LAST_TWO_${{ inputs.basename }}.json" || echo "[]" > "self_healing_out/LAST_TWO_${{ inputs.basename }}.json"
 
+       - id: PATCH-README-BADGES
+    label: "README badges -> current repo"
+    kind: shell
+    description: >
+      Normalize README badges and GitHub links to the current repository
+      (useful for forks/renames). Safe no-op if patterns not present.
+    files:
+      - "README.md"
+      - "docs/README.md"
+      - "README*.md"
+    script: ".github/autopatch/snippets/PATCH-README-BADGES.sh"
   # === README: “How to Run” section (idempotent) ===
   - id: readme-how-to-run
     path: README.md
     mode: patch
     patch: |
+    
       <!-- BEGIN AUTOPATCH: how-to-run -->
       ## How to Run
       - **Supercheck**: commit any file under `.github/trigger/supercheck/` (e.g., `run-$(date +%s).txt`) or use the “Run workflow” button.
