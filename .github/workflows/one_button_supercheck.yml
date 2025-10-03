@@ -50,14 +50,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ensure tools
-        run: |
-          set -e
-          sudo apt-get update
-          sudo apt-get install -y jq curl zip || true
-          python3 -V
-          python3 -m pip install --upgrade pip
-          pip install ruamel.yaml yamllint
+      - name: Ensure tools (reusable)
+        uses: ./.github/workflows/_reusables/ensure-tools.yml
+        with:
+          apt_packages: "jq curl zip"
+          python_packages: "ruamel.yaml yamllint"
+          python_version: ""
 
       - name: Log trigger (breadcrumb trail)
         run: |
@@ -277,3 +275,9 @@ jobs:
             supercheck_diag.json
             self_healing_out/**
           if-no-files-found: warn
+      - name: Telemetry (reusable)
+        if: always()
+        uses: ./.github/workflows/_reusables/telemetry.yml
+        with:
+          basename: supercheck
+          status: ${{ job.status }}
