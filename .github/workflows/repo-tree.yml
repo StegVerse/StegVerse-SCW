@@ -1,0 +1,32 @@
+name: Repo Tree (on demand)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  tree:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate file tree
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y tree
+          mkdir -p self_healing_out
+          {
+            echo "# Repository Structure"
+            echo ""
+            echo '```'
+            tree -I 'node_modules|.git|__pycache__|venv|dist|build' -L 4 --charset ascii
+            echo '```'
+            echo ""
+            echo "Last updated: $(date '+%Y-%m-%d %H:%M:%S')"
+          } > self_healing_out/STRUCTURE.md
+      - name: Upload structure artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo_structure
+          path: self_healing_out/STRUCTURE.md
+      - name: Add to Actions summary
+        run: |
+          echo "## Repository Structure" >> $GITHUB_STEP_SUMMARY
+          cat self_healing_out/STRUCTURE.md >> $GITHUB_STEP_SUMMARY
