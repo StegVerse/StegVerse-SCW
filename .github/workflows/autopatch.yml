@@ -25,7 +25,7 @@ jobs:
           python3 -m pip install --upgrade pip
           pip install pyyaml
 
-      - name: Seed manifest(s) if missing
+      - name: Seed manifests if missing
         run: |
           set -e
           mkdir -p .github/autopatch scripts self_healing_out
@@ -38,11 +38,20 @@ version: 1
 patches: []
 YML
 
-      - name: Seed autopatch runner
-        run: |
-          chmod +x scripts/autopatch_runner.py
+      - name: Make runner executable
+        run: chmod +x scripts/autopatch_runner.py
 
-      - name: Run AutoPatch (primary, prune + defer)
+      - name: Dry-run AutoPatch (preview only)
+        env:
+          MANIFEST: .github/autopatch/patches.yml
+          DEFER: .github/autopatch/patches_deferred.yml
+        run: |
+          set -e
+          python3 scripts/autopatch_runner.py \
+            --manifest "${MANIFEST}" \
+            --dry-run || true
+
+      - name: Apply AutoPatch (prune + defer)
         env:
           MANIFEST: .github/autopatch/patches.yml
           DEFER: .github/autopatch/patches_deferred.yml
