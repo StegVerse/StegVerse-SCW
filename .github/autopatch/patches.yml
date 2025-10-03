@@ -144,3 +144,26 @@ patches:
       - **AutoPatch**: edit `.github/autopatch/patches.yml` and commit; AutoPatch runs automatically.
       - **Deferred AutoPatch**: items that are blocked will be moved to `patches_deferred.yml` and retried later.
       <!-- END AUTOPATCH: how-to-run -->
+
+
+  - id: PATCH-ISSUE-TEMPLATE-LINKS
+    label: "Issue template links -> current repo"
+    kind: shell
+    description: >
+      Normalize links inside .github/ISSUE_TEMPLATE/*.md to point at the current repository
+      (issues, pulls, discussions, actions, bare repo links). Safe no-op if nothing matches.
+    files:
+      - ".github/ISSUE_TEMPLATE/*.md"
+      - ".github/ISSUE_TEMPLATE/**.md"
+    script: ".github/autopatch/snippets/PATCH-ISSUE-TEMPLATE-LINKS.sh"
+
+  - id: PATCH-README-FOOTER
+    label: "README maintained-by footer"
+    kind: shell
+    description: >
+      Ensure a small maintained-by footer exists (with timestamp). If present, refresh timestamp only.
+    files:
+      - "README.md"
+      - "docs/README.md"
+      - "README*.md"
+    script: ".github/autopatch/snippets/PATCH-README-FOOTER.sh"
