@@ -193,4 +193,8 @@ patches:
     files: ["README.md","docs/README.md","README*.md"]
     script: ".github/autopatch/snippets/PATCH-README-TITLE-DRYRUN.sh"
 
-
+  - id: PATCH-README-BADGES
+    label: "README badges (CI/CodeQL/Supercheck/Nightly)"
+    kind: shell
+    files: ["README.md","docs/README.md"]
+    script: ".github/autopatch/snippets/PATCH-README-BADGES.sh"
