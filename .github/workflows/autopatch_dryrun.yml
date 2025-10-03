@@ -1,0 +1,42 @@
+name: AutoPatch (PR dry-run)
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  autopatch-dry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure Python
+        run: |
+          python3 -V
+          python3 -m pip install --upgrade pip
+          pip install ruamel.yaml yamllint
+
+      - name: Dry-run: Title + Badges + Sections + TOC
+        env:
+          README_TITLE_PRETTY: "1"
+        run: |
+          chmod +x .github/autopatch/snippets/*.sh || true
+          bash .github/autopatch/snippets/PATCH-README-TITLE-DRYRUN.sh README.md || true
+          # The rest: run with 'git diff' to preview but not commit
+          cp README.md README.md.bak
+          bash .github/autopatch/snippets/PATCH-README-BADGES.sh README.md || true
+          bash .github/autopatch/snippets/PATCH-README-SECTIONS.sh README.md || true
+          bash .github/autopatch/snippets/PATCH-README-TOC.sh README.md || true
+          echo "---- DRYRUN CHANGES BELOW ----" > self_healing_out/README_DRYRUN.patch
+          git --no-pager diff -- README.md >> self_healing_out/README_DRYRUN.patch
+          mv README.md.bak README.md
+
+      - name: Upload AutoPatch dry-run preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopatch_dryrun
+          path: self_healing_out/README_DRYRUN.patch
+          if-no-files-found: warn
