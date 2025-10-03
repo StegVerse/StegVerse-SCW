@@ -1,4 +1,4 @@
-name: AutoPatch — add RepoTree + Supercheck Tree step
+name: AutoPatch — add RepoTree + README status block + Supercheck Tree step
 on:
   workflow_dispatch:
   push:
@@ -21,15 +21,24 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      # ---------- Patch A: create .github/workflows/repo-tree.yml ----------
-      - name: Add Repo Tree workflow (idempotent)
+      # A) Ensure modern Repo Tree workflow (commit docs/STRUCTURE.md)
+      - name: Write repo-tree.yml (idempotent)
         run: |
           mkdir -p .github/workflows
           cat > .github/workflows/repo-tree.yml <<'YML'
+# (identical to file above)
 name: Repo Tree (on demand)
 
 on:
   workflow_dispatch:
+    inputs:
+      commit_to_repo:
+        description: "Also commit docs/STRUCTURE.md to main"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
 
 jobs:
   tree:
@@ -39,7 +48,7 @@ jobs:
       - name: Generate file tree
         run: |
           sudo apt-get update -y && sudo apt-get install -y tree
-          mkdir -p self_healing_out
+          mkdir -p self_healing_out docs
           {
             echo "# Repository Structure"
             echo ""
@@ -47,26 +56,42 @@ jobs:
             tree -I 'node_modules|.git|__pycache__|venv|dist|build' -L 4 --charset ascii
             echo '```'
             echo ""
-            echo "Last updated: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           } > self_healing_out/STRUCTURE.md
       - name: Upload structure artifact
         uses: actions/upload-artifact@v4
         with:
           name: repo_structure
           path: self_healing_out/STRUCTURE.md
+      - name: Commit docs/STRUCTURE.md (optional)
+        if: ${{ github.event.inputs.commit_to_repo == 'true' }}
+        run: |
+          set -e
+          mkdir -p docs
+          if [ ! -f docs/STRUCTURE.md ] || ! diff -q docs/STRUCTURE.md self_healing_out/STRUCTURE.md >/dev/null 2>&1; then
+            cp self_healing_out/STRUCTURE.md docs/STRUCTURE.md
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git add docs/STRUCTURE.md
+            git commit -m "docs: update STRUCTURE.md (Repo Tree)"
+            git push
+          else
+            echo "No changes to docs/STRUCTURE.md; skipping commit."
+          fi
       - name: Add to Actions summary
         run: |
-          echo "## Repository Structure" >> $GITHUB_STEP_SUMMARY
-          cat self_healing_out/STRUCTURE.md >> $GITHUB_STEP_SUMMARY
+          echo "## Repository Structure (preview)" >> $GITHUB_STEP_SUMMARY
+          head -n 80 self_healing_out/STRUCTURE.md >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Full file: docs/STRUCTURE.md (in the repo)" >> $GITHUB_STEP_SUMMARY
 YML
 
-      # ---------- Patch B: inject "Generate repo tree" step into Supercheck ----------
-      - name: Inject "Generate repo tree" step into Supercheck (before Assemble step)
+      # B) Inject a "Generate repo tree" step into Supercheck if missing
+      - name: Inject 'Generate repo tree' into Supercheck
         shell: bash
         run: |
           set -euo pipefail
           SC_FILE=""
-          # try common names you’ve been using
           for f in \
             ".github/workflows/one_button_supercheck.yml" \
             ".github/workflows/one-button-supercheck.yml" \
@@ -77,71 +102,109 @@ YML
           do
             if [ -f "$f" ]; then SC_FILE="$f"; break; fi
           done
-
           if [ -z "$SC_FILE" ]; then
-            echo "No Supercheck file found; skipping tree step injection."
-            exit 0
+            echo "No Supercheck found; skipping injection."
+          else
+            if grep -q 'name: Generate repo tree' "$SC_FILE"; then
+              echo "Supercheck already has tree step."
+            else
+              TMP="${SC_FILE}.tmp"
+              awk '
+                BEGIN { inserted=0 }
+                /- name: Assemble Supercheck Report/ && inserted==0 {
+                  print "      - name: Generate repo tree"
+                  print "        run: |"
+                  print "          sudo apt-get update -y && sudo apt-get install -y tree"
+                  print "          mkdir -p self_healing_out"
+                  print "          tree -I '"'"'node_modules|.git|__pycache__|venv|dist|build'"'"' -L 4 --charset ascii \\"
+                  print "            > self_healing_out/TREE.md"
+                  print ""
+                  print "      # (previously existing step follows)"
+                  inserted=1
+                }
+                { print $0 }
+                END {
+                  if (inserted==0) {
+                    print ""
+                    print "      - name: Generate repo tree"
+                    print "        run: |"
+                    print "          sudo apt-get update -y && sudo apt-get install -y tree"
+                    print "          mkdir -p self_healing_out"
+                    print "          tree -I '"'"'node_modules|.git|__pycache__|venv|dist|build'"'"' -L 4 --charset ascii \\"
+                    print "            > self_healing_out/TREE.md"
+                  }
+                }
+              ' "$SC_FILE" > "$TMP"
+              mv "$TMP" "$SC_FILE"
+              echo "Injected tree step into $SC_FILE"
+            fi
           fi
 
-          # If the step already exists, skip
-          if grep -q 'name: Generate repo tree' "$SC_FILE"; then
-            echo "Tree step already present in $SC_FILE; nothing to do."
-            exit 0
+      # C) Ensure README status block (badges + links), idempotent
+      - name: Update README status block
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          OWNER="$(echo "$REPO" | cut -d/ -f1)"
+          NAME="$(echo "$REPO" | cut -d/ -f2)"
+
+          BADGES_BLOCK_START="<!-- STEG-AUTO:STATUS-BLOCK-START -->"
+          BADGES_BLOCK_END="<!-- STEG-AUTO:STATUS-BLOCK-END -->"
+
+          SUPER_WF_FILE=""
+          for f in \
+            "one_button_supercheck.yml" \
+            "one-button-supercheck.yml" \
+            "supercheck.yml" \
+            "One-Button Supercheck.yml" \
+            "one-button-supercheck.yaml" \
+            "one_button_supercheck.yaml"
+          do
+            if [ -f ".github/workflows/$f" ]; then SUPER_WF_FILE="$f"; break; fi
+          done
+
+          SUPER_BDG="![Supercheck](https://github.com/${REPO}/actions/workflows/${SUPER_WF_FILE}/badge.svg?branch=main)"
+          LINK_TREE="[View latest repo tree](./docs/STRUCTURE.md)"
+          LINK_QT="[QuickTriggers](./public/quicktriggers.html)"
+
+          BLOCK_CONTENT="${BADGES_BLOCK_START}
+${SUPER_BDG} • ${LINK_TREE} • ${LINK_QT}
+${BADGES_BLOCK_END}
+"
+
+          [ -f README.md ] || echo "# ${NAME}" > README.md
+
+          if grep -q "${BADGES_BLOCK_START}" README.md; then
+            awk -v start="$BADGES_BLOCK_START" -v end="$BADGES_BLOCK_END" -v block="$BLOCK_CONTENT" '
+              BEGIN {inb=0}
+              $0 ~ start { print block; inb=1; next }
+              $0 ~ end   { next }
+              inb==1     { next }
+              { print }
+            ' README.md > README.md.tmp
+            mv README.md.tmp README.md
+          else
+            printf "%s\n\n%s\n" "$BLOCK_CONTENT" "$(cat README.md)" > README.md.tmp
+            mv README.md.tmp README.md
           fi
-
-          TMP="${SC_FILE}.tmp"
-
-          # Insert the step immediately BEFORE "Assemble Supercheck Report"
-          awk '
-            BEGIN { inserted=0 }
-            /- name: Assemble Supercheck Report/ && inserted==0 {
-              print "      - name: Generate repo tree"
-              print "        run: |"
-              print "          sudo apt-get update -y && sudo apt-get install -y tree"
-              print "          mkdir -p self_healing_out"
-              print "          tree -I '"'"'node_modules|.git|__pycache__|venv|dist|build'"'"' -L 4 --charset ascii \\"
-              print "            > self_healing_out/TREE.md"
-              print ""
-              print "      # (previously existing step follows)"
-              inserted=1
-            }
-            { print $0 }
-            END {
-              if (inserted==0) {
-                # If no Assemble step found, just append at end of job steps
-                print ""
-                print "      - name: Generate repo tree"
-                print "        run: |"
-                print "          sudo apt-get update -y && sudo apt-get install -y tree"
-                print "          mkdir -p self_healing_out"
-                print "          tree -I '"'"'node_modules|.git|__pycache__|venv|dist|build'"'"' -L 4 --charset ascii \\"
-                print "            > self_healing_out/TREE.md"
-              }
-            }
-          ' "$SC_FILE" > "$TMP"
-
-          mv "$TMP" "$SC_FILE"
 
       - name: Commit changes (if any)
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           git config user.name  "autopatch-bot"
           git config user.email "bot@stegverse.local"
-          git add .github/workflows/repo-tree.yml || true
-          git add .github/workflows/*.yml || true
+          git add .github/workflows/repo-tree.yml README.md .github/workflows/*.yml || true
           if git diff --cached --quiet; then
             echo "No autopatch changes to commit."
           else
-            git commit -m "autopatch: add Repo Tree workflow + inject tree step into Supercheck"
+            git commit -m "autopatch: repo-tree workflow, Supercheck tree step, README status block"
             git push origin HEAD:main || true
           fi
 
       - name: Summary
         run: |
           echo "### Autopatch complete" >> $GITHUB_STEP_SUMMARY
-          echo "- Added/updated: \`.github/workflows/repo-tree.yml\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Ensured Supercheck includes a 'Generate repo tree' step" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "You can now run **Repo Tree (on demand)** from the Actions tab, or just run Supercheck to include TREE.md in its bundle." >> $GITHUB_STEP_SUMMARY
+          echo "- Repo Tree workflow ensured" >> $GITHUB_STEP_SUMMARY
+          echo "- Supercheck now generates TREE.md in artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- README now contains badges & quick links" >> $GITHUB_STEP_SUMMARY
