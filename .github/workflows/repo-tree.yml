@@ -2,16 +2,25 @@ name: Repo Tree (on demand)
 
 on:
   workflow_dispatch:
+    inputs:
+      commit_to_repo:
+        description: "Also commit docs/STRUCTURE.md to main"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
 
 jobs:
   tree:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Generate file tree
         run: |
           sudo apt-get update -y && sudo apt-get install -y tree
-          mkdir -p self_healing_out
+          mkdir -p self_healing_out docs
           {
             echo "# Repository Structure"
             echo ""
@@ -19,14 +28,35 @@ jobs:
             tree -I 'node_modules|.git|__pycache__|venv|dist|build' -L 4 --charset ascii
             echo '```'
             echo ""
-            echo "Last updated: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           } > self_healing_out/STRUCTURE.md
+
       - name: Upload structure artifact
         uses: actions/upload-artifact@v4
         with:
           name: repo_structure
           path: self_healing_out/STRUCTURE.md
+
+      - name: Commit docs/STRUCTURE.md (optional)
+        if: ${{ github.event.inputs.commit_to_repo == 'true' }}
+        run: |
+          set -e
+          mkdir -p docs
+          # Only commit if changed
+          if [ ! -f docs/STRUCTURE.md ] || ! diff -q docs/STRUCTURE.md self_healing_out/STRUCTURE.md >/dev/null 2>&1; then
+            cp self_healing_out/STRUCTURE.md docs/STRUCTURE.md
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git add docs/STRUCTURE.md
+            git commit -m "docs: update STRUCTURE.md (Repo Tree)"
+            git push
+          else
+            echo "No changes to docs/STRUCTURE.md; skipping commit."
+          fi
+
       - name: Add to Actions summary
         run: |
-          echo "## Repository Structure" >> $GITHUB_STEP_SUMMARY
-          cat self_healing_out/STRUCTURE.md >> $GITHUB_STEP_SUMMARY
+          echo "## Repository Structure (preview)" >> $GITHUB_STEP_SUMMARY
+          head -n 80 self_healing_out/STRUCTURE.md >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Full file: docs/STRUCTURE.md (in the repo)" >> $GITHUB_STEP_SUMMARY
