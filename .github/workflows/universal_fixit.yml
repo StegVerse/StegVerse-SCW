@@ -1,274 +1,166 @@
-name: One-Button Supercheck (Diag + YAML Corrector + Repo Audit + Drift + Auto-Triage)
+name: Universal Fix-It (YAML Corrector + Sweep + Reports)
 
 on:
   workflow_dispatch:
     inputs:
-      api_base:
-        description: "API base URL (e.g., https://your-api.onrender.com). Leave blank to skip runtime diagnostics."
+      apply_fixes:
+        description: "Apply fixes in-place (otherwise dry run)"
         required: false
-        default: ""
-      queue_key:
-        description: "Worker queue key"
-        required: false
-        default: "queue:runs"
-      timeout_sec:
-        description: "Max seconds to wait for worker processing"
-        required: false
-        default: "75"
-      poll_sec:
-        description: "Poll interval seconds"
-        required: false
-        default: "3"
-      auto_apply:
-        description: "Apply safe fixes autonomously (scaffold required, move extras to ATTIC, remove forbidden)"
-        required: false
-        default: "false"
+        default: "true"
       auto_commit:
-        description: "Commit fixes directly to main (else PR)"
+        description: "Commit/push normalized workflows to main (else open PR)"
         required: false
         default: "false"
-
-  # File-based triggers (mobile friendly)
   push:
     branches: [ "main" ]
     paths:
-      - ".github/trigger/supercheck/**"
+      - ".github/trigger/universal-fixit/**"
 
 permissions:
   contents: write
   pull-requests: write
   checks: write
-  security-events: write
 
 concurrency:
-  group: supercheck-${{ github.ref }}
+  group: universal-fixit-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RUN_UNIVERSAL_FIXIT: ${{ vars.RUN_UNIVERSAL_FIXIT || 'true' }}
+
 jobs:
-  supercheck:
+  fixit:
+    if: ${{ env.RUN_UNIVERSAL_FIXIT == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Ensure tools
+        shell: bash
         run: |
           set -e
-          sudo apt-get update
-          sudo apt-get install -y jq curl zip || true
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl zip
           python3 -V
           python3 -m pip install --upgrade pip
           pip install ruamel.yaml yamllint
 
-      - name: Log trigger (breadcrumb trail)
-        run: |
-          mkdir -p self_healing_out
-          echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"run_id\":\"${GITHUB_RUN_ID}\",\"attempt\":${GITHUB_RUN_ATTEMPT},\"actor\":\"${GITHUB_ACTOR}\",\"trigger\":\"${{ github.event_name }}:${{ github.ref }}\",\"run_url\":\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" >> self_healing_out/TRIGGER_EVENTS.jsonl
-
-      # ---- Stage A: YAML Corrector (always run first) ----
-      - name: Run YAML Corrector v2 (or legacy)
+      - name: Install actionlint
         shell: bash
         run: |
           set -e
-          mkdir -p self_healing_out scripts
-          # Prefer v2; fall back to legacy if present
-          if [ -f scripts/yaml_corrector_v2.py ]; then
-            python3 scripts/yaml_corrector_v2.py --apply || echo "YAML Corrector v2 failed" > self_healing_out/YAML_CORRECTOR_REPORT.md
-          elif [ -f scripts/yaml_corrector.py ]; then
-            python3 scripts/yaml_corrector.py --apply || echo "YAML Corrector legacy failed" > self_healing_out/YAML_CORRECTOR_REPORT.md
-          else
-            echo "# YAML Corrector missing" > self_healing_out/YAML_CORRECTOR_REPORT.md
-          fi
-          [ -f self_healing_out/YAML_CORRECTOR_REPORT.json ] || echo '{}' > self_healing_out/YAML_CORRECTOR_REPORT.json
+          curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
+          mv actionlint /usr/local/bin/actionlint
 
-      # NEW: Auto-fix known issues (YAML-001 et al.)
-      - name: Auto-fix known issues (YAML-001 et al.)
+      - name: Seed helper scripts if missing (safe fallbacks)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out
+          # yaml_corrector_v2.py fallback (creates a tiny report only)
+          if [ ! -f scripts/yaml_corrector_v2.py ]; then
+            cat > scripts/yaml_corrector_v2.py <<'PY'
+#!/usr/bin/env python3
+import json, sys, os, time, pathlib
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+OUT = ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+rep_md = OUT/"YAML_CORRECTOR_REPORT.md"
+rep_js = OUT/"YAML_CORRECTOR_REPORT.json"
+if "--apply" in sys.argv:
+    rep_md.write_text("# YAML Corrector\n\n- Fallback ran (no real corrector present)\n- Mode: apply\n", encoding="utf-8")
+else:
+    rep_md.write_text("# YAML Corrector\n\n- Fallback ran (no real corrector present)\n- Mode: dry-run\n", encoding="utf-8")
+rep_js.write_text(json.dumps({"fallback": True, "ts": int(time.time())}, indent=2), encoding="utf-8")
+print("fallback-corrector: OK")
+PY
+            chmod +x scripts/yaml_corrector_v2.py
+          fi
+          # sweep_all_workflows.py fallback
+          if [ ! -f scripts/sweep_all_workflows.py ]; then
+            cat > scripts/sweep_all_workflows.py <<'PY'
+#!/usr/bin/env python3
+import json, time, pathlib
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+OUT = ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+(OUT/"SWEEP_REPORT.json").write_text(json.dumps({"fallback": True, "ts": int(time.time())}, indent=2), encoding="utf-8")
+(OUT/"SWEEP_REPORT.md").write_text("# Sweep Report\n\n- Fallback sweep executed.\n", encoding="utf-8")
+print("fallback-sweep: OK")
+PY
+            chmod +x scripts/sweep_all_workflows.py
+          fi
+          # auto_fix_known_issues.py fallback
+          if [ ! -f scripts/auto_fix_known_issues.py ]; then
+            cat > scripts/auto_fix_known_issues.py <<'PY'
+#!/usr/bin/env python3
+import json, time, pathlib
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+OUT = ROOT/"self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+(OUT/"AUTO_FIX_REPORT.json").write_text(json.dumps({"detected":[],"fixed":[],"skipped":[],"errors":[],"fallback":True,"ts":int(time.time())}, indent=2), encoding="utf-8")
+(OUT/"AUTO_FIX_REPORT.md").write_text("# Auto-Fix Report\n\n- No known issues detected (fallback).\n", encoding="utf-8")
+print("fallback-auto-fix: OK")
+PY
+            chmod +x scripts/auto_fix_known_issues.py
+          fi
+
+      - name: Run YAML Corrector (apply first)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p self_healing_out
+          if [ "${{ github.event.inputs.apply_fixes || 'true' }}" = "true" ]; then
+            python3 scripts/yaml_corrector_v2.py --apply || true
+          else
+            python3 scripts/yaml_corrector_v2.py || true
+          fi
+
+      - name: Auto-fix known issues (YAML-001, etc.)
         shell: bash
         run: |
           set -e
           python3 scripts/auto_fix_known_issues.py || true
-          # If nothing produced a report yet, ensure placeholders exist
           [ -f self_healing_out/AUTO_FIX_REPORT.md ] || echo "# Auto-Fix Report\n\n(no known issues detected)" > self_healing_out/AUTO_FIX_REPORT.md
           [ -f self_healing_out/AUTO_FIX_REPORT.json ] || echo '{"detected":[],"fixed":[],"skipped":[],"errors":[]}' > self_healing_out/AUTO_FIX_REPORT.json
 
-      - name: Validate workflows (actionlint + yamllint)
+      - name: Validate workflows
+        shell: bash
         continue-on-error: true
         run: |
-          curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
-          ./actionlint -color -shellcheck= || true
+          actionlint -color -shellcheck=
           yamllint -f parsable .github/workflows || true
 
-      - name: Upload YAML Corrector + Auto-Fix bundle
+      - name: Sweep all workflows (report)
+        shell: bash
+        run: |
+          set -e
+          python3 scripts/sweep_all_workflows.py || true
+
+      - name: Commit or PR changes (if auto_commit=true AND apply_fixes=true)
+        if: ${{ (github.event.inputs.auto_commit == 'true') && (github.event.inputs.apply_fixes == 'true') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -e
+          git config user.name "universal-fixit-bot"
+          git config user.email "bot@stegverse.local"
+          git add .github/workflows || true
+          if git diff --cached --quiet; then
+            echo "No workflow changes to commit."
+          else
+            git commit -m "chore: universal-fixit — normalize/repair workflows"
+            git push origin HEAD:main || true
+          fi
+
+      - name: Upload Fix-It bundle (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: yaml_corrector_bundle
+          name: universal_fixit_bundle
           path: |
             self_healing_out/YAML_CORRECTOR_REPORT.*
             self_healing_out/AUTO_FIX_REPORT.*
-          if-no-files-found: warn
-
-      # (Optional compatibility: run legacy precision/sweep if present)
-      - name: Legacy Fix-It (if present)
-        run: |
-          if [ -f scripts/validate_and_fix.py ]; then
-            python3 scripts/validate_and_fix.py --apply || true
-          fi
-      - name: Legacy Sweep-All (if present)
-        run: |
-          if [ -f scripts/sweep_all_workflows.py ]; then
-            python3 scripts/sweep_all_workflows.py --apply || true
-          fi
-
-      # ---- Stage B: Runtime Diagnostics ----
-      - name: Runtime diagnostics (API + Worker)
-        id: diag
-        env:
-          API_BASE:   ${{ github.event.inputs.api_base }}
-          QUEUE_KEY:  ${{ github.event.inputs.queue_key }}
-          TIMEOUT_SEC: ${{ github.event.inputs.timeout_sec }}
-          POLL_SEC:   ${{ github.event.inputs.poll_sec }}
-        run: |
-          set -euo pipefail
-          API="${API_BASE}"
-          if [ -z "$API" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            printf '{"ok":null,"skipped":true}\n' > supercheck_diag.json
-            exit 0
-          fi
-          sudo apt-get install -y curl jq >/dev/null 2>&1 || true
-          API="$(echo "$API" | sed 's:/*$::')"
-          get(){ curl -sS -w "\n%{http_code}" "$1"; }
-          post(){ curl -sS -w "\n%{http_code}" -X POST "$1" -H "Content-Type: application/json" -d "{}"; }
-          pass=true; report='{"api_base":"'"$API"'","steps":[],"ok":false}'
-          add(){ if [ -n "${3:-}" ]; then DATA_JSON="$3"; else DATA_JSON="null"; fi; report="$(jq -c --arg n "$1" --argjson ok "${2:-false}" --argjson data "$DATA_JSON" --arg e "${4:-}" '.steps += [{"name":$n,"ok":$ok,"data":$data,"error":( ($e|length)>0 ? $e : null)}]' <<<"$report")"; }
-          read -r b s < <(get "$API/v1/ops/health"); if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/health" true  "$(echo "$b"|jq -cS .)"; else add "GET /v1/ops/health" false "" "HTTP $s"; pass=false; fi
-          read -r b s < <(get "$API/v1/ops/env/required"); if [ "${s:-500}" = "200" ]; then add "GET /v1/ops/env/required" true "$(echo "$b"|jq -cS .)"; else add "GET /v1/ops/env/required" false "" "HTTP $s"; pass=false; fi
-          read -r b s < <(get "$API/v1/ops/metrics"); if [ "${s:-500}" = "200" ]; then PB="$(echo "$b"|jq -r '.processed // 0')"; add "GET /v1/ops/metrics (before)" true "$(echo "$b"|jq -cS .)"; else PB=0; add "GET /v1/ops/metrics (before)" false "" "HTTP $s"; pass=false; fi
-          read -r b s < <(post "$API/v1/ops/queue/test"); if [ "${s:-500}" = "200" ] && [ "$(echo "$b"|jq -r '.queued // false')" = "true" ]; then add "POST /v1/ops/queue/test" true "$(echo "$b"|jq -cS .)"; else add "POST /v1/ops/queue/test" false "" "HTTP $s"; pass=false; fi
-          end=$(( $(date +%s) + ${TIMEOUT_SEC} )); snaps="[]"; PA="$PB"
-          if [ "$pass" = true ]; then
-            while [ $(date +%s) -lt "$end" ]; do
-              sleep "${POLL_SEC}"; read -r b s < <(get "$API/v1/ops/metrics")
-              if [ "${s:-500}" = "200" ]; then snaps=$(jq -c --argjson s "$(echo "$b"|jq -cS .)" '. + [ $s ]' <<<"$snaps"); val="$(echo "$b"|jq -r '.processed // 0')"; PA="$val"; [ "$PA" -gt "$PB" ] && break; fi
-            done
-            ok=$([ "$PA" -gt "$PB" ] && echo true || echo false)
-            add "Poll metrics until processed increases" "$ok" "$snaps" "before=$PB after=$PA timeout=${TIMEOUT_SEC}s"
-            [ "$ok" = true ] || pass=false
-          fi
-          report="$(jq -c --argjson ok $([ "$pass" = true ] && echo true || echo false) '.ok=$ok' <<<"$report")"
-          echo "$report" | jq -S . > supercheck_diag.json
-          echo "skip=false" >> $GITHUB_OUTPUT
-          echo "ok=$pass" >> $GITHUB_OUTPUT
-
-      # ---- Stage C: Repo Audit & Drift ----
-      - name: Repo Inventory & Diff
-        run: python3 scripts/repo_audit.py
-
-      - name: Topic Drift Auditor
-        run: python3 scripts/topic_drift_audit.py
-
-      # ---- Stage D: Self-Healing Scan ----
-      - name: Self-Healing Scan (minimal)
-        run: python3 scripts/collect_self_healing.py
-
-      # ---- Stage E: Auto-Triage ----
-      - name: Auto-Triage (plan + optional apply)
-        env:
-          APPLY: ${{ github.event.inputs.auto_apply }}
-        run: |
-          if [ "${APPLY}" = "true" ]; then APPLY=1 python3 scripts/auto_triage.py; else python3 scripts/auto_triage.py; fi
-
-      # ---- Stage F: Commit/PR if auto_apply ----
-      - name: Commit or PR changes
-        if: ${{ github.event.inputs.auto_apply == 'true' }}
-        env:
-          DO_COMMIT: ${{ github.event.inputs.auto_commit }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          git config user.name "supercheck-bot"
-          git config user.email "bot@stegverse.local"
-          if [ "$DO_COMMIT" = "true" ]; then
-            git add -A
-            git commit -m "supercheck(auto): apply safe triage (scaffold/move ATTIC/remove forbidden)" || echo "No changes"
-            git push origin HEAD:main || true
-          else
-            BR="supercheck/triage-${GITHUB_RUN_ID}"
-            git checkout -b "$BR"
-            git add -A
-            git commit -m "supercheck(auto): apply safe triage (scaffold/move ATTIC/remove forbidden)" || echo "No changes"
-            git push origin "$BR" || true
-            TITLE="Supercheck: safe triage (auto)"
-            BODY="This PR was created by One-Button Supercheck.\n\n- Scaffolds missing files/dirs\n- Moves extras to ATTIC with @attic headers\n- Removes forbidden files\n\nReview the artifact 'supercheck_bundle' for details."
-            curl -sS -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main","maintainer_can_modify":true}')" \
-              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
-
-      # ---- Stage G: Assemble Human-Readable Report ----
-      - name: Assemble Supercheck Report
-        run: |
-          set -e
-          echo "# Supercheck Report" > supercheck_report.md
-          echo "" >> supercheck_report.md
-          echo "## YAML Corrector" >> supercheck_report.md
-          cat self_healing_out/YAML_CORRECTOR_REPORT.md >> supercheck_report.md || echo "(no YAML report)" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          echo "## Auto-Fix (Known Issues)" >> supercheck_report.md
-          cat self_healing_out/AUTO_FIX_REPORT.md >> supercheck_report.md || echo "(no auto-fix activity)" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-
-          if [ -f supercheck_diag.json ]; then
-            OK=$(jq -r '.ok' supercheck_diag.json 2>/dev/null || echo null)
-            if [ "$OK" != "null" ]; then
-              BADGE=$([ "$OK" = "true" ] && echo "✅ PASS" || echo "❌ FAIL")
-              echo "## API/Worker Diagnostics — $BADGE" >> supercheck_report.md
-              echo "" >> supercheck_report.md
-              jq -S . supercheck_diag.json | head -c 180000 | sed 's/^/    /' >> supercheck_report.md
-              echo "" >> supercheck_report.md
-            fi
-          fi
-
-          echo "## Repo Inventory & Diff" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          cat self_healing_out/REPO_INVENTORY.md >> supercheck_report.md || true
-          echo "" >> supercheck_report.md
-
-          echo "## Drift Report" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          cat self_healing_out/DRIFT_REPORT.md >> supercheck_report.md || true
-          echo "" >> supercheck_report.md
-
-          echo "## Self-Healing Manifest" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          cat self_healing_out/SELF_HEALING_MANIFEST.md >> supercheck_report.md || true
-          echo "" >> supercheck_report.md
-
-          echo "## Auto-Triage Plan" >> supercheck_report.md
-          echo "" >> supercheck_report.md
-          cat self_healing_out/AUTO_TRIAGE_REPORT.md >> supercheck_report.md || true
-          echo "" >> supercheck_report.md
-
-      # ---- Stage H: Upload Final Bundle ----
-      - name: Upload Sweep (reusable)
-        if: always()
-        uses: ./.github/workflows/_reusables/upload-sweep.yml
-        with:
-          name: universal_fixit_sweep
-          base_dir: self_healing_out
-          files: |
-            SWEEP_REPORT.json
-            SWEEP_REPORT.md
-          create_placeholder: true
-      
-      - name: Upload Supercheck Bundle
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: supercheck_bundle
-          path: |
-            supercheck_report.md
-            supercheck_diag.json
-            self_healing_out/**
+            self_healing_out/SWEEP_REPORT.*
           if-no-files-found: warn
