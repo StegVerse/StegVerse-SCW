@@ -1,38 +1,15 @@
-name: AutoPatch (Repo Workflow Hardener)
+name: AutoPatch Workflows (dispatch + summary + perms)
 
 on:
   workflow_dispatch:
     inputs:
       apply:
-        description: "Apply changes (else dry run)"
+        description: "Write changes to workflows"
         required: false
-        default: "false"
-      auto_commit:
-        description: "Commit fixes directly to main (else open PR)"
-        required: false
-        default: "false"
-      rid:
-        description: "Correlation ID override (RID-yyyymmdd-###)"
-        required: false
-        default: ""
-      task:
-        description: "Task/Issue ID (e.g., STEG-123)"
-        required: false
-        default: ""
-
-  push:
-    branches: [ "main" ]
-    paths:
-      - ".github/trigger/autopatch/**"
+        default: "true"
 
 permissions:
   contents: write
-  pull-requests: write
-  checks: write
-
-concurrency:
-  group: autopatch-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   autopatch:
@@ -40,116 +17,223 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 1 }
+        with:
+          clean: true
+          fetch-depth: 1
 
-      - name: Ensure tools
+      - name: Ensure Python tooling
         run: |
-          set -e
-          sudo apt-get update -y
-          sudo apt-get install -y jq
           python3 -V
+          python3 -m pip install --upgrade pip
+          pip install ruamel.yaml
 
-      - name: Read run intent (RID/TASK)
+      - name: Seed patch script (scripts/patch_workflows.py)
         shell: bash
         run: |
-          set -e
-          INTENT_FILE="$(ls .github/trigger/**/run.* 2>/dev/null | head -n1 || true)"
-          RID_IN="${{ github.event.inputs.rid }}"
-          TASK_IN="${{ github.event.inputs.task }}"
-          if [ -z "$RID_IN" ] && [ -n "$INTENT_FILE" ]; then
-            RID_IN="$(grep -E '^(rid|RID):\\s*' "$INTENT_FILE" | head -n1 | sed 's/^[^:]*:\\s*//')"
-          fi
-          if [ -z "$TASK_IN" ] && [ -n "$INTENT_FILE" ]; then
-            TASK_IN="$(grep -E '^(task|TASK):\\s*' "$INTENT_FILE" | head -n1 | sed 's/^[^:]*:\\s*//')"
-          fi
-          echo "RID=${RID_IN:-RID-auto-${GITHUB_RUN_ID}}" >> $GITHUB_ENV
-          echo "TASK=${TASK_IN:-STEG-unknown}" >> $GITHUB_ENV
-          echo "APPLY=${{ github.event.inputs.apply }}" >> $GITHUB_ENV
-          echo "AUTO_COMMIT=${{ github.event.inputs.auto_commit }}" >> $GITHUB_ENV
+          mkdir -p scripts self_healing_out
+          cat > scripts/patch_workflows.py << 'PY'
+#!/usr/bin/env python3
+import json, sys
+from pathlib import Path
+from copy import deepcopy
+from ruamel.yaml import YAML
 
-      - name: Run AutoPatch
-        shell: bash
-        run: |
-          set -e
-          mkdir -p patches scripts self_healing_out
-          if [ ! -f scripts/auto_patch.py ]; then
-            echo "ERROR: scripts/auto_patch.py missing"; exit 1
-          fi
-          python3 scripts/auto_patch.py
+ROOT = Path(__file__).resolve().parents[1]
+WF_DIR = ROOT / ".github" / "workflows"
+OUT_DIR = ROOT / "self_healing_out"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-      - name: Create commit or PR
+yaml = YAML()
+yaml.preserve_quotes = True
+yaml.width = 100000
+
+def load_yaml(p):
+    with p.open("r", encoding="utf-8") as f:
+        return yaml.load(f)
+
+def dump_yaml(data, p):
+    with p.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+
+def ensure_workflow_dispatch(on_block):
+    """
+    on: can be:
+      - dict with keys
+      - string (rare)
+      - list (rare)
+    We normalize to dict and ensure 'workflow_dispatch' exists.
+    """
+    if on_block is None:
+        return {"workflow_dispatch": {}}, True
+
+    # If it's a string or list, wrap into dict
+    if isinstance(on_block, str):
+        return {"workflow_dispatch": {}, on_block: {}}, True
+    if isinstance(on_block, list):
+        d = {"workflow_dispatch": {}}
+        for k in on_block:
+            d[k] = {}
+        return d, True
+
+    # dict case
+    changed = False
+    if "workflow_dispatch" not in on_block:
+        on_block["workflow_dispatch"] = {}
+        changed = True
+    return on_block, changed
+
+def ensure_permissions_at_top(doc):
+    """
+    If a top-level permissions block is missing, add a minimal safe default.
+    We don't overwrite if present.
+    """
+    changed = False
+    if "permissions" not in doc:
+        doc["permissions"] = {"contents": "write"}
+        changed = True
+    return changed
+
+def collect_artifact_names(steps):
+    names = []
+    if not isinstance(steps, list):
+        return names
+    for s in steps:
+        # detect actions/upload-artifact@...
+        uses = s.get("uses") if isinstance(s, dict) else None
+        if isinstance(uses, str) and "actions/upload-artifact@" in uses:
+            with_blk = s.get("with", {})
+            name = with_blk.get("name")
+            if isinstance(name, str) and name.strip():
+                names.append(name.strip())
+    return names
+
+def has_summary_step(steps):
+    if not isinstance(steps, list):
+        return False
+    for s in steps:
+        if isinstance(s, dict) and s.get("name", "").lower().startswith("add artifact summary"):
+            return True
+    return False
+
+def append_summary_step(steps, artifact_names):
+    # Add a summary step that prints links/names.
+    body_lines = [
+        'echo "## Artifact Outputs" >> $GITHUB_STEP_SUMMARY',
+    ]
+    if artifact_names:
+        for nm in artifact_names:
+            # Plain bullet list; the artifact panel is the canonical place to download
+            body_lines.append(f'echo "- {nm}" >> $GITHUB_STEP_SUMMARY')
+    else:
+        body_lines.append('echo "- (No artifacts uploaded by this job)" >> $GITHUB_STEP_SUMMARY')
+
+    steps.append({
+        "name": "Add artifact summary",
+        "if": "always()",
+        "run": "\n".join(body_lines)
+    })
+
+def patch_file(p):
+    original = load_yaml(p)
+    doc = deepcopy(original)
+    changed = False
+    notes = []
+
+    # 1) ensure on.workflow_dispatch
+    on_block = doc.get("on")
+    new_on, ch = ensure_workflow_dispatch(on_block)
+    if ch:
+        doc["on"] = new_on
+        changed = True
+        notes.append("added workflow_dispatch")
+
+    # 2) ensure minimal top-level permissions
+    if ensure_permissions_at_top(doc):
+        changed = True
+        notes.append("added top-level permissions: contents: write")
+
+    # 3) add a per-job summary step enumerating uploaded artifacts
+    jobs = doc.get("jobs", {})
+    if isinstance(jobs, dict):
+        for job_id, job in jobs.items():
+            st = job.get("steps")
+            if not st:
+                continue
+            arts = collect_artifact_names(st)
+            if not has_summary_step(st):
+                append_summary_step(st, arts)
+                changed = True
+                notes.append(f"job:{job_id} add artifact summary")
+
+    return doc, changed, notes
+
+def main():
+    patched = []
+    skipped = []
+    errors = []
+    for y in sorted(WF_DIR.glob("*.y*ml")):
+        try:
+            new_doc, changed, notes = patch_file(y)
+            if changed:
+                dump_yaml(new_doc, y)
+                patched.append({"file": y.as_posix(), "changes": notes})
+            else:
+                skipped.append(y.as_posix())
+        except Exception as e:
+            errors.append({"file": y.as_posix(), "error": str(e)})
+
+    report = {
+        "patched": patched,
+        "skipped": skipped,
+        "errors": errors
+    }
+    (OUT_DIR / "AUTOPATCH_REPORT.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    md = ["# AutoPatch Report", ""]
+    md.append(f"- Patched: **{len(patched)}**")
+    md.append(f"- Skipped: **{len(skipped)}**")
+    md.append(f"- Errors: **{len(errors)}**")
+    md.append("")
+    if patched:
+        md.append("## Patched files")
+        for item in patched:
+            md.append(f"- `{item['file']}` — {', '.join(item['changes'])}")
+        md.append("")
+    if errors:
+        md.append("## Errors")
+        for e in errors:
+            md.append(f"- `{e['file']}` — {e['error']}")
+    (OUT_DIR / "AUTOPATCH_REPORT.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2))
+
+if __name__ == "__main__":
+    main()
+PY
+
+      - name: Run patcher
         env:
-          GH_TOKEN: ${{ github.token }}
+          APPLY: ${{ github.event.inputs.apply }}
         run: |
           set -e
-          if [ "${APPLY}" != "true" ]; then
-            echo "Dry run: skipping commit/PR"
-            exit 0
-          fi
-
-          git config user.name "autopatch-bot"
-          git config user.email "bot@stegverse.local"
-          if git diff --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
-          MSG="autopatch: normalize workflows (RID=${RID}, ${TASK})"
-          if [ "${AUTO_COMMIT}" = "true" ]; then
-            git add -A
-            git commit -m "$MSG"
-            git push origin HEAD:main || true
+          python3 scripts/patch_workflows.py
+          # stage changes if any
+          git add .github/workflows || true
+          if git diff --cached --quiet; then
+            echo "No workflow changes to commit."
           else
-            BR="autopatch/${RID}"
-            git checkout -b "$BR"
-            git add -A
-            git commit -m "$MSG"
-            git push origin "$BR" || true
-            # open PR
-            BODY="AutoPatch applied repo standardization.\n\nRID=${RID}\nTASK=${TASK}\nSee artifact 'autopatch_bundle'."
-            curl -sS -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              -d "$(jq -nc --arg t "AutoPatch: ${RID} (${TASK})" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main","maintainer_can_modify":true,"labels":["autopatch", "hardening"]}')" \
-              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
+            git config user.name "autopatch-bot"
+            git config user.email "bot@stegverse.local"
+            git commit -m "autopatch: ensure workflow_dispatch + summary + minimal perms"
+            if [ "${APPLY}" = "true" ]; then
+              git push origin HEAD:main || true
+            else
+              echo "Dry run; not pushing."
+            fi
           fi
 
-      - name: Assemble AutoPatch Report (human)
-        run: |
-          set -e
-          {
-            echo "# AutoPatch Summary"
-            echo "- RID: ${RID}"
-            echo "- TASK: ${TASK}"
-            echo ""
-            echo "## Report"
-            [ -f self_healing_out/AUTOPATCH_REPORT.md ] && cat self_healing_out/AUTOPATCH_REPORT.md || echo "(no report)"
-          } > autopatch_summary.md
-
-      - name: Update last-two ledger
-        if: always()
-        run: |
-          set -e
-          mkdir -p self_healing_out
-          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          LEDGER="self_healing_out/TRIGGER_EVENTS_AutoPatch.jsonl"
-          echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"rid\":\"${RID}\",\"task\":\"${TASK}\",\"run_url\":\"$RUN_URL\"}" >> "$LEDGER"
-          tail -n 2 "$LEDGER" | jq -s '.' > self_healing_out/LAST_TWO_AutoPatch.json || echo "[]" > self_healing_out/LAST_TWO_AutoPatch.json
-          {
-            echo "### Last two AutoPatch outcomes"
-            jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — \(.rid) — \(.task)  [(run)](\(.run_url))"' self_healing_out/LAST_TWO_AutoPatch.json 2>/dev/null || true
-          } > self_healing_out/LAST_TWO_AutoPatch.md
-
-      - name: Upload AutoPatch bundle
+      - name: Upload autopatch report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: autopatch_bundle
-          path: |
-            autopatch_summary.md
-            self_healing_out/AUTOPATCH_REPORT.json
-            self_healing_out/AUTOPATCH_REPORT.md
-            self_healing_out/LAST_TWO_AutoPatch.json
-            self_healing_out/LAST_TWO_AutoPatch.md
+          name: autopatch_report
+          path: self_healing_out/AUTOPATCH_REPORT.*
           if-no-files-found: warn
