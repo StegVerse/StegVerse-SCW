@@ -179,3 +179,10 @@ patches:
       - "docs/README.md"
       - "README*.md"
     script: ".github/autopatch/snippets/PATCH-README-TITLE.sh"
+
+- name: AutoPatch (primary)
+  env:
+    README_TITLE_PRETTY: "1"    # kebab/snake -> Title Case
+    # README_TITLE: "StegVerse SCW"  # uncomment to force a specific title
+  run: |
+    python3 .github/autopatch/runner.py --apply
