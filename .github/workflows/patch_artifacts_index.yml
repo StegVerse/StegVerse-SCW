@@ -1,0 +1,343 @@
+name: Patch: Artifacts Index + Standardized Uploader
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/trigger/patches/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          python3 -m pip install --upgrade pip
+          python3 -V
+
+      - name: Seed patch script
+        shell: bash
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out .github/workflows/_reusables .github/trigger/structure
+          cat > scripts/patch_artifacts_index.py <<'PY'
+#!/usr/bin/env python3
+import re, json, hashlib, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+REUSABLE = ROOT / ".github/workflows/_reusables/upload-with-index.yml"
+STRUCTURE = ROOT / ".github/workflows/structure_on_demand.yml"
+OUTDIR = ROOT / "self_healing_out"
+OUTDIR.mkdir(parents=True, exist_ok=True)
+report = {"created": [], "updated": [], "skipped": [], "notes": []}
+
+def write(path: Path, text: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    before = path.read_text(encoding="utf-8") if path.exists() else ""
+    if before == text:
+        report["skipped"].append(path.as_posix())
+        return False
+    path.write_text(text, encoding="utf-8")
+    if before:
+        report["updated"].append(path.as_posix())
+    else:
+        report["created"].append(path.as_posix())
+    return True
+
+def sha256s(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:10]
+
+# 1) Reusable uploader
+reusable_text = """name: _reusable: upload-with-index
+on:
+  workflow_call:
+    inputs:
+      name: {required: true, type: string}
+      base_dir: {required: false, type: string, default: "."}
+      paths: {required: true, type: string}
+      extra_globs: {required: false, type: string, default: ""}
+      summary_title: {required: false, type: string, default: "Bundle"}
+      label: {required: false, type: string, default: ""}
+      index_path: {required: false, type: string, default: "self_healing_out/artifacts"}
+      commit_index: {required: false, type: boolean, default: false}
+permissions:
+  contents: write
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq coreutils || true
+      - name: Resolve file list and stage bundle
+        id: stage
+        env:
+          NAME: ${{ inputs.name }}
+          BASE: ${{ inputs.base_dir }}
+          PATHS: ${{ inputs.paths }}
+          EXTRA: ${{ inputs.extra_globs }}
+          INDEX_DIR: ${{ inputs.index_path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$INDEX_DIR"
+          STAGE=".bundle_stage/$NAME"; mkdir -p "$STAGE"
+          TMP=".bundle_stage/list.txt"; : > "$TMP"
+          while IFS= read -r line; do [ -z "$line" ] && continue; find "$BASE" -path "$line" -print 2>/dev/null || true; done <<< "$PATHS" >> "$TMP"
+          while IFS= read -r line; do [ -z "$line" ] && continue; find "$BASE" -path "$line" -print 2>/dev/null || true; done <<< "$EXTRA" >> "$TMP"
+          sort -u "$TMP" | while read -r p; do
+            [ -f "$p" ] || continue
+            dest="$STAGE/${p#"$BASE"/}"; mkdir -p "$(dirname "$dest")"; cp -a "$p" "$dest"
+          done
+          echo "stage_dir=$STAGE" >> $GITHUB_OUTPUT
+      - name: Generate per-run manifest + LATEST index
+        id: index
+        env:
+          NAME: ${{ inputs.name }}
+          INDEX_DIR: ${{ inputs.index_path }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -euo pipefail
+          STAGE="${{ steps.stage.outputs.stage_dir }}"
+          RUN_DIR="$INDEX_DIR/$NAME/${GITHUB_RUN_ID}"
+          LATEST_DIR="$INDEX_DIR/LATEST"
+          mkdir -p "$RUN_DIR" "$LATEST_DIR"
+          MANIFEST="$RUN_DIR/manifest.json"
+          {
+            echo '{'
+            echo '  "bundle": "'"$NAME"'",'
+            echo '  "workflow": "'"$GITHUB_WORKFLOW"'",'
+            echo '  "run_id": "'"$GITHUB_RUN_ID"'",'
+            echo '  "run_url": "'"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'",'
+            echo '  "repo": "'"$GITHUB_REPOSITORY"'",'
+            echo '  "ref": "'"$GITHUB_REF"'",'
+            echo '  "sha": "'"$(git rev-parse --short HEAD || echo unknown)"'",'
+            echo '  "actor": "'"$GITHUB_ACTOR"'",'
+            echo '  "label": "'"$LABEL"'",'
+            echo '  "generated_at": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",'
+            echo '  "files": ['
+            first=1
+            if [ -d "$STAGE" ]; then
+              while IFS= read -r -d '' f; do
+                rel="${f#$STAGE/}"; size=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f"); sha=$(sha256sum "$f" | awk '{print $1}')
+                [ $first -eq 0 ] && echo '    ,' || true
+                echo '    { "path": "'"$rel"'", "size": '"$size"', "sha256": "'"$sha"'" }'
+                first=0
+              done < <(find "$STAGE" -type f -print0)
+            fi
+            echo '  ]'
+            echo '}'
+          } > "$MANIFEST"
+          LATEST_JSON="$LATEST_DIR/$NAME.json"
+          cp -f "$MANIFEST" "$LATEST_JSON"
+          echo "run_manifest=$MANIFEST" >> $GITHUB_OUTPUT
+          echo "latest_json=$LATEST_JSON" >> $GITHUB_OUTPUT
+      - name: Commit updated index (optional)
+        if: ${{ inputs.commit_index }}
+        run: |
+          git config user.name "artifact-index-bot"
+          git config user.email "bot@stegverse.local"
+          git add ${{ inputs.index_path }}
+          git diff --cached --quiet || git commit -m "chore(artifacts): update LATEST index for ${{ inputs.name }}"
+          git push || true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.name }}
+          path: |
+            ${{ steps.stage.outputs.stage_dir }}/**
+            ${{ steps.index.outputs.run_manifest }}
+            ${{ steps.index.outputs.latest_json }}
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Actions summary
+        run: |
+          echo "## Bundle: ${{ inputs.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Latest pointer: \`self_healing_out/artifacts/LATEST/${{ inputs.name }}.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> $GITHUB_STEP_SUMMARY
+"""
+write(REUSABLE, reusable_text)
+
+# 2) Structure on demand workflow
+structure_text = """name: Structure (On-Demand + Index)
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - ".github/trigger/structure/**"
+jobs:
+  structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure tree
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y tree || true
+          mkdir -p self_healing_out
+      - name: Generate STRUCTURE.md
+        run: |
+          {
+            echo "# Repository Structure"
+            echo
+            echo '```'
+            tree -I 'node_modules|.git|__pycache__|venv|dist|build|.idea|.vscode' -L 4 --dirsfirst --charset ascii || true
+            echo '```'
+            echo
+            echo "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          } > self_healing_out/STRUCTURE.md
+      - name: Upload + index
+        uses: ./.github/workflows/_reusables/upload-with-index.yml
+        with:
+          name: structure_tree
+          base_dir: self_healing_out
+          paths: |
+            self_healing_out/STRUCTURE.md
+          summary_title: "Repository Structure"
+          label: "on-demand"
+          commit_index: true
+"""
+write(STRUCTURE, structure_text)
+
+# 3) Append standardized uploader to major workflows (safe append)
+targets = [
+  ".github/workflows/one_button_supercheck.yml",
+  ".github/workflows/universal_fixit.yml",
+  ".github/workflows/rebuild_kit.yml",
+  ".github/workflows/nightly_snapshot.yml",
+  ".github/workflows/preflight.yml",
+]
+append_snippet_template = """
+      # === standardized uploader (appended by patch_artifacts_index.py) ===
+      - name: Upload (standardized with index)
+        if: always()
+        uses: ./.github/workflows/_reusables/upload-with-index.yml
+        with:
+          name: {bundle_name}
+          base_dir: {base_dir}
+          paths: |
+{paths_block}
+          summary_title: "{summary}"
+          label: "auto"
+          commit_index: true
+"""
+
+def ensure_uploader_step(path: Path, bundle_name: str, base_dir: str, paths: list[str], summary: str):
+    if not path.exists():
+        report["notes"].append(f"missing workflow: {path}")
+        return
+    txt = path.read_text(encoding="utf-8")
+    marker = f"({bundle_name})[{sha256s('|'.join(paths))}]"
+    if marker in txt:
+        report["skipped"].append(path.as_posix() + " (already has standardized uploader)")
+        return
+    indent = " " * 10
+    pb = "\n".join([f"{indent}{p}" for p in paths])
+    snippet = append_snippet_template.format(
+        bundle_name=bundle_name,
+        base_dir=base_dir,
+        paths_block=pb,
+        summary=summary,
+    )
+    txt2 = txt.rstrip() + "\n" + snippet + f"      # marker {marker}\n"
+    path.write_text(txt2, encoding="utf-8")
+    report["updated"].append(path.as_posix() + " (+standardized uploader)")
+
+# Per-target path sets (conservative defaults)
+ensure_uploader_step(ROOT/targets[0], "supercheck_bundle", ".", [
+    "supercheck_report.md",
+    "supercheck_diag.json",
+    "self_healing_out/**",
+], "Supercheck Bundle")
+
+ensure_uploader_step(ROOT/targets[1], "universal_fixit_bundle", ".", [
+    "self_healing_out/YAML_CORRECTOR_REPORT.*",
+    "self_healing_out/AUTO_FIX_REPORT.*",
+    "self_healing_out/SWEEP_REPORT.*",
+], "Universal Fix-It Bundle")
+
+ensure_uploader_step(ROOT/targets[2], "rebuild_kit_bundle", "out", [
+    "out/*.zip",
+    "out/*.tgz",
+    "out/.bundle_path",
+    "out/latest",
+], "Rebuild Kit Bundle")
+
+ensure_uploader_step(ROOT/targets[3], "nightly_snapshot_bundle", ".", [
+    "self_healing_out/**",
+    "snapshots/**",
+    "reports/**",
+], "Nightly Snapshot Bundle")
+
+ensure_uploader_step(ROOT/targets[4], "preflight_bundle", ".", [
+    "self_healing_out/WORKFLOW_FIX_REPORT.*",
+    "self_healing_out/TREE_WORKFLOWS.txt",
+], "Preflight Bundle")
+
+# 4) Write patch report
+rep_path = OUTDIR/"PATCH_REPORT.json"
+rep_md = OUTDIR/"PATCH_REPORT.md"
+rep_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+rep_md.write_text(
+    "# Patch: Artifacts Index + Standardized Uploader\n\n"
+    f"- When: {time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime())}\n"
+    f"- Created: {len(report['created'])}\n- Updated: {len(report['updated'])}\n- Skipped: {len(report['skipped'])}\n\n"
+    "## Created\n" + "\n".join(f"- `{p}`" for p in report["created"]) + "\n\n"
+    "## Updated\n" + "\n".join(f"- `{p}`" for p in report["updated"]) + "\n\n"
+    "## Skipped\n" + "\n".join(f"- `{p}`" for p in report["skipped"]) + "\n\n"
+    "## Notes\n" + "\n".join(f"- {n}" for n in report["notes"]) + "\n",
+    encoding="utf-8"
+)
+print(json.dumps(report, indent=2))
+PY
+
+      - name: Run patch
+        run: |
+          set -e
+          python3 scripts/patch_artifacts_index.py
+
+      - name: Commit & push changes (if any)
+        run: |
+          set -e
+          git config user.name "patch-bot"
+          git config user.email "bot@stegverse.local"
+          git add .github/workflows scripts self_healing_out || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "patch: standardize artifact uploads + index + structure on demand"
+            git push || true
+          fi
+
+      - name: Upload patch report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch_artifacts_index_report
+          path: |
+            self_healing_out/PATCH_REPORT.json
+            self_healing_out/PATCH_REPORT.md
+          if-no-files-found: warn
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Patch Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          sed 's/^/    /' self_healing_out/PATCH_REPORT.md >> $GITHUB_STEP_SUMMARY || echo "(no report?)" >> $GITHUB_STEP_SUMMARY
