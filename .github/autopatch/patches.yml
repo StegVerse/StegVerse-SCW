@@ -167,3 +167,15 @@ patches:
       - "docs/README.md"
       - "README*.md"
     script: ".github/autopatch/snippets/PATCH-README-FOOTER.sh"
+
+  - id: PATCH-README-TITLE
+    label: "README H1 = repository title"
+    kind: shell
+    description: >
+      Ensure the first H1 in README equals the repo title (or README_TITLE override),
+      and add a small autopatch marker. Respects YAML front matter if present.
+    files:
+      - "README.md"
+      - "docs/README.md"
+      - "README*.md"
+    script: ".github/autopatch/snippets/PATCH-README-TITLE.sh"
