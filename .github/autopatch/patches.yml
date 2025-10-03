@@ -198,3 +198,16 @@ patches:
     kind: shell
     files: ["README.md","docs/README.md"]
     script: ".github/autopatch/snippets/PATCH-README-BADGES.sh"
+
+  - id: PATCH-README-SECTIONS
+    label: "README standard sections"
+    kind: shell
+    files: ["README.md"]
+    script: ".github/autopatch/snippets/PATCH-README-SECTIONS.sh"
+
+  - id: PATCH-README-TOC
+    label: "README Table of Contents"
+    kind: shell
+    files: ["README.md"]
+    script: ".github/autopatch/snippets/PATCH-README-TOC.sh"
+
