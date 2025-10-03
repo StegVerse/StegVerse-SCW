@@ -1,0 +1,85 @@
+name: AutoPatch (centralized workflow patcher)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply changes to disk"
+        required: false
+        default: "false"
+      auto_commit:
+        description: "Commit directly to main (else PR)"
+        required: false
+        default: "false"
+  push:
+    branches: [ "main" ]
+    paths:
+      - "patches/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autopatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure deps
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install ruamel.yaml jq
+
+      - name: Run AutoPatch (dry-run/apply)
+        env:
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          mkdir -p self_healing_out
+          if [ "${APPLY}" = "true" ]; then
+            python3 scripts/auto_patch.py --apply
+          else
+            python3 scripts/auto_patch.py --dry-run
+          fi
+
+      - name: Commit or PR (if apply=true)
+        if: ${{ github.event.inputs.apply == 'true' }}
+        env:
+          DO_COMMIT: ${{ github.event.inputs.auto_commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          git config user.name "autopatch-bot"
+          git config user.email "bot@stegverse.local"
+          if git diff --quiet; then
+            echo "No changes to commit."
+          else
+            if [ "$DO_COMMIT" = "true" ]; then
+              git add -A
+              git commit -m "autopatch: apply standardized triggers/permissions/concurrency/steps"
+              git push origin HEAD:main || true
+            else
+              BR="autopatch/${GITHUB_RUN_ID}"
+              git checkout -b "$BR"
+              git add -A
+              git commit -m "autopatch: apply standardized triggers/permissions/concurrency/steps"
+              git push origin "$BR" || true
+              TITLE="AutoPatch: standardize workflow structure"
+              BODY="Applied patchpack from patches/manifest.json.\n\nReview AUTOPATCH_REPORT in artifact."
+              curl -sS -X POST \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -d "$(jq -nc --arg t "$TITLE" --arg b "$BODY" --arg head "$BR" '{"title":$t,"body":$b,"head":$head,"base":"main","maintainer_can_modify":true}')" \
+                "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
+            fi
+          fi
+
+      - name: Upload AutoPatch Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopatch_bundle
+          path: |
+            self_healing_out/AUTOPATCH_REPORT.json
+            self_healing_out/AUTOPATCH_REPORT.md
+          if-no-files-found: warn
