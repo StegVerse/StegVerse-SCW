@@ -1,0 +1,77 @@
+name: AutoPatch (primary)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/autopatch/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autopatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          python3 -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Seed manifest(s) if missing
+        run: |
+          set -e
+          mkdir -p .github/autopatch scripts self_healing_out
+          [ -f .github/autopatch/patches.yml ] || cat > .github/autopatch/patches.yml <<'YML'
+version: 1
+patches: []
+YML
+          [ -f .github/autopatch/patches_deferred.yml ] || cat > .github/autopatch/patches_deferred.yml <<'YML'
+version: 1
+patches: []
+YML
+
+      - name: Seed autopatch runner
+        run: |
+          chmod +x scripts/autopatch_runner.py
+
+      - name: Run AutoPatch (primary, prune + defer)
+        env:
+          MANIFEST: .github/autopatch/patches.yml
+          DEFER: .github/autopatch/patches_deferred.yml
+        run: |
+          set -e
+          python3 scripts/autopatch_runner.py \
+            --manifest "${MANIFEST}" \
+            --prune-success \
+            --defer-file "${DEFER}" || true
+
+      - name: Commit manifest updates (if any)
+        run: |
+          set -e
+          git config user.name "autopatch-bot"
+          git config user.email "bot@stegverse.local"
+          git add .github/autopatch/patches.yml .github/autopatch/patches_deferred.yml || true
+          if git diff --cached --quiet; then
+            echo "No manifest changes to commit."
+          else
+            git commit -m "autopatch: prune successes, defer blocked items"
+            git push origin HEAD:main || true
+          fi
+
+      - name: Upload AutoPatch report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopatch_primary_report
+          path: |
+            self_healing_out/AUTOPATCH_REPORT.json
+            self_healing_out/AUTOPATCH_REPORT.md
+          if-no-files-found: warn
