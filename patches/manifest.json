@@ -1,42 +1,53 @@
 {
-  "patches": [
-    {
-      "op": "ensure_on_triggers",
-      "targets": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
-      "snippet": "on_standard"
+  "version": 1,
+  "defaults": {
+    "add_push_triggers": [
+      ".github/trigger/supercheck/**",
+      ".github/trigger/preflight/**",
+      ".github/trigger/rebuild/**",
+      ".github/trigger/autopatch/**"
+    ],
+    "ensure_permissions": ["contents: write", "pull-requests: write", "checks: write", "security-events: write"],
+    "ensure_concurrency": {"group": "${workflow}-${ref}", "cancel-in-progress": true},
+    "ensure_reports": true
+  },
+  "workflows": {
+    "supercheck": {
+      "ensure_read_intent": true,
+      "ensure_upload_sweep": true,
+      "ensure_tools_reusable": true
     },
-    {
-      "op": "ensure_permissions",
-      "targets": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
-      "snippet": "permissions_standard"
+    "preflight": {
+      "ensure_read_intent": true
     },
-    {
-      "op": "ensure_concurrency",
-      "targets": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
-      "snippet": "concurrency_standard"
-    },
-    {
-      "op": "ensure_uses",
-      "targets": [".github/workflows/preflight.yml", ".github/workflows/supercheck.yml"],
-      "job_id": "supercheck",
-      "name": "Ensure tools (reusable)",
-      "uses": "./.github/workflows/_reusables/ensure-tools.yml",
-      "with": {
-        "apt_packages": "jq curl zip",
-        "python_packages": "ruamel.yaml yamllint",
-        "python_version": ""
-      }
-    },
-    {
-      "op": "ensure_steps",
-      "targets": [".github/workflows/supercheck.yml"],
-      "snippet": "last_two_status_step"
-    },
-    {
-      "op": "ensure_job_guard",
-      "targets": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
-      "job_id": "supercheck",
-      "guard": "${{ env.RUN_THIS_WORKFLOW == 'true' }}"
+    "rebuild_kit": {
+      "ensure_read_intent": true
     }
-  ]
+  },
+  "fixes": {
+    "YAML-001": {
+      "description": "Normalize multi-line bash 'printf' shims that break YAML parsing",
+      "action": "rewrite_printf_to_heredoc"
+    },
+    "YAML-002": {
+      "description": "Add 'permissions' block if missing/insufficient",
+      "action": "ensure_permissions"
+    },
+    "YAML-003": {
+      "description": "Add or normalize 'concurrency'",
+      "action": "ensure_concurrency"
+    },
+    "YAML-004": {
+      "description": "Insert 'Read run intent (RID/TASK)' step after checkout if missing",
+      "action": "ensure_read_intent_step"
+    },
+    "YAML-005": {
+      "description": "Append Upload Sweep (reusable) step if missing and reusable exists",
+      "action": "ensure_upload_sweep_step"
+    },
+    "YAML-006": {
+      "description": "Add file-based push path triggers (mobile)",
+      "action": "ensure_push_triggers"
+    }
+  }
 }
