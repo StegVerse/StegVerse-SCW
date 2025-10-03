@@ -1,0 +1,14 @@
+{
+  "line_edits": [
+    {
+      "id": "trim_trailing_spaces",
+      "pattern": "[ \\t]+$",
+      "replace": ""
+    },
+    {
+      "id": "ensure_terminal_newline",
+      "pattern": "\\Z",
+      "replace": "\n"
+    }
+  ]
+}
