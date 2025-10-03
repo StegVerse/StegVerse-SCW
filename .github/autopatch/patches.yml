@@ -71,3 +71,18 @@
 
     ## Do not remove
     This README is enforced by AutoPatch and will be restored if deleted.
+
+    - id: supercheck-ensure-telemetry
+  path: .github/workflows/supercheck.yml
+  ensure: present
+  mode: patch
+  labels: [workflow, supercheck, telemetry]
+  patch: |
+    # Ensure telemetry step is present at the end
+    - name: Telemetry (reusable)
+      if: always()
+      uses: ./.github/workflows/_reusables/telemetry.yml
+      with:
+        basename: supercheck
+        status: ${{ job.status }}
+  
