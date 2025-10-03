@@ -1,0 +1,42 @@
+{
+  "patches": [
+    {
+      "op": "ensure_on_triggers",
+      "targets": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+      "snippet": "on_standard"
+    },
+    {
+      "op": "ensure_permissions",
+      "targets": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+      "snippet": "permissions_standard"
+    },
+    {
+      "op": "ensure_concurrency",
+      "targets": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+      "snippet": "concurrency_standard"
+    },
+    {
+      "op": "ensure_uses",
+      "targets": [".github/workflows/preflight.yml", ".github/workflows/supercheck.yml"],
+      "job_id": "supercheck",
+      "name": "Ensure tools (reusable)",
+      "uses": "./.github/workflows/_reusables/ensure-tools.yml",
+      "with": {
+        "apt_packages": "jq curl zip",
+        "python_packages": "ruamel.yaml yamllint",
+        "python_version": ""
+      }
+    },
+    {
+      "op": "ensure_steps",
+      "targets": [".github/workflows/supercheck.yml"],
+      "snippet": "last_two_status_step"
+    },
+    {
+      "op": "ensure_job_guard",
+      "targets": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+      "job_id": "supercheck",
+      "guard": "${{ env.RUN_THIS_WORKFLOW == 'true' }}"
+    }
+  ]
+}
