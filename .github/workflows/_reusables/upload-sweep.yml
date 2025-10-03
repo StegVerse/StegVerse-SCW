@@ -1,0 +1,120 @@
+name: Reusable • Upload Sweep
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: "Artifact name"
+        required: true
+        type: string
+      base_dir:
+        description: "Directory where sweep outputs live"
+        required: false
+        default: "self_healing_out"
+        type: string
+      files:
+        description: |-
+          File names to upload (relative to base_dir).
+          One per line. Missing files will get a placeholder if create_placeholder=true.
+        required: false
+        default: |-
+          SWEEP_REPORT.json
+          SWEEP_REPORT.md
+        type: string
+      extra_globs:
+        description: "Optional extra globs to include (one per line)."
+        required: false
+        default: ""
+        type: string
+      create_placeholder:
+        description: "Create placeholder files for any missing items"
+        required: false
+        default: true
+        type: boolean
+      placeholder_msg:
+        description: "Message to write into placeholder markdown"
+        required: false
+        default: "Sweep ran but did not produce a report in this run."
+        type: string
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare sweep bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${{ inputs.base_dir }}"
+          mkdir -p "$BASE"
+
+          # Normalize multi-line inputs to files
+          save_list() {
+            local VAR="${1}"; local OUT="${2}"
+            # shellcheck disable=SC2016
+            python3 - <<'PY' "$VAR" "$OUT"
+import os,sys, pathlib
+val=os.environ.get(sys.argv[1], "")
+p=pathlib.Path(sys.argv[2])
+p.write_text("\n".join([ln.strip() for ln in val.splitlines() if ln.strip()]), encoding="utf-8")
+PY
+          }
+          export FILES="${{ inputs.files }}"
+          export EXTRA="${{ inputs.extra_globs }}"
+          save_list FILES files.list
+          save_list EXTRA extra.list
+
+          # Create placeholders for any missing requested files
+          if [ "${{ inputs.create_placeholder }}" = "true" ]; then
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              target="$BASE/$f"
+              d="$(dirname "$target")"; mkdir -p "$d"
+              # Create sensible placeholder for .json / .md
+              if [ ! -f "$target" ]; then
+                case "$f" in
+                  *.json) echo '{"status":"placeholder","reason":"missing","source":"upload-sweep"}' > "$target" ;;
+                  *.md) printf "# Sweep Report (placeholder)\n\n%s\n" "${{ inputs.placeholder_msg }}" > "$target" ;;
+                  *) echo "(placeholder created by upload-sweep)" > "$target" ;;
+                esac
+              fi
+            done < files.list
+          fi
+
+          # Build a manifest index (only for existing files)
+          python3 - <<'PY' "$BASE"
+import os, json, hashlib, pathlib, sys
+BASE=pathlib.Path(sys.argv[1])
+out={}
+for p in BASE.rglob("*"):
+    if p.is_file():
+        try:
+            h=hashlib.sha256()
+            with p.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(65536), b""):
+                    h.update(chunk)
+            out[str(p.relative_to(BASE))]={"size":p.stat().st_size,"sha256":h.hexdigest()}
+        except Exception:
+            pass
+idx=BASE/"SWEEP_INDEX.json"
+idx.write_text(json.dumps(out, indent=2), encoding="utf-8")
+print("Indexed", len(out), "files")
+PY
+
+      - name: Upload Sweep artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.name }}
+          path: |
+            ${{ inputs.base_dir }}/SWEEP_INDEX.json
+            ${{ inputs.base_dir }}/SWEEP_REPORT.json
+            ${{ inputs.base_dir }}/SWEEP_REPORT.md
+            ${{ inputs.base_dir }}/**/*.md
+            ${{ inputs.base_dir }}/**/*.json
+            ${{ inputs.base_dir }}/**/*.txt
+            ${{ inputs.base_dir }}/**/*.log
+          if-no-files-found: warn
