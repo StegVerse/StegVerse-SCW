@@ -1,0 +1,50 @@
+name: Patch Workflow Triggers (Repo-wide)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/trigger/patch-triggers/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure ruamel.yaml
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install ruamel.yaml
+
+      - name: Run patcher
+        run: |
+          python3 scripts/patch_workflow_triggers.py
+          git status --porcelain
+
+      - name: Commit or PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          if git diff --quiet; then
+            echo "No changes."
+            exit 0
+          fi
+          git config user.name "patch-triggers-bot"
+          git config user.email "bot@stegverse.local"
+          git checkout -b chore/patch-triggers-${GITHUB_RUN_ID}
+          git add .github/workflows/*.yml .github/workflows/*.yaml
+          git commit -m "chore: apply standardized triggers + kill switch to workflows"
+          git push -u origin HEAD
+          # Open PR
+          curl -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"title\":\"chore: patch workflow triggers\",\"body\":\"Automated trigger unification (manual dispatch + file-trigger + schedule + kill switch).\",\"head\":\"$(git rev-parse --abbrev-ref HEAD)\",\"base\":\"main\"}" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls" >/dev/null || true
