@@ -1,0 +1,17 @@
+job_id: supercheck
+steps:
+  - name: Record outcome (last-two)
+    if: always()
+    run: |
+      set -e
+      mkdir -p self_healing_out
+      TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      SHA="$(git rev-parse --short HEAD || echo unknown)"
+      RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      LEDGER="self_healing_out/TRIGGER_EVENTS_${{ github.workflow }}.jsonl"
+      echo "{\"ts\":\"$TS\",\"status\":\"${{ job.status }}\",\"sha\":\"$SHA\",\"run_url\":\"$RUN_URL\",\"actor\":\"${GITHUB_ACTOR}\"}" >> "$LEDGER"
+      tail -n 2 "$LEDGER" | jq -s '.' > self_healing_out/LAST_TWO_${{ github.workflow }}.json || echo "[]" > self_healing_out/LAST_TWO_${{ github.workflow }}.json
+      {
+        echo "### Last two ${{ github.workflow }} outcomes"
+        jq -r '.[] | "- **\(.status | ascii_upcase)** — \(.ts) — `\(.sha)`  [(run)](\(.run_url)) by \(.actor)"' self_healing_out/LAST_TWO_${{ github.workflow }}.json 2>/dev/null || true
+      } > self_healing_out/LAST_TWO_${{ github.workflow }}.md
