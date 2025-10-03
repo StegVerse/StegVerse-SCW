@@ -186,3 +186,11 @@ patches:
     # README_TITLE: "StegVerse SCW"  # uncomment to force a specific title
   run: |
     python3 .github/autopatch/runner.py --apply
+
+  - id: PATCH-README-TITLE-DRYRUN
+    label: "README H1 (dry-run on PRs)"
+    kind: shell
+    files: ["README.md","docs/README.md","README*.md"]
+    script: ".github/autopatch/snippets/PATCH-README-TITLE-DRYRUN.sh"
+
+
