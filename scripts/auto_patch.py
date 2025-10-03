@@ -1,238 +1,245 @@
 #!/usr/bin/env python3
-"""
-AutoPatch: apply centralized YAML workflow patches safely & idempotently.
-
-- Reads patches/manifest.json for patch rules (targets + snippets + operations)
-- Loads snippets from patches/snippets/*.yml
-- Applies changes with ruamel.yaml (preserves order/comments reasonably)
-- Writes a report in self_healing_out/AUTOPATCH_REPORT.{json,md}
-- Modes:
-    --apply      : write changes to disk
-    --dry-run    : (default) only report proposed changes
-
-Operations supported (per target file):
-  - ensure_on_triggers: merge/ensure 'on:' sections (dispatch/push/schedule)
-  - ensure_permissions: merge/ensure top-level 'permissions'
-  - ensure_concurrency: set/update concurrency group+cancel
-  - ensure_job_guard  : add job-level if: guard expression
-  - ensure_steps      : ensure named steps exist (insert or update)
-  - ensure_uses       : ensure a reusable step exists (by "name" and "uses")
-
-Notes:
-  - Idempotent: if a section already matches, nothing changes.
-  - Targets can be explicit or globs: ".github/workflows/*.yml"
-"""
-
-import sys, json, fnmatch, hashlib, argparse
+import os, re, json, textwrap, shutil
 from pathlib import Path
-from ruamel.yaml import YAML
 
 ROOT = Path(__file__).resolve().parents[1]
 WF_DIR = ROOT / ".github" / "workflows"
-SNIP_DIR = ROOT / "patches" / "snippets"
-OUT_DIR = ROOT / "self_healing_out"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+OUT = ROOT / "self_healing_out"
+OUT.mkdir(parents=True, exist_ok=True)
 
-yaml = YAML()
-yaml.preserve_quotes = True
-yaml.indent(mapping=2, sequence=2, offset=2)
+RID = os.getenv("RID", f"RID-auto-{os.getenv('GITHUB_RUN_ID','local')}")
+TASK = os.getenv("TASK", "STEG-unknown")
 
 def load_manifest():
     p = ROOT / "patches" / "manifest.json"
     if not p.exists():
-        return {"patches": []}
-    return json.loads(p.read_text(encoding="utf-8"))
+        return {"version": 1, "defaults": {}, "workflows": {}, "fixes": {}}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"version": 1, "defaults": {}, "workflows": {}, "fixes": {}, "_error": f"bad manifest: {e}"}
 
-def load_snippet(name):
-    p = SNIP_DIR / f"{name}.yml"
-    if not p.exists():
-        return None
-    return yaml.load(p.read_text(encoding="utf-8"))
+def list_workflows():
+    if not WF_DIR.exists():
+        return []
+    return sorted([p for p in WF_DIR.glob("*.y*ml") if p.is_file()])
 
-def merge_map(dst, src):
-    """Deep merge mapping into dst (create keys if missing)."""
-    if src is None: return dst
-    if dst is None: return src
-    for k, v in src.items():
-        if isinstance(v, dict) and isinstance(dst.get(k), dict):
-            merge_map(dst[k], v)
-        else:
-            dst[k] = v
-    return dst
+def has_block(txt, needle):
+    return needle in txt
 
-def ensure_on_triggers(doc, spec):
-    # spec snippet will be merged under 'on'
-    doc.setdefault('on', {})
-    merge_map(doc['on'], spec)
-    return True
+def ensure_permissions(txt, perms):
+    # if there is a 'permissions:' block, leave it; otherwise inject after 'on:' or at top
+    if re.search(r'^\s*permissions\s*:\s*$', txt, flags=re.M):
+        return txt, False
+    block = "permissions:\n" + "\n".join([f"  {p}" for p in perms]) + "\n"
+    # Try to insert after 'on:' stanza
+    m = re.search(r'^\s*on\s*:(?:.|\n)*?\n\n', txt, flags=re.M)
+    if m:
+        insert_at = m.end()
+        new = txt[:insert_at] + block + txt[insert_at:]
+    else:
+        new = block + "\n" + txt
+    return new, True
 
-def ensure_permissions(doc, spec):
-    doc.setdefault('permissions', {})
-    merge_map(doc['permissions'], spec)
-    return True
+def ensure_concurrency(txt, group, cancel):
+    if re.search(r'^\s*concurrency\s*:', txt, flags=re.M):
+        return txt, False
+    block = textwrap.dedent(f"""\
+    concurrency:
+      group: {group}
+      cancel-in-progress: {"true" if cancel else "false"}
+    """)
+    # Insert after permissions if present else after on:
+    m = re.search(r'^\s*permissions\s*:(?:.|\n)*?\n\n', txt, flags=re.M)
+    if not m:
+        m = re.search(r'^\s*on\s*:(?:.|\n)*?\n\n', txt, flags=re.M)
+    if m:
+        insert_at = m.end()
+        new = txt[:insert_at] + block + txt[insert_at:]
+    else:
+        new = block + "\n" + txt
+    return new, True
 
-def ensure_concurrency(doc, spec):
-    # { group: "...", cancel-in-progress: true }
-    doc['concurrency'] = doc.get('concurrency') or {}
-    merge_map(doc['concurrency'], spec)
-    return True
+def ensure_push_triggers(txt, paths):
+    # add the common push trigger paths if not present
+    if ".github/trigger" in txt:
+        return txt, False
+    block = textwrap.dedent("""\
+    \n  # File-based triggers (mobile friendly)\n  push:\n    branches: [ "main" ]\n    paths:\n""")
+    for p in paths:
+        block += f'      - "{p}"\n'
+    # naive: append under 'on:'; if no 'on:' create it
+    if re.search(r'^\s*on\s*:\s*$', txt, flags=re.M):
+        return txt.replace("on:\n", "on:\n" + block), True
+    if "on:" in txt:
+        # Insert after first 'on:' line
+        new = re.sub(r'on:\s*\n', "on:\n" + block, txt, count=1)
+        return new, True
+    # prepend minimal on:
+    new = "on:\n" + block + "\n" + txt
+    return new, True
 
-def ensure_job_guard(doc, job_id, guard):
-    jobs = doc.get('jobs') or {}
-    if job_id not in jobs:
-        return False
-    job = jobs[job_id]
-    if 'if' not in job or str(job['if']).strip() != guard.strip():
-        job['if'] = guard
-        return True
-    return False
+READ_INTENT_STEP = textwrap.dedent("""\
+      - name: Read run intent (RID/TASK)
+        shell: bash
+        run: |
+          set -e
+          INTENT_FILE="$(ls .github/trigger/**/run.* 2>/dev/null | head -n1 || true)"
+          RID_IN=""
+          TASK_IN=""
+          if [ -n "$INTENT_FILE" ]; then
+            RID_IN="$(grep -E '^(rid|RID):\\s*' "$INTENT_FILE" | head -n1 | sed 's/^[^:]*:\\s*//')"
+            TASK_IN="$(grep -E '^(task|TASK):\\s*' "$INTENT_FILE" | head -n1 | sed 's/^[^:]*:\\s*//')"
+          fi
+          echo "RID=${RID_IN:-%RID%}" >> $GITHUB_ENV
+          echo "TASK=${TASK_IN:-%TASK%}" >> $GITHUB_ENV
+""")
 
-def _step_index(steps, name):
-    for i, st in enumerate(steps):
-        if isinstance(st, dict) and st.get('name') == name:
-            return i
-    return -1
+def ensure_read_intent_step(txt):
+    if "Read run intent (RID/TASK)" in txt:
+        return txt, False
+    # Insert after first checkout step
+    pat = r'(-\s+uses:\s+actions/checkout@v[0-9]+[\s\S]*?\n)'
+    m = re.search(pat, txt)
+    if not m:
+        return txt, False
+    block = READ_INTENT_STEP.replace("%RID%", RID).replace("%TASK%", TASK)
+    insert_at = m.end()
+    return txt[:insert_at] + "\n" + block + txt[insert_at:], True
 
-def ensure_steps(doc, job_id, steps_spec):
-    """
-    steps_spec: list of { name: "...", run: "...", shell?: "...", uses?: "...", with?: {...} }
-    - If step with same name exists: update fields (run/uses/with/shell).
-    - Else: append new step at the end.
-    """
+UPLOAD_SWEEP_STEP = textwrap.dedent("""\
+      - name: Upload Sweep (reusable)
+        if: always()
+        uses: ./.github/workflows/_reusables/upload-sweep.yml
+        with:
+          name: universal_fixit_sweep
+          base_dir: self_healing_out
+          files: |
+            SWEEP_REPORT.json
+            SWEEP_REPORT.md
+          create_placeholder: true
+""")
+
+def ensure_upload_sweep_step(txt):
+    if "Upload Sweep (reusable)" in txt:
+        return txt, False
+    # add before final artifact upload if we can find one
+    m = re.search(r'-\s+name:\s+Upload\s+Supercheck\s+Bundle[\s\S]*?uses:\s+actions/upload-artifact@', txt)
+    if m:
+        insert_at = m.start()
+        return txt[:insert_at] + UPLOAD_SWEEP_STEP + txt[insert_at:], True
+    return txt + "\n" + UPLOAD_SWEEP_STEP, True
+
+def rewrite_printf_to_heredoc(txt):
+    # Replace fragile printf multi-line blocks writing files with a safe heredoc
+    # Matches patterns similar to: printf '%s\\n' 'line1' 'line2' > path
     changed = False
-    jobs = doc.get('jobs') or {}
-    if job_id not in jobs:
-        return False
-    job = jobs[job_id]
-    if 'steps' not in job or not isinstance(job['steps'], list):
-        job['steps'] = []
-    steps = job['steps']
-    for spec in steps_spec:
-        idx = _step_index(steps, spec.get('name'))
-        if idx >= 0:
-            # update existing step's keys (non-destructive)
-            for k in ('run', 'uses', 'with', 'shell', 'env'):
-                if k in spec:
-                    if steps[idx].get(k) != spec[k]:
-                        steps[idx][k] = spec[k]
-                        changed = True
-        else:
-            steps.append(spec)
-            changed = True
-    return changed
+    def repl(m):
+        nonlocal changed
+        body = m.group(1)
+        target = m.group(2)
+        # Convert each '...' item to lines
+        lines = re.findall(r"'([^']*)'", body)
+        heredoc = "<<'EOF_CORR'\n" + "\n".join(lines) + "\nEOF_CORR\n"
+        changed = True
+        return f"cat {heredoc} > {target}"
+    new = re.sub(r"printf\s+'%s\\n'\s+((?:'[^']*'\s*)+)\s*>\s*([^\s]+)", repl, txt)
+    return new, changed
 
-def ensure_uses(doc, job_id, name, uses, with_dict=None):
-    steps_spec = [{"name": name, "uses": uses, **({"with": with_dict} if with_dict else {})}]
-    return ensure_steps(doc, job_id, steps_spec)
+def apply_fixes(name, yaml_text, manifest):
+    changed = []
+    notes = []
 
-def hash_text(t):
-    return hashlib.sha256(t.encode('utf-8')).hexdigest()[:12]
+    fixes = manifest.get("fixes", {})
+    defaults = manifest.get("defaults", {})
+
+    # YAML-002
+    if "YAML-002" in fixes and defaults.get("ensure_permissions"):
+        new, did = ensure_permissions(yaml_text, defaults["ensure_permissions"])
+        if did: changed.append("YAML-002"); yaml_text = new
+
+    # YAML-003
+    if "YAML-003" in fixes and defaults.get("ensure_concurrency"):
+        cc = defaults["ensure_concurrency"]
+        group = cc.get("group", "${workflow}-${ref}")
+        cancel = bool(cc.get("cancel-in-progress", True))
+        new, did = ensure_concurrency(yaml_text, group, cancel)
+        if did: changed.append("YAML-003"); yaml_text = new
+
+    # YAML-006
+    if "YAML-006" in fixes and defaults.get("add_push_triggers"):
+        new, did = ensure_push_triggers(yaml_text, defaults["add_push_triggers"])
+        if did: changed.append("YAML-006"); yaml_text = new
+
+    # workflow-specific
+    wf_rules = manifest.get("workflows", {}).get(name, {})
+
+    if wf_rules.get("ensure_read_intent"):
+        new, did = ensure_read_intent_step(yaml_text)
+        if did: changed.append("YAML-004"); yaml_text = new
+
+    if wf_rules.get("ensure_upload_sweep"):
+        new, did = ensure_upload_sweep_step(yaml_text)
+        if did: changed.append("YAML-005"); yaml_text = new
+
+    # YAML-001 always last (content-level transform)
+    if "YAML-001" in fixes:
+        new, did = rewrite_printf_to_heredoc(yaml_text)
+        if did: changed.append("YAML-001"); yaml_text = new
+
+    return yaml_text, changed, notes
+
+def detect_name(yaml_text, path):
+    m = re.search(r'^\s*name\s*:\s*(.+)$', yaml_text, flags=re.M)
+    if m:
+        return re.sub(r'#.*$', '', m.group(1)).strip()
+    return Path(path).stem
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--apply", action="store_true", help="write changes")
-    ap.add_argument("--dry-run", action="store_true", help="report only")
-    args = ap.parse_args()
-    apply = args.apply and not args.dry_run
-
     manifest = load_manifest()
-    targets = sorted([str(p) for p in WF_DIR.glob("*.y*ml")])
-    patches = manifest.get("patches", [])
-
-    results = []
-    changed_files = 0
-
-    for path in targets:
-        rel = Path(path).relative_to(ROOT).as_posix()
-        try:
-            doc = yaml.load(Path(path).read_text(encoding="utf-8"))
-        except Exception as e:
-            results.append({"file": rel, "error": f"YAML parse error: {e}"})
-            continue
-
-        before = yaml.dump(doc, stream=None) or ""
-        file_changes = []
-
-        for p in patches:
-            # match?
-            pats = p.get("targets", [])
-            if pats and not any(fnmatch.fnmatch(rel, pat) for pat in pats):
-                continue
-
-            op = p.get("op")
-            if op == "ensure_on_triggers":
-                snippet = load_snippet(p.get("snippet"))
-                if snippet:
-                    ensure_on_triggers(doc, snippet)
-                    file_changes.append(op)
-            elif op == "ensure_permissions":
-                snippet = load_snippet(p.get("snippet"))
-                if snippet:
-                    ensure_permissions(doc, snippet)
-                    file_changes.append(op)
-            elif op == "ensure_concurrency":
-                snippet = load_snippet(p.get("snippet"))
-                if snippet:
-                    ensure_concurrency(doc, snippet)
-                    file_changes.append(op)
-            elif op == "ensure_job_guard":
-                if ensure_job_guard(doc, p["job_id"], p["guard"]):
-                    file_changes.append(op)
-            elif op == "ensure_steps":
-                snippet = load_snippet(p.get("snippet"))
-                if snippet:
-                    # snippet format: { job_id: "<id>", steps: [ {name:..., run:...}, ... ] }
-                    job_id = snippet.get("job_id")
-                    steps_spec = snippet.get("steps", [])
-                    if job_id and steps_spec:
-                        if ensure_steps(doc, job_id, steps_spec):
-                            file_changes.append(op)
-            elif op == "ensure_uses":
-                # direct definition in manifest
-                if ensure_uses(doc, p["job_id"], p["name"], p["uses"], p.get("with")):
-                    file_changes.append(op)
-            else:
-                # unknown op
-                pass
-
-        after = yaml.dump(doc, stream=None) or ""
-        if after != before:
-            changed_files += 1
-            if apply:
-                Path(path).write_text(after, encoding="utf-8")
-
-        results.append({
-            "file": rel,
-            "changed": after != before,
-            "ops_applied": file_changes,
-            "before_hash": hash_text(before),
-            "after_hash": hash_text(after)
-        })
-
-    summary = {
-        "apply": apply,
-        "files_seen": len(targets),
-        "files_changed": changed_files,
-        "patches_count": len(patches)
+    report = {
+        "rid": RID,
+        "task": TASK,
+        "summary": {"files": 0, "changed_files": 0, "fixes": {}, "errors": 0},
+        "results": []
     }
+    for wf in list_workflows():
+        txt = wf.read_text(encoding="utf-8", errors="ignore")
+        name = detect_name(txt, wf)
+        new_txt, fixes_applied, _ = apply_fixes(name.lower().replace(" ", "_"), txt, manifest)
+        changed = fixes_applied != []
+        if changed:
+            wf.write_text(new_txt, encoding="utf-8")
+            for f in fixes_applied:
+                report["summary"]["fixes"][f] = report["summary"]["fixes"].get(f, 0) + 1
+        report["results"].append({
+            "path": wf.as_posix(),
+            "name": name,
+            "changed": changed,
+            "fixes": fixes_applied
+        })
+    report["summary"]["files"] = len(report["results"])
+    report["summary"]["changed_files"] = sum(1 for r in report["results"] if r["changed"])
 
-    OUT_DIR.joinpath("AUTOPATCH_REPORT.json").write_text(json.dumps({"summary": summary, "results": results}, indent=2), encoding="utf-8")
-    md = [
-        "# AutoPatch Report",
-        "",
-        f"- Apply mode: **{apply}**",
-        f"- Workflows scanned: **{len(targets)}**",
-        f"- Files changed: **{changed_files}**",
-        f"- Patches: **{len(patches)}**",
-        "",
-        "## Changes",
-    ]
-    for r in results:
-        badge = "✅" if r.get("changed") else "—"
-        md.append(f"- {badge} `{r['file']}` — ops: {', '.join(r['ops_applied']) or 'none'}")
-
-    OUT_DIR.joinpath("AUTOPATCH_REPORT.md").write_text("\n".join(md) + "\n", encoding="utf-8")
-    print(json.dumps(summary, indent=2))
+    (OUT / "AUTOPATCH_REPORT.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    md = [f"# AutoPatch Report",
+          f"- RID: `{RID}`",
+          f"- TASK: `{TASK}`",
+          f"- Files scanned: **{report['summary']['files']}**",
+          f"- Files changed: **{report['summary']['changed_files']}**",
+          "",
+          "## Fix counts"]
+    if report["summary"]["fixes"]:
+        for k,v in sorted(report["summary"]["fixes"].items()):
+            md.append(f"- {k}: {v}")
+    else:
+        md.append("- none")
+    md.append("\n## Per-file results")
+    for r in report["results"]:
+        fixes = ", ".join(r["fixes"]) if r["fixes"] else "—"
+        md.append(f"- `{r['path']}` — {'CHANGED' if r['changed'] else 'OK'} — fixes: {fixes}")
+    (OUT / "AUTOPATCH_REPORT.md").write_text("\n".join(md), encoding="utf-8")
+    print(json.dumps(report["summary"], indent=2))
 
 if __name__ == "__main__":
     main()
