@@ -1,25 +1,39 @@
-# StegVerse SCW (Starter Bundle, MVP)
+# StegVerse-SCW
 
-This is a one-tap deploy starter for the Sandboxed Code Writer (SCW):
-- `api/` → FastAPI with `/healthz`, `/v1/projects`, `/v1/runs`
-- `worker/` → background worker consuming a Redis queue
-- `ui/` → minimal Next.js front-end that calls the API
-- `render.yaml` → Render.com blueprint for iPhone-friendly deployment (no local Docker needed)
+Self-healing CI + runtime harness for StegTalk and related services.
 
-## 🚀 Deploy on Render (from iPhone)
-1) Push this repo to GitHub.
-2) Open Render → **Blueprints → New from Blueprint** → select this repo.
-3) Render provisions:
-   - Redis
-   - API (FastAPI)
-   - Worker
-   - Static UI
-4) Set env vars:
-   - API: `API_PORT=8080` (Redis auto-links)
-   - Worker: `REDIS_URL` (auto-linked)
-   - UI: `NEXT_PUBLIC_API_URL=https://<your-api>.onrender.com`
-5) Deploy. Open UI → test.
+## Quick Start (mobile-friendly)
 
-## Local (optional)
-```bash
-docker compose -f infra/docker-compose.yml up --build
+- Trigger checks by **adding a file**:
+  - `echo go > .github/trigger/supercheck/run-1.txt` (runs One-Button Supercheck)
+  - `echo go > .github/trigger/preflight/run-1.txt` (runs Workflow Preflight)
+  - `echo go > .github/trigger/autopatch/run-1.txt` (runs Auto Patch)
+
+- Or run from **Actions → Run workflow**.
+
+## Workflows
+
+- **One-Button Supercheck**: YAML corrector → known-issue auto-fix → runtime diagnostics → repo audit → drift → auto-triage → bundles.
+- **Universal Fix-It**: precision + sweep fixers for YAML and common CI nits; generates sweep bundle.
+- **Preflight**: validates workflows and normalizes them before big changes.
+- **Rebuild Kit**: produces a zero-secret archive of all critical files for disaster recovery.
+- **Nightly Snapshot**: rolls up state for time-series tracking.
+- **Auto Patch**: applies `patches/manifest.json` across workflows; logs changes.
+
+See `docs/WORKFLOWS.md` for details.
+
+## Self-Healing / Autonomy
+
+- **YAML Corrector** & **Auto-Fix** repair common syntax/structure errors automatically.
+- **Auto-Triage** moves extras to `ATTIC/`, scaffolds missing files, removes forbidden files.
+- **Telemetry** & **last-two summaries** capture outcomes for quick status on mobile.
+
+## Disaster Recovery
+
+- Download the latest **Rebuild Kit** from Actions → Artifacts → `rebuild_kit_bundle`.
+- Unpack on a fresh environment to restore workflows/scripts/docs quickly.
+
+## Contributing
+
+- Use topic tags in commit messages: `[topic:supercheck]`, `[topic:scaffolding]`, etc.
+- Ideas/experiments can be tagged with `@idea:<slug>` inside files; extras are parked in `ATTIC/`.
