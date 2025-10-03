@@ -1,0 +1,60 @@
+name: AutoPatch (deferred)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "27 * * * *"  # hourly pick-up (tweak if you want)
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/autopatch/patches_deferred.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autopatch_deferred:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          python3 -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Run AutoPatch (deferred, prune successes)
+        env:
+          MANIFEST: .github/autopatch/patches_deferred.yml
+        run: |
+          set -e
+          python3 scripts/autopatch_runner.py \
+            --manifest "${MANIFEST}" \
+            --prune-success || true
+
+      - name: Commit manifest updates (if any)
+        run: |
+          set -e
+          git config user.name "autopatch-bot"
+          git config user.email "bot@stegverse.local"
+          git add .github/autopatch/patches_deferred.yml || true
+          if git diff --cached --quiet; then
+            echo "No deferred manifest changes to commit."
+          else
+            git commit -m "autopatch (deferred): prune successes"
+            git push origin HEAD:main || true
+          fi
+
+      - name: Upload AutoPatch (deferred) report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopatch_deferred_report
+          path: |
+            self_healing_out/AUTOPATCH_REPORT.json
+            self_healing_out/AUTOPATCH_REPORT.md
+          if-no-files-found: warn
