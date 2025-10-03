@@ -1,0 +1,371 @@
+name: Patch: Convert to Standard Uploader
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/trigger/patches/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          python3 -m pip install --upgrade pip ruamel.yaml
+
+      - name: Seed reusable uploader if missing
+        run: |
+          set -e
+          mkdir -p .github/workflows/_reusables
+          FILE=".github/workflows/_reusables/upload-with-index.yml"
+          if [ ! -f "$FILE" ]; then
+            cat > "$FILE" <<'YAML'
+name: _reusable: upload-with-index
+on:
+  workflow_call:
+    inputs:
+      name: {required: true, type: string}
+      base_dir: {required: false, type: string, default: "."}
+      paths: {required: true, type: string}
+      extra_globs: {required: false, type: string, default: ""}
+      summary_title: {required: false, type: string, default: "Bundle"}
+      label: {required: false, type: string, default: ""}
+      index_path: {required: false, type: string, default: "self_healing_out/artifacts"}
+      commit_index: {required: false, type: boolean, default: false}
+permissions:
+  contents: write
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq coreutils || true
+      - name: Resolve file list and stage bundle
+        id: stage
+        env:
+          NAME: ${{ inputs.name }}
+          BASE: ${{ inputs.base_dir }}
+          PATHS: ${{ inputs.paths }}
+          EXTRA: ${{ inputs.extra_globs }}
+          INDEX_DIR: ${{ inputs.index_path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$INDEX_DIR"
+          STAGE=".bundle_stage/$NAME"; mkdir -p "$STAGE"
+          TMP=".bundle_stage/list.txt"; : > "$TMP"
+          while IFS= read -r line; do [ -z "$line" ] && continue; find "$BASE" -path "$line" -print 2>/dev/null || true; done <<< "$PATHS" >> "$TMP"
+          while IFS= read -r line; do [ -z "$line" ] && continue; find "$BASE" -path "$line" -print 2>/dev/null || true; done <<< "$EXTRA" >> "$TMP"
+          sort -u "$TMP" | while read -r p; do
+            [ -f "$p" ] || continue
+            dest="$STAGE/${p#"$BASE"/}"; mkdir -p "$(dirname "$dest")"; cp -a "$p" "$dest"
+          done
+          echo "stage_dir=$STAGE" >> $GITHUB_OUTPUT
+      - name: Generate per-run manifest + LATEST index
+        id: index
+        env:
+          NAME: ${{ inputs.name }}
+          INDEX_DIR: ${{ inputs.index_path }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -euo pipefail
+          STAGE="${{ steps.stage.outputs.stage_dir }}"
+          RUN_DIR="$INDEX_DIR/$NAME/${GITHUB_RUN_ID}"
+          LATEST_DIR="$INDEX_DIR/LATEST"
+          mkdir -p "$RUN_DIR" "$LATEST_DIR"
+          MANIFEST="$RUN_DIR/manifest.json"
+          {
+            echo '{'
+            echo '  "bundle": "'"$NAME"'",'
+            echo '  "workflow": "'"$GITHUB_WORKFLOW"'",'
+            echo '  "run_id": "'"$GITHUB_RUN_ID"'",'
+            echo '  "run_url": "'"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'",'
+            echo '  "repo": "'"$GITHUB_REPOSITORY"'",'
+            echo '  "ref": "'"$GITHUB_REF"'",'
+            echo '  "sha": "'"$(git rev-parse --short HEAD || echo unknown)"'",'
+            echo '  "actor": "'"$GITHUB_ACTOR"'",'
+            echo '  "label": "'"$LABEL"'",'
+            echo '  "generated_at": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",'
+            echo '  "files": ['
+            first=1
+            if [ -d "$STAGE" ]; then
+              while IFS= read -r -d '' f; do
+                rel="${f#$STAGE/}"; size=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f"); sha=$(sha256sum "$f" | awk '{print $1}')
+                [ $first -eq 0 ] && echo '    ,' || true
+                echo '    { "path": "'"$rel"'", "size": '"$size"', "sha256": "'"$sha"'" }'
+                first=0
+              done < <(find "$STAGE" -type f -print0)
+            fi
+            echo '  ]'
+            echo '}'
+          } > "$MANIFEST"
+          LATEST_JSON="$LATEST_DIR/$NAME.json"
+          cp -f "$MANIFEST" "$LATEST_JSON"
+          echo "run_manifest=$MANIFEST" >> $GITHUB_OUTPUT
+          echo "latest_json=$LATEST_JSON" >> $GITHUB_OUTPUT
+      - name: Commit updated index (optional)
+        if: ${{ inputs.commit_index }}
+        run: |
+          git config user.name "artifact-index-bot"
+          git config user.email "bot@stegverse.local"
+          git add ${{ inputs.index_path }}
+          git diff --cached --quiet || git commit -m "chore(artifacts): update LATEST index for ${{ inputs.name }}"
+          git push || true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.name }}
+          path: |
+            ${{ steps.stage.outputs.stage_dir }}/**
+            ${{ steps.index.outputs.run_manifest }}
+            ${{ steps.index.outputs.latest_json }}
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Actions summary
+        run: |
+          echo "## Bundle: ${{ inputs.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Latest pointer: \`self_healing_out/artifacts/LATEST/${{ inputs.name }}.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> $GITHUB_STEP_SUMMARY
+YAML
+          fi
+
+      - name: Seed converter script
+        run: |
+          set -e
+          mkdir -p scripts self_healing_out
+          cat > scripts/convert_to_uploader.py <<'PY'
+#!/usr/bin/env python3
+from pathlib import Path
+from ruamel.yaml import YAML
+import json, time, copy, re
+
+ROOT = Path(__file__).resolve().parents[1]
+WF_DIR = ROOT / ".github" / "workflows"
+OUT = ROOT / "self_healing_out"; OUT.mkdir(parents=True, exist_ok=True)
+
+# Which workflows we convert and their standardized uploader config
+# (keyed by filename)
+TARGETS = {
+  "one_button_supercheck.yml": {
+    "bundle": "supercheck_bundle",
+    "base_dir": ".",
+    "paths": [
+      "supercheck_report.md",
+      "supercheck_diag.json",
+      "self_healing_out/**",
+    ],
+    "summary": "Supercheck Bundle"
+  },
+  "universal_fixit.yml": {
+    "bundle": "universal_fixit_bundle",
+    "base_dir": ".",
+    "paths": [
+      "self_healing_out/YAML_CORRECTOR_REPORT.*",
+      "self_healing_out/AUTO_FIX_REPORT.*",
+      "self_healing_out/SWEEP_REPORT.*",
+    ],
+    "summary": "Universal Fix-It Bundle"
+  },
+  "rebuild_kit.yml": {
+    "bundle": "rebuild_kit_bundle",
+    "base_dir": "out",
+    "paths": [
+      "out/*.zip",
+      "out/*.tgz",
+      "out/.bundle_path",
+      "out/latest",
+    ],
+    "summary": "Rebuild Kit Bundle"
+  },
+  "nightly_snapshot.yml": {
+    "bundle": "nightly_snapshot_bundle",
+    "base_dir": ".",
+    "paths": [
+      "self_healing_out/**",
+      "snapshots/**",
+      "reports/**",
+    ],
+    "summary": "Nightly Snapshot Bundle"
+  },
+  "preflight.yml": {
+    "bundle": "preflight_bundle",
+    "base_dir": ".",
+    "paths": [
+      "self_healing_out/WORKFLOW_FIX_REPORT.*",
+      "self_healing_out/TREE_WORKFLOWS.txt",
+    ],
+    "summary": "Preflight Bundle"
+  },
+}
+
+def is_upload_artifact_step(step):
+    if not isinstance(step, dict): return False
+    uses = step.get('uses') or ""
+    return isinstance(uses, str) and uses.startswith("actions/upload-artifact@")
+
+def likely_bundle_step(step):
+    """
+    Heuristic: is an upload-artifact step that references our known outputs.
+    """
+    if not is_upload_artifact_step(step):
+        return False
+    w = step.get('with', {})
+    name = (w.get('name') or "").lower()
+    path = (w.get('path') or "")
+    # Names we often used for bundles
+    keywords = [
+        "supercheck", "rebuild", "snapshot", "preflight", "fixit", "bundle",
+        "yaml", "triage"
+    ]
+    # Paths we care about
+    hints = [
+        "self_healing_out", "supercheck_report.md", "supercheck_diag.json",
+        "out/.bundle_path", "out/*.zip", "out/*.tgz"
+    ]
+    return any(k in name for k in keywords) or any(h in path for h in hints)
+
+def make_std_step(cfg):
+    # Build the standardized uploader call
+    paths_block = "\n".join(["            " + p for p in cfg["paths"]])
+    return {
+        "name": "Upload (standardized with index)",
+        "if": "always()",
+        "uses": "./.github/workflows/_reusables/upload-with-index.yml",
+        "with": {
+            "name": cfg["bundle"],
+            "base_dir": cfg["base_dir"],
+            "paths": paths_block,  # multi-line string is OK in YAML
+            "summary_title": cfg["summary"],
+            "label": "auto",
+            "commit_index": True
+        }
+    }
+
+def convert_file(path: Path, cfg: dict):
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    data = yaml.load(path.read_text(encoding="utf-8"))
+
+    changed = False
+    jobs = data.get('jobs', {})
+
+    for job_id, job in list(jobs.items()):
+        steps = job.get('steps')
+        if not isinstance(steps, list): continue
+
+        # Remove legacy upload-artifact steps that look like bundle uploads
+        new_steps = []
+        removed = 0
+        for st in steps:
+            if likely_bundle_step(st):
+                removed += 1
+                changed = True
+                continue
+            new_steps.append(st)
+
+        # Append standardized uploader to the end of this job if we removed any
+        # or if this job looks like the main job and no std uploader is present
+        has_std = any(
+            isinstance(st, dict) and
+            isinstance(st.get('uses'), str) and
+            st.get('uses') == "./.github/workflows/_reusables/upload-with-index.yml"
+            for st in new_steps
+        )
+        if removed > 0 and not has_std:
+            new_steps.append(make_std_step(cfg))
+            changed = True
+
+        job['steps'] = new_steps
+
+    if changed:
+        path.write_text(
+            "---\n" +  # keep explicit doc start for consistency
+            yaml.dump(data),
+            encoding="utf-8"
+        )
+    return changed
+
+report = {"converted": [], "skipped": [], "missing": [], "errors": []}
+
+for fname, cfg in TARGETS.items():
+    fpath = WF_DIR / fname
+    if not fpath.exists():
+        report["missing"].append(fpath.as_posix()); continue
+    try:
+        changed = convert_file(fpath, cfg)
+        if changed:
+            report["converted"].append(fpath.as_posix())
+        else:
+            report["skipped"].append(fpath.as_posix())
+    except Exception as e:
+        report["errors"].append({"file": fpath.as_posix(), "error": str(e)})
+
+# Write reports
+(OUT/"CONVERT_TO_UPLOADER.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+(OUT/"CONVERT_TO_UPLOADER.md").write_text(
+    "# Convert to Standard Uploader\n\n"
+    f"- When: {time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime())}\n"
+    f"- Converted: {len(report['converted'])}\n"
+    f"- Skipped (already ok / no match): {len(report['skipped'])}\n"
+    f"- Missing targets: {len(report['missing'])}\n"
+    f"- Errors: {len(report['errors'])}\n\n"
+    "## Converted\n" + "\n".join(f"- `{p}`" for p in report["converted"]) + "\n\n"
+    "## Skipped\n" + "\n".join(f"- `{p}`" for p in report["skipped"]) + "\n\n"
+    "## Missing\n" + "\n".join(f"- `{p}`" for p in report["missing"]) + "\n\n"
+    "## Errors\n" + "\n".join(f"- `{e['file']}` — {e['error']}" for e in report["errors"]) + "\n",
+    encoding="utf-8"
+)
+print(json.dumps(report, indent=2))
+PY
+
+      - name: Run converter
+        run: |
+          set -e
+          python3 scripts/convert_to_uploader.py
+
+      - name: Commit & push changes (if any)
+        run: |
+          set -e
+          git config user.name "patch-bot"
+          git config user.email "bot@stegverse.local"
+          git add .github/workflows scripts self_healing_out || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "patch: convert workflows to standardized uploader with LATEST index"
+            git push || true
+          fi
+
+      - name: Upload patch report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch_convert_to_uploader_report
+          path: |
+            self_healing_out/CONVERT_TO_UPLOADER.json
+            self_healing_out/CONVERT_TO_UPLOADER.md
+          if-no-files-found: warn
+
+      - name: Actions summary
+        if: always()
+        run: |
+          echo "## Convert to Standard Uploader — Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          sed 's/^/    /' self_healing_out/CONVERT_TO_UPLOADER.md >> $GITHUB_STEP_SUMMARY || true
