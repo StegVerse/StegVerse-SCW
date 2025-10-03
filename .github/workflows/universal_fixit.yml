@@ -251,6 +251,17 @@ jobs:
           echo "" >> supercheck_report.md
 
       # ---- Stage H: Upload Final Bundle ----
+      - name: Upload Sweep (reusable)
+        if: always()
+        uses: ./.github/workflows/_reusables/upload-sweep.yml
+        with:
+          name: universal_fixit_sweep
+          base_dir: self_healing_out
+          files: |
+            SWEEP_REPORT.json
+            SWEEP_REPORT.md
+          create_placeholder: true
+      
       - name: Upload Supercheck Bundle
         if: always()
         uses: actions/upload-artifact@v4
