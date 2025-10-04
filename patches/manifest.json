@@ -1,70 +1,11 @@
 {
   "version": 1,
-  "notes": [
-    "AutoPatch manifest drives small, repeatable fixes to critical workflows.",
-    "Schema (simple): each patch has either a replace block or an if_absent block.",
-    "Patches are evaluated in order against files matching target_glob."
-  ],
   "patches": [
     {
-      "id": "sc-001-ensure-reusable-tools",
-      "description": "Supercheck should use reusable Ensure Tools step (avoids duping apt/pip installs).",
-      "target_glob": ".github/workflows/*supercheck*.yml",
-      "replace": {
-        "find_regex": "(?s)- name: Ensure tools\\b[\\s\\S]*?\\n\\s*- name:",
-        "with_text": "- name: Ensure tools (reusable)\n  uses: ./.github/workflows/_reusables/ensure-tools.yml\n  with:\n    apt_packages: \"jq curl zip\"\n    python_packages: \"ruamel.yaml yamllint\"\n    python_version: \"\"\n\n- name:",
-        "flags": "m"
-      }
-    },
-    {
-      "id": "sc-002-ensure-autofix-step",
-      "description": "Make sure the Auto-fix known issues step exists after YAML Corrector.",
-      "target_glob": ".github/workflows/*supercheck*.yml",
-      "if_absent": {
-        "anchor_regex": "^\\s*- name: Validate workflows \\(actionlint \\+ yamllint\\)\\b",
-        "position": "before",
-        "insert_text": "- name: Auto-fix known issues (YAML-001 et al.)\n  shell: bash\n  run: |\n    set -e\n    python3 scripts/auto_fix_known_issues.py || true\n    [ -f self_healing_out/AUTO_FIX_REPORT.md ] || echo \"# Auto-Fix Report\\n\\n(no known issues detected)\" > self_healing_out/AUTO_FIX_REPORT.md\n    [ -f self_healing_out/AUTO_FIX_REPORT.json ] || echo '{\"detected\":[],\"fixed\":[],\"skipped\":[],\"errors\":[]}' > self_healing_out/AUTO_FIX_REPORT.json\n"
-      }
-    },
-    {
-      "id": "sc-003-ensure-upload-sweep",
-      "description": "Ensure the reusable sweep uploader runs (so we always get a consistent report artifact).",
-      "target_glob": ".github/workflows/*supercheck*.yml",
-      "if_absent": {
-        "anchor_regex": "^\\s*- name: Upload Supercheck Bundle\\b",
-        "position": "before",
-        "insert_text": "- name: Upload Sweep (reusable)\n  if: always()\n  uses: ./.github/workflows/_reusables/upload-sweep.yml\n  with:\n    name: supercheck_sweep\n    base_dir: self_healing_out\n    files: |\n      SWEEP_REPORT.json\n      SWEEP_REPORT.md\n      AUTO_TRIAGE_REPORT.md\n    extra_globs: |\n      REPO_INVENTORY*.md\n      DRIFT_REPORT*.md\n    create_placeholder: true\n    placeholder_msg: \"Supercheck did not produce a sweep report this run.\"\n"
-      }
-    },
-    {
-      "id": "sc-004-ensure-telemetry",
-      "description": "Ensure trailing telemetry is present (always-on, no-fail).",
-      "target_glob": ".github/workflows/*supercheck*.yml",
-      "if_absent": {
-        "anchor_regex": "^\\s*jobs:\\s*[\\s\\S]*$",
-        "position": "end",
-        "insert_text": "\n      - name: Telemetry (reusable)\n        if: always()\n        uses: ./.github/workflows/_reusables/telemetry.yml\n        with:\n          basename: supercheck\n          status: ${{ job.status }}\n"
-      }
-    },
-    {
-      "id": "sc-005-ensure-permissions",
-      "description": "Make sure job-level permissions are adequate (checks/security-events).",
-      "target_glob": ".github/workflows/*supercheck*.yml",
-      "if_absent": {
-        "anchor_regex": "^permissions:\\s*$",
-        "position": "after",
-        "insert_text": "  contents: write\n  pull-requests: write\n  checks: write\n  security-events: write\n"
-      }
-    },
-    {
-      "id": "sc-006-ensure-concurrency",
-      "description": "Ensure concurrency group is present and cancels in-progress runs (mobile-friendly).",
-      "target_glob": ".github/workflows/*supercheck*.yml",
-      "if_absent": {
-        "anchor_regex": "^on:\\s*[\\s\\S]*$",
-        "position": "after",
-        "insert_text": "\nconcurrency:\n  group: supercheck-${{ github.ref }}\n  cancel-in-progress: true\n"
-      }
+      "id": "smoke-test",
+      "type": "yaml",
+      "path": "patches/smoke-test.patch.yml",
+      "apply_to_repo_root": true
     }
   ]
 }
