@@ -1,0 +1,14 @@
+version: 1
+actions:
+  - write_files:
+      - path: "SMOKE_OK.md"
+        mode: "100644"
+        contents: |
+          ✅ AutoPatch smoke test succeeded.
+          If you see this file, auto_patch.py and auto_patch.yml are wired correctly.
+      - path: "test-patch/README.md"
+        mode: "100644"
+        contents: |
+          This folder was created by the SCW AutoPatch smoke test.
+  - commit:
+      message: "chore(autopatch): smoke test success"
