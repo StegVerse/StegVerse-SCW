@@ -1,0 +1,61 @@
+version: 1
+actions:
+  - write_files:
+      - path: "hybrid-collab-bridge/.gitignore"
+        mode: "100644"
+        contents: |
+          __pycache__/
+          *.pyc
+          .venv/
+          .env
+          .env.*
+          .mypy_cache/
+          .pytest_cache/
+          .ruff_cache/
+          .vscode/
+          .idea/
+          sessions/**/artifacts/tmp/
+      - path: "hybrid-collab-bridge/LICENSE"
+        mode: "100644"
+        contents: |
+          MIT License
+          Copyright (c) 2025 StegVerse
+          
+          Permission is hereby granted, free of charge, to any person obtaining a copy
+          of this software and associated documentation files (the "Software"), to deal
+          in the Software without restriction, including without limitation the rights
+          to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+          copies of the Software, and to permit persons to do so, subject to the following
+          conditions:
+          
+          The above copyright notice and this permission notice shall be included in all
+          copies or substantial portions of the Software.
+          
+          THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+          IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+          FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+          AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+          LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+          OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+          SOFTWARE.
+      - path: "hybrid-collab-bridge/README.md"
+        mode: "100644"
+        contents: |
+          # hybrid-collab-bridge (bootstrap)
+          
+          This folder will become the **stand-alone hybrid bridge repo** (API orchestration + human-coordination traces),
+          with **modular adapters** and **Claude as the first connector**.
+          
+          Next step: apply the full bridge patch to populate `api/`, `providers.yaml`, and session scaffolding.
+      - path: "hybrid-collab-bridge/.env.example"
+        mode: "100644"
+        contents: |
+          ADMIN_TOKEN=replace_me_admin
+          ANTHROPIC_API_KEY=replace_me
+          ANTHROPIC_MODEL=claude-3-5-sonnet-latest
+          HTTP_TIMEOUT=60
+      - path: "hybrid-collab-bridge/sessions/.keep"
+        mode: "100644"
+        contents: ""
+  - commit:
+      message: "chore(bridge): bootstrap repo shell (no code yet)"
