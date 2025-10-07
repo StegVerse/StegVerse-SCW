@@ -1,0 +1,55 @@
+version: 1
+actions:
+  - write_files:
+      # --- Source of truth marker & docs ---
+      - path: ".github/autopatch/README.md"
+        mode: "100644"
+        contents: |
+          # AutoPatch Source of Truth
+          This directory is the single source of truth for AutoPatch manifests and patch specs.
+          - Manifest: `.github/autopatch/patches.yml`
+          - Patches live alongside it (e.g., `.github/autopatch/*.patch.yml`)
+          - The legacy `/patches/` directory is quarantined and ignored to prevent drift.
+
+      - path: ".github/autopatch/.source_of_truth"
+        mode: "100644"
+        contents: "autopatch_dir=.github/autopatch\n"
+
+      # --- Quarantine legacy /patches directory so it cannot interfere ---
+      - path: "patches/README.md"
+        mode: "100644"
+        contents: |
+          # Legacy Patch Folder (Quarantined)
+          This folder is no longer used by the AutoPatch runner.
+          The active manifest and patches live under `.github/autopatch/`.
+          You can delete this folder later via PR if you wish.
+      - path: "patches/.gitignore"
+        mode: "100644"
+        contents: |
+          # Keep this directory empty; only README.md is kept to guide contributors.
+          *
+          !README.md
+
+      # --- Optional: small guard script to validate manifest entries (no workflow edits needed now) ---
+      - path: "scripts/validate_manifest_paths.py"
+        mode: "100755"
+        contents: |
+          import os, sys, yaml, json
+          p = ".github/autopatch/patches.yml"
+          try:
+            m = yaml.safe_load(open(p, "r"))
+          except Exception as e:
+            print(f"[guard] Failed to parse {p}: {e}", file=sys.stderr)
+            sys.exit(0)
+          items = m.get("patches", [])
+          missing = []
+          for it in items:
+            path = it.get("file") or it.get("path") or it.get("spec")
+            if path and not os.path.exists(path):
+              missing.append(path)
+          report = {"checked": len(items), "missing": missing}
+          print("[guard]", json.dumps(report))
+          # never fail CI here; this is advisory
+
+  - commit:
+      message: "autopatch: normalize to .github/autopatch as single source; quarantine /patches"
