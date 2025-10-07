@@ -1,0 +1,64 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/workflows/hybrid_bridge_ci.yml"
+        mode: "100644"
+        contents: |
+          name: hybrid-bridge-ci
+          on:
+            workflow_dispatch: {}
+            push:
+              paths:
+                - "hybrid-collab-bridge/**"
+                - ".github/workflows/hybrid_bridge_ci.yml"
+
+          permissions:
+            contents: read
+
+          jobs:
+            smoke:
+              runs-on: ubuntu-latest
+              env:
+                # Dummy values are enough for import-time provider init
+                ANTHROPIC_API_KEY: "dummy_key_for_import_only"
+                ADMIN_TOKEN: "test_token"
+
+              steps:
+                - uses: actions/checkout@v4
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.11"
+
+                - name: Install deps
+                  working-directory: hybrid-collab-bridge/api
+                  run: |
+                    python -m pip install --upgrade pip
+                    pip install -r requirements.txt
+
+                - name: Compile sources
+                  working-directory: hybrid-collab-bridge/api
+                  run: python -m compileall app
+
+                - name: Boot API and hit /health
+                  working-directory: hybrid-collab-bridge/api
+                  run: |
+                    set -e
+                    uvicorn app.main:app --host 127.0.0.1 --port 8080 &
+                    SV_PID=$!
+                    # wait for port to open
+                    for i in {1..20}; do
+                      if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+                        break
+                      fi
+                      sleep 0.5
+                    done
+                    # verify health payload
+                    curl -fsS http://127.0.0.1:8080/health | tee /tmp/health.json
+                    kill $SV_PID || true
+      - path: "hybrid-collab-bridge/.applied_hybrid-bridge-smoke"
+        mode: "100644"
+        contents: "smoke workflow installed"
+  - commit:
+      message: "chore(hybrid-bridge): add root-level smoke CI workflow"
