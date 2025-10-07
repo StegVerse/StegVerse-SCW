@@ -6,6 +6,17 @@ from .models import RunRequest, ContinueRequest, RunResponse, Turn
 from .registry import ProviderRegistry
 from .session_writer import ensure_session, write_text
 from .strategies import consensus
+from pathlib import Path
+DEFAULT_CFG = (Path(__file__).resolve().parents[2] / "providers.yaml").resolve()
+env_cfg = os.getenv("HCB_PROVIDERS_PATH")
+if env_cfg:
+    cfg_path = Path(env_cfg)
+    if not cfg_path.is_absolute():
+        workspace = Path(os.getenv("GITHUB_WORKSPACE", DEFAULT_CFG.parents[1]))
+        cfg_path = (workspace / env_cfg).resolve()
+else:
+    cfg_path = DEFAULT_CFG
+REG = ProviderRegistry(cfg_path=str(cfg_path))
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 app = FastAPI(title="Hybrid Collab Bridge", version="0.1.0")
