@@ -2,9 +2,11 @@ import yaml
 from typing import Dict, List
 from .providers.base import Provider
 from .providers.anthropic_text import AnthropicText
+from .providers.mock_text import MockText  # <-- add this
 
 FACTORY = {
     "anthropic_text": AnthropicText,
+    "mock_text": MockText,                # <-- add this
 }
 
 class ProviderRegistry:
