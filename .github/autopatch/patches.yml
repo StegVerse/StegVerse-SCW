@@ -1,6 +1,6 @@
 version: 1
 patches:
-  - id: hybrid-collab-bridge-init
+  - id: smoke-test
     type: yaml
-    path: .github/autopatch/hybrid-bridge.patch.yml
+    path: .github/autopatch/smoke-test.patch.yml
     apply_to_repo_root: true
