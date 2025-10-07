@@ -8,8 +8,8 @@ from .strategies import consensus
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN","")
 app = FastAPI(title="Hybrid Collab Bridge", version="0.1.0")
-REG = ProviderRegistry(cfg_path="hybrid-collab-bridge/providers.yaml")
-
+PROVIDERS_PATH = os.getenv("HCB_PROVIDERS_PATH", "../providers.yaml")
+REG = ProviderRegistry(cfg_path=PROVIDERS_PATH)
 @app.get("/health")
 async def health():
     return {"ok": True, "version": "0.1.0", "providers": REG.list()}
