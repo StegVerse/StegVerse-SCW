@@ -266,10 +266,6 @@ actions:
           
           FACTORY = {
               "anthropic_text": AnthropicText,
-              # Add future providers here, e.g.:
-              # "openai_chat": OpenAIChat,
-              # "stability_image": StabilityImage,
-              # "music_gen": MusicGen,
           }
           
           class ProviderRegistry:
@@ -303,7 +299,6 @@ actions:
           from .registry import ProviderRegistry
           
           async def consensus(reg: ProviderRegistry, experts: List[str], prompt: str, opts: Dict[str,Any]) -> Dict[str, Any]:
-              # Everyone proposes
               proposals = []
               for name in experts:
                   prov = reg.get(name)
@@ -312,7 +307,6 @@ actions:
                   out = await prov.run(Task("text-generate", prompt, opts))
                   proposals.append({"who": name, "out": out})
           
-              # Referee = first expert synth
               if proposals:
                   referee = reg.get(experts[0])
                   merged_prompt = "Synthesize a concise final answer from these proposals:\n\n"
