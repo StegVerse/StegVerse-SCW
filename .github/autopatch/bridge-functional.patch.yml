@@ -1,0 +1,198 @@
+version: 1
+actions:
+  - write_files:
+      # 1) Allow providers path override via env in main.py
+      - path: "hybrid-collab-bridge/api/app/main.py"
+        mode: "100644"
+        contents: |
+          import os, pathlib
+          from fastapi import FastAPI, Header, HTTPException
+          from fastapi.responses import JSONResponse
+          from .models import RunRequest, ContinueRequest, RunResponse, Turn
+          from .registry import ProviderRegistry
+          from .session_writer import ensure_session, write_text
+          from .strategies import consensus
+          
+          ADMIN_TOKEN = os.getenv("ADMIN_TOKEN","")
+          app = FastAPI(title="Hybrid Collab Bridge", version="0.1.0")
+          PROVIDERS_PATH = os.getenv("HCB_PROVIDERS_PATH", "../providers.yaml")
+          REG = ProviderRegistry(cfg_path=PROVIDERS_PATH)
+          
+          @app.get("/health")
+          async def health():
+              return {"ok": True, "version": "0.1.0", "providers": REG.list(), "providers_path": PROVIDERS_PATH}
+          
+          def auth_or_403(token: str | None):
+              if not ADMIN_TOKEN:
+                  return
+              if token != ADMIN_TOKEN:
+                  raise HTTPException(status_code=403, detail="Forbidden: bad admin token")
+          
+          @app.post("/v1/run", response_model=RunResponse)
+          async def run_collab(req: RunRequest, x_admin_token: str | None = Header(default=None)):
+              auth_or_403(x_admin_token)
+              session_dir = ensure_session(req.slug)
+              write_text(session_dir, "context.md", f"# Question\n{req.question}\n\n## Context\n{req.context or ''}\n")
+          
+              text_prompt = f"{req.question}\n\nContext:\n{req.context or ''}\n\nConstraints:\n- Tone: concise\n"
+              opts = {"temperature": req.temperature}
+              result = await consensus(REG, req.experts, text_prompt, opts)
+          
+              turns = []
+              idx = 1
+              for p in result["proposals"]:
+                  fname = f"{idx:02d}_{p['who']}.md"
+                  write_text(session_dir, fname, p["out"].get("text",""))
+                  turns.append(Turn(who=p["who"], output=p["out"].get("text","")))
+                  idx += 1
+          
+              final_text = result["final"].get("text","")
+              write_text(session_dir, "03_referee.md", final_text)
+          
+              status = "PAUSED_FOR_REVIEW" if req.human_gate else "OK"
+              return JSONResponse(RunResponse(status=status, session_path=str(session_dir), strategy=req.strategy, turns=turns, final=final_text).model_dump())
+          
+          @app.post("/v1/continue", response_model=RunResponse)
+          async def continue_collab(req: ContinueRequest, x_admin_token: str | None = Header(default=None)):
+              auth_or_403(x_admin_token)
+              p = pathlib.Path(req.session_path)
+              if not p.exists():
+                  raise HTTPException(404, "Session path not found")
+              final_text = ""
+              ref = p / "03_referee.md"
+              if ref.exists():
+                  final_text = ref.read_text(encoding="utf-8").strip()
+              return JSONResponse(RunResponse(status="OK", session_path=str(p), strategy="consensus", final=final_text, turns=[]).model_dump())
+
+      # 2) Add a no-network mock provider
+      - path: "hybrid-collab-bridge/api/app/providers/mock_text.py"
+        mode: "100644"
+        contents: |
+          from typing import Dict, Any
+          from ..tasks import Task
+          from .base import Provider
+          
+          class MockText(Provider):
+              def __init__(self, name: str):
+                  super().__init__(name, "mock_text", ["text-generate"])
+          
+              async def run(self, task: Task) -> Dict[str, Any]:
+                  if task.task_type != "text-generate":
+                      return {"error": "unsupported task"}
+                  prompt = task.prompt.strip().splitlines()[0][:120]
+                  return {"text": f"MOCK({self.name}): {prompt} -> concise answer"}
+
+      # 3) Teach the registry about mock_text
+      - path: "hybrid-collab-bridge/api/app/registry.py"
+        mode: "100644"
+        contents: |
+          import yaml
+          from typing import Dict, List
+          from .providers.base import Provider
+          from .providers.anthropic_text import AnthropicText
+          from .providers.mock_text import MockText
+          
+          FACTORY = {
+              "anthropic_text": AnthropicText,
+              "mock_text": MockText,
+          }
+          
+          class ProviderRegistry:
+              def __init__(self, cfg_path: str = "providers.yaml"):
+                  self.cfg_path = cfg_path
+                  self.providers: Dict[str, Provider] = {}
+                  self.reload()
+          
+              def reload(self):
+                  with open(self.cfg_path, "r", encoding="utf-8") as f:
+                      cfg = yaml.safe_load(f)
+                  self.providers = {}
+                  for p in cfg.get("providers", []):
+                      if not p.get("enabled", True):
+                          continue
+                      typ = p["type"]; name = p["name"]
+                      cls = FACTORY.get(typ)
+                      if not cls: continue
+                      self.providers[name] = cls(name)
+          
+              def get(self, name: str) -> Provider | None:
+                  return self.providers.get(name)
+          
+              def list(self) -> List[str]:
+                  return list(self.providers.keys())
+
+      # 4) Add a CI-only providers file that uses the mock
+      - path: "hybrid-collab-bridge/providers.ci.yaml"
+        mode: "100644"
+        contents: |
+          providers:
+            - name: claude
+              type: mock_text
+              enabled: true
+              capabilities: ["text-generate"]
+
+      # 5) Add the functional CI workflow
+      - path: ".github/workflows/hybrid_bridge_functional.yml"
+        mode: "100644"
+        contents: |
+          name: hybrid-bridge-functional
+          on:
+            workflow_dispatch: {}
+            push:
+              paths:
+                - "hybrid-collab-bridge/**"
+                - ".github/workflows/hybrid_bridge_functional.yml"
+          permissions:
+            contents: read
+          jobs:
+            functional:
+              runs-on: ubuntu-latest
+              env:
+                ADMIN_TOKEN: "test_token"
+                HCB_PROVIDERS_PATH: "hybrid-collab-bridge/providers.ci.yaml"
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.11"
+                - name: Install deps
+                  working-directory: hybrid-collab-bridge/api
+                  run: |
+                    python -m pip install --upgrade pip
+                    pip install -r requirements.txt
+                - name: Compile sources
+                  working-directory: hybrid-collab-bridge/api
+                  run: python -m compileall app
+                - name: Boot API and run /v1/run
+                  working-directory: hybrid-collab-bridge/api
+                  run: |
+                    set -e
+                    uvicorn app.main:app --host 127.0.0.1 --port 8080 &
+                    SV_PID=$!
+                    for i in {1..30}; do
+                      if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+                        break
+                      fi
+                      sleep 0.5
+                    done
+                    echo '>>> /health'
+                    curl -fsS http://127.0.0.1:8080/health | tee /tmp/health.json
+                    echo '>>> /v1/run'
+                    curl -fsS -X POST http://127.0.0.1:8080/v1/run \
+                      -H "Content-Type: application/json" \
+                      -H "X-ADMIN-TOKEN: ${ADMIN_TOKEN}" \
+                      -d '{"slug":"ci-functional","question":"Give a one-line project summary.","context":"HCB functional test","experts":["claude"],"strategy":"consensus","human_gate":true,"temperature":0.1}' \
+                      | tee /tmp/run.json
+                    kill $SV_PID || true
+                - name: Upload artifacts
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: hcb_functional_outputs
+                    path: |
+                      /tmp/health.json
+                      /tmp/run.json
+      - path: "hybrid-collab-bridge/.applied_hcb_functional_patch"
+        mode: "100644"
+        contents: "applied"
+  - commit:
+      message: "ci(hcb): add mock provider + env override + functional workflow"
