@@ -11,9 +11,8 @@ jobs:
   functional:
     runs-on: ubuntu-latest
     env:
-      ADMIN_TOKEN: "test_token"
-      HCB_PROVIDERS_PATH: "hybrid-collab-bridge/providers.ci.yaml"
-    steps:
+  ADMIN_TOKEN: "test_token"
+  HCB_PROVIDERS_PATH: "${{ github.workspace }}/hybrid-collab-bridge/providers.ci.yaml"    steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
