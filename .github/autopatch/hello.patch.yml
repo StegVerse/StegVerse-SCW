@@ -1,0 +1,9 @@
+version: 1
+actions:
+  - write_files:
+      - path: "AUTOPATCH_HELLO.txt"
+        mode: "100644"
+        contents: |
+          ✅ AutoPatch hello: this file was written by the autopatch runner.
+  - commit:
+      message: "chore(autopatch): hello file created"
