@@ -1,5 +1,14 @@
 version: 1
 actions:
+version: 1
+actions:
+  - write_files:
+      - path: "hybrid-collab-bridge/.applied_hybrid-collab-bridge-init"
+        mode: "100644"
+        contents: "applied by one-shot"
+      # ...the rest of your write_files entries (README, api/, etc) ...
+  - commit:
+      message: "init: hybrid bridge (Claude-first, modular adapters, human-coordination traces)"
   - write_files:
       - path: "hybrid-collab-bridge/.applied_hybrid-collab-bridge-init-v6"
         mode: "100644"
