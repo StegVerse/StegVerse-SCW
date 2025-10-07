@@ -10,3 +10,9 @@ patches:
   file: .github/autopatch/hybrid-bridge.patch.yml
   apply_to_repo_root: true
   enabled: true
+- id: hybrid-collab-bridge-init
+  enabled: true
+  type: yaml
+  file: .github/autopatch/hybrid-bridge.patch.yml
+  apply_to_repo_root: true
+  mode: apply
