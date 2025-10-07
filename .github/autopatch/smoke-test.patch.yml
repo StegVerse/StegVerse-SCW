@@ -1,0 +1,10 @@
+version: 1
+actions:
+  - write_files:
+      - path: "AUTOPATCH_SMOKE_OK.md"
+        mode: "100644"
+        contents: |
+          ✅ AutoPatch ran successfully.
+          If this file exists on main, the workflow and runner worked.
+  - commit:
+      message: "chore(autopatch): smoke test created AUTOPATCH_SMOKE_OK.md"
