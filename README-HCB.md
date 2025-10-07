@@ -1,4 +1,8 @@
 # 🧠 Hybrid Collab Bridge (HCB)
+
+[![hcb-pipeline](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/hcb-pipeline.yml/badge.svg)](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/hcb-pipeline.yml)
+[![hybrid-bridge-ci](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/hybrid_bridge_ci.yml/badge.svg)](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/hybrid_bridge_ci.yml)
+
 **StegVerse-SCW AutoPatch Integration Report**
 
 [![hybrid-bridge-ci](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/hybrid_bridge_ci.yml/badge.svg)](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/hybrid_bridge_ci.yml)
