@@ -1,0 +1,105 @@
+name: One-Shot Patch Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_path:
+        description: "Path to patch YAML (write_files + commit)."
+        required: true
+        default: ".github/autopatch/hybrid-bridge.patch.yml"
+      commit_message:
+        description: "Commit message to use (fallback if patch has commit block)."
+        required: false
+        default: "apply: one-shot patch"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install pyyaml
+
+      - name: Apply patch
+        id: apply_patch
+        env:
+          PATCH_PATH: ${{ github.event.inputs.patch_path }}
+          FALLBACK_COMMIT_MSG: ${{ github.event.inputs.commit_message }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys, yaml, json, pathlib, subprocess
+
+          patch_path = os.environ["PATCH_PATH"]
+          fallback_msg = os.environ.get("FALLBACK_COMMIT_MSG","apply: one-shot patch")
+
+          if not os.path.exists(patch_path):
+            print(f"[one-shot] Patch file not found: {patch_path}", file=sys.stderr)
+            sys.exit(1)
+
+          with open(patch_path, "r", encoding="utf-8") as f:
+            spec = yaml.safe_load(f)
+
+          actions = spec.get("actions", [])
+          wrote_anything = False
+          commit_msg = None
+
+          def write_file(path, mode, contents):
+            p = pathlib.Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            data = contents or ""
+            p.write_text(data, encoding="utf-8")
+            if mode:
+              # numeric string like "100644" -> 0o100644 is not valid; use 0o644 permissions on file.
+              try:
+                os.chmod(p, int(mode[-3:], 8))
+              except Exception:
+                pass
+
+          for act in actions:
+            if "write_files" in act:
+              for item in act["write_files"]:
+                path = item["path"]
+                mode = item.get("mode")
+                contents = item.get("contents", "")
+                write_file(path, mode, contents)
+                print(f"[one-shot] wrote {path}")
+                wrote_anything = True
+            if "commit" in act and act["commit"]:
+              msg = act["commit"].get("message")
+              if msg:
+                commit_msg = msg
+
+          if not wrote_anything:
+            print("[one-shot] No write_files actions found; nothing to do.")
+            sys.exit(0)
+
+          # git commit
+          subprocess.run(["git","config","user.name","one-shot-patch-bot"], check=True)
+          subprocess.run(["git","config","user.email","bot@stegverse.local"], check=True)
+          subprocess.run(["git","add","-A"], check=True)
+          # Check if anything actually changed
+          rc = subprocess.run(["git","diff","--cached","--quiet"]).returncode
+          if rc == 0:
+            print("[one-shot] No staged changes; skipping commit.")
+            sys.exit(0)
+
+          msg = commit_msg or fallback_msg
+          subprocess.run(["git","commit","-m", msg], check=True)
+          subprocess.run(["git","push","origin","HEAD:${{ github.ref_name }}"], check=True)
+          print(json.dumps({"committed": True, "message": msg}))
+          PY
+
+      - name: Done
+        if: always()
+        run: echo "One-shot apply finished."
