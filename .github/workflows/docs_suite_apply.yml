@@ -110,13 +110,13 @@ jobs:
           if ! grep -q '^---$' README-HCB.md || ! grep -q '^version:' README-HCB.md; then
             tmp="$(mktemp)"
             cat > "$tmp" <<'HDR'
-            ---
-            version: 1.0.0
-            doc_series: hybrid-collab-bridge
-            autopatch_ref: .github/autopatch/README-HCB.md
-            updated: 2025-10-07
-            ---
-            HDR
+---
+version: 1.0.0
+doc_series: hybrid-collab-bridge
+autopatch_ref: .github/autopatch/README-HCB.md
+updated: 2025-10-07
+---
+HDR
             cat README-HCB.md >> "$tmp"
             mv "$tmp" README-HCB.md
           fi
