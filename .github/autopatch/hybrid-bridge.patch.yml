@@ -4,6 +4,9 @@ actions:
       - path: "hybrid-collab-bridge/.autopatch_applied"
         mode: "100644"
         contents: "applied by AutoPatch (primary)"
+      - path: "hybrid-collab-bridge/.autopatch_applied"
+        mode: "100644"
+        contents: "applied by AutoPatch"
   - write_files:
       - path: "hybrid-collab-bridge/.gitignore"
         mode: "100644"
