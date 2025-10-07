@@ -1,2 +1,438 @@
 version: 1
-patches: []
+patches:
+  # --- Minimal seed so we can see 'applied: 1' immediately ---
+  - id: bridge-min-apply-inline-v1
+    enabled: true
+    actions:
+      - write_files:
+          - path: "hybrid-collab-bridge/.applied_bridge_min_inline_v1"
+            mode: "100644"
+            contents: "applied by AutoPatch (inline seed)"
+          - path: "hybrid-collab-bridge/README.md"
+            mode: "100644"
+            contents: |
+              # hybrid-collab-bridge
+              Minimal seed created by **inline** AutoPatch entry.
+              Next patch in this same run will add API, providers, and CI.
+      - commit:
+          message: "init: hybrid bridge (minimal inline seed)"
+
+  # --- Full scaffold (inline) — creates the whole repo tree ---
+  - id: hybrid-collab-bridge-init-inline-v1
+    enabled: true
+    actions:
+      - write_files:
+          - path: "hybrid-collab-bridge/.applied_hybrid-collab-bridge-init-inline-v1"
+            mode: "100644"
+            contents: "applied by AutoPatch (inline full scaffold)"
+          - path: "hybrid-collab-bridge/.gitignore"
+            mode: "100644"
+            contents: |
+              __pycache__/
+              *.pyc
+              .venv/
+              .env
+              .env.*
+              .mypy_cache/
+              .pytest_cache/
+              .ruff_cache/
+              .vscode/
+              .idea/
+              sessions/**/artifacts/tmp/
+          - path: "hybrid-collab-bridge/LICENSE"
+            mode: "100644"
+            contents: |
+              MIT License
+              Copyright (c) 2025 StegVerse
+
+              Permission is hereby granted, free of charge, to any person obtaining a copy
+              of this software and associated documentation files (the "Software"), to deal
+              in the Software without restriction, including without limitation the rights
+              to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+              copies of the Software, and to permit persons to do so, subject to the following
+              conditions:
+
+              The above copyright notice and this permission notice shall be included in all
+              copies or substantial portions of the Software.
+
+              THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+              IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+              FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+              AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+              LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+              OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+              SOFTWARE.
+          - path: "hybrid-collab-bridge/README.md"
+            mode: "100644"
+            contents: |
+              # hybrid-collab-bridge
+
+              A **stand-alone hybrid bridge**: API orchestration + human-coordination traces.
+              - **Modular adapters**: starts with **Claude**; add more experts later.
+              - **Human-friendly**: every run writes a Markdown session (`sessions/YYYY-MM-DD/<slug>/`)
+                with `context.md`, expert drafts, and a referee merge for review.
+
+              ## Quick start
+              ```bash
+              # 1) env
+              cd hybrid-collab-bridge
+              cp .env.example .env
+              # Fill: ANTHROPIC_API_KEY, ADMIN_TOKEN
+
+              # 2) run API
+              cd api
+              pip install -r requirements.txt
+              uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+              ```
+
+              ### Endpoints
+              - `GET  /health`
+              - `POST /v1/run` — start a collaboration (writes session folder)
+              - `POST /v1/continue` — mark session reviewed and finalize
+
+              **Example**
+              ```bash
+              export ADMIN_TOKEN=your_token
+              curl -s -X POST http://localhost:8080/v1/run \
+                -H "Content-Type: application/json" \
+                -H "X-ADMIN-TOKEN: $ADMIN_TOKEN" \
+                -d '{
+                  "slug": "first-claude-run",
+                  "question": "Draft a 2-sentence pitch for StegTalk and list 3 next steps.",
+                  "context": "Audience: developers; emphasize privacy and onboarding.",
+                  "experts": ["claude"],
+                  "strategy": "consensus",
+                  "human_gate": true,
+                  "temperature": 0.3
+                }' | jq .
+              ```
+
+              Outputs go to `hybrid-collab-bridge/sessions/<today>/first-claude-run/`:
+              - `context.md`
+              - `01_claude.md` (draft)
+              - `03_referee.md` (merged / final draft)
+
+              ## Add more experts later
+              1) Create a provider in `api/app/providers/your_adapter.py`
+              2) Register it in `api/app/registry.py`
+              3) Add an entry in `providers.yaml`
+
+              Adapters declare capabilities like `text-generate`, `image-generate`, `music-generate`.
+          - path: "hybrid-collab-bridge/.env.example"
+            mode: "100644"
+            contents: |
+              ADMIN_TOKEN=replace_me_admin
+              # Claude
+              ANTHROPIC_API_KEY=replace_me
+              ANTHROPIC_MODEL=claude-3-5-sonnet-latest
+              # Optional timeouts
+              HTTP_TIMEOUT=60
+          - path: "hybrid-collab-bridge/providers.yaml"
+            mode: "100644"
+            contents: |
+              providers:
+                - name: claude
+                  type: anthropic_text
+                  enabled: true
+                  capabilities: ["text-generate"]
+          - path: "hybrid-collab-bridge/infra/docker-compose.yml"
+            mode: "100644"
+            contents: |
+              services:
+                bridge:
+                  build:
+                    context: ../api
+                    dockerfile: dockerfile
+                  env_file:
+                    - ../.env
+                  ports:
+                    - "8080:8080"
+                  volumes:
+                    - ../sessions:/app/sessions
+                    - ../providers.yaml:/app/providers.yaml:ro
+                  restart: unless-stopped
+          - path: "hybrid-collab-bridge/api/requirements.txt"
+            mode: "100644"
+            contents: |
+              fastapi==0.115.0
+              uvicorn==0.30.6
+              httpx==0.27.2
+              pydantic==2.9.2
+              python-dotenv==1.0.1
+              orjson==3.10.7
+              pyyaml==6.0.2
+          - path: "hybrid-collab-bridge/api/dockerfile"
+            mode: "100644"
+            contents: |
+              FROM python:3.11-slim
+              ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+              WORKDIR /app
+              COPY requirements.txt /app/
+              RUN pip install --no-cache-dir -r requirements.txt
+              COPY app /app/app
+              COPY ../providers.yaml /app/providers.yaml
+              EXPOSE 8080
+              CMD ["uvicorn","app.main:app","--host=0.0.0.0","--port=8080"]
+          - path: "hybrid-collab-bridge/api/app/__init__.py"
+            mode: "100644"
+            contents: ""
+          - path: "hybrid-collab-bridge/api/app/models.py"
+            mode: "100644"
+            contents: |
+              from typing import List, Literal, Optional
+              from pydantic import BaseModel, Field
+
+              StrategyName = Literal["consensus","committee"]
+
+              class RunRequest(BaseModel):
+                  slug: str = Field(..., description="folder slug under sessions/YYYY-MM-DD/")
+                  question: str
+                  context: Optional[str] = None
+                  experts: List[str] = Field(default_factory=lambda: ["claude"])
+                  strategy: StrategyName = "consensus"
+                  human_gate: bool = True
+                  temperature: float = 0.4
+
+              class ContinueRequest(BaseModel):
+                  session_path: str
+
+              class Turn(BaseModel):
+                  who: str
+                  output: str
+
+              class RunResponse(BaseModel):
+                  status: Literal["OK","PAUSED_FOR_REVIEW"]
+                  session_path: str
+                  strategy: StrategyName
+                  turns: List[Turn] = []
+                  final: Optional[str] = None
+          - path: "hybrid-collab-bridge/api/app/tasks.py"
+            mode: "100644"
+            contents: |
+              from typing import Literal, Dict, Any
+
+              TaskType = Literal["text-generate"]
+
+              class Task:
+                  def __init__(self, task_type: TaskType, prompt: str, options: Dict[str, Any] | None = None):
+                      self.task_type = task_type
+                      self.prompt = prompt
+                      self.options = options or {}
+          - path: "hybrid-collab-bridge/api/app/providers/base.py"
+            mode: "100644"
+            contents: |
+              from abc import ABC, abstractmethod
+              from typing import List, Dict, Any
+              from ..tasks import Task
+
+              class Provider(ABC):
+                  name: str
+                  type: str
+                  capabilities: List[str]
+
+                  def __init__(self, name: str, ptype: str, capabilities: List[str]):
+                      self.name = name
+                      self.type = ptype
+                      self.capabilities = capabilities
+
+                  def supports(self, task_type: str) -> bool:
+                      return task_type in self.capabilities
+
+                  @abstractmethod
+                  async def run(self, task: Task) -> Dict[str, Any]:
+                      raise NotImplementedError
+          - path: "hybrid-collab-bridge/api/app/providers/anthropic_text.py"
+            mode: "100644"
+            contents: |
+              import os, httpx
+              from typing import Dict, Any
+              from ..tasks import Task
+              from .base import Provider
+
+              ANTHROPIC_BASE = os.getenv("ANTHROPIC_BASE","https://api.anthropic.com")
+              ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL","claude-3-5-sonnet-latest")
+              TIMEOUT = float(os.getenv("HTTP_TIMEOUT","60"))
+
+              class AnthropicText(Provider):
+                  def __init__(self, name: str):
+                      super().__init__(name, "anthropic_text", ["text-generate"])
+                      key = os.getenv("ANTHROPIC_API_KEY")
+                      if not key:
+                          raise RuntimeError("ANTHROPIC_API_KEY missing")
+                      self.headers = {"x-api-key": key, "anthropic-version":"2023-06-01", "content-type":"application/json"}
+
+                  async def run(self, task: Task) -> Dict[str, Any]:
+                      if task.task_type != "text-generate":
+                          return {"error":"unsupported task"}
+                      payload = {
+                          "model": ANTHROPIC_MODEL,
+                          "messages": [{"role":"user","content":task.prompt}],
+                          "max_tokens": 1200,
+                          "temperature": task.options.get("temperature", 0.4),
+                      }
+                      async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                          r = await client.post(f"{ANTHROPIC_BASE}/v1/messages", headers=self.headers, json=payload)
+                          r.raise_for_status()
+                      data = r.json()
+                      pieces = []
+                      for block in data.get("content", []):
+                          if block.get("type") == "text":
+                              pieces.append(block.get("text",""))
+                      return {"text": "\n".join(pieces).strip()}
+          - path: "hybrid-collab-bridge/api/app/registry.py"
+            mode: "100644"
+            contents: |
+              import yaml
+              from typing import Dict, List
+              from .providers.base import Provider
+              from .providers.anthropic_text import AnthropicText
+
+              FACTORY = {
+                  "anthropic_text": AnthropicText,
+              }
+
+              class ProviderRegistry:
+                  def __init__(self, cfg_path: str = "providers.yaml"):
+                      self.cfg_path = cfg_path
+                      self.providers: Dict[str, Provider] = {}
+                      self.reload()
+
+                  def reload(self):
+                      with open(self.cfg_path, "r", encoding="utf-8") as f:
+                          cfg = yaml.safe_load(f)
+                      self.providers = {}
+                      for p in cfg.get("providers", []):
+                          if not p.get("enabled", True):
+                              continue
+                          typ = p["type"]; name = p["name"]
+                          cls = FACTORY.get(typ)
+                          if not cls: continue
+                          self.providers[name] = cls(name)
+
+                  def get(self, name: str) -> Provider | None:
+                      return self.providers.get(name)
+
+                  def list(self) -> List[str]:
+                      return list(self.providers.keys())
+          - path: "hybrid-collab-bridge/api/app/strategies.py"
+            mode: "100644"
+            contents: |
+              from typing import List, Dict, Any
+              from .tasks import Task
+              from .registry import ProviderRegistry
+
+              async def consensus(reg: ProviderRegistry, experts: List[str], prompt: str, opts: Dict[str,Any]) -> Dict[str, Any]:
+                  proposals = []
+                  for name in experts:
+                      prov = reg.get(name)
+                      if not prov or not prov.supports("text-generate"):
+                          continue
+                      out = await prov.run(Task("text-generate", prompt, opts))
+                      proposals.append({"who": name, "out": out})
+
+                  if proposals:
+                      referee = reg.get(experts[0])
+                      merged_prompt = "Synthesize a concise final answer from these proposals:\n\n"
+                      for p in proposals:
+                          merged_prompt += f"- {p['who']}: {p['out'].get('text','')}\n"
+                      merged = await referee.run(Task("text-generate", merged_prompt, {"temperature": 0.2}))
+                  else:
+                      merged = {"text": "No proposals."}
+
+                  return {"proposals": proposals, "final": merged}
+          - path: "hybrid-collab-bridge/api/app/session_writer.py"
+            mode: "100644"
+            contents: |
+              import pathlib, datetime
+
+              def ensure_session(slug: str, base: str = "hybrid-collab-bridge/sessions") -> pathlib.Path:
+                  date = datetime.date.today().isoformat()
+                  p = pathlib.Path(base) / date / slug
+                  p.mkdir(parents=True, exist_ok=True)
+                  (p / "artifacts").mkdir(exist_ok=True)
+                  return p
+
+              def write_text(path: pathlib.Path, name: str, text: str):
+                  (path / name).write_text(text or "", encoding="utf-8")
+                  return str(path / name)
+          - path: "hybrid-collab-bridge/api/app/main.py"
+            mode: "100644"
+            contents: |
+              import os, pathlib
+              from fastapi import FastAPI, Header, HTTPException
+              from fastapi.responses import JSONResponse
+              from .models import RunRequest, ContinueRequest, RunResponse, Turn
+              from .registry import ProviderRegistry
+              from .session_writer import ensure_session, write_text
+              from .strategies import consensus
+
+              ADMIN_TOKEN = os.getenv("ADMIN_TOKEN","")
+              app = FastAPI(title="Hybrid Collab Bridge", version="0.1.0")
+              REG = ProviderRegistry(cfg_path="hybrid-collab-bridge/providers.yaml")
+
+              @app.get("/health")
+              async def health():
+                  return {"ok": True, "version": "0.1.0", "providers": REG.list()}
+
+              def auth_or_403(token: str | None):
+                  if not ADMIN_TOKEN:
+                      return
+                  if token != ADMIN_TOKEN:
+                      raise HTTPException(status_code=403, detail="Forbidden: bad admin token")
+
+              @app.post("/v1/run", response_model=RunResponse)
+              async def run_collab(req: RunRequest, x_admin_token: str | None = Header(default=None)):
+                  auth_or_403(x_admin_token)
+                  session_dir = ensure_session(req.slug)
+                  write_text(session_dir, "context.md", f"# Question\n{req.question}\n\n## Context\n{req.context or ''}\n")
+
+                  text_prompt = f"{req.question}\n\nContext:\n{req.context or ''}\n\nConstraints:\n- Tone: concise\n"
+                  opts = {"temperature": req.temperature}
+                  result = await consensus(REG, req.experts, text_prompt, opts)
+
+                  turns = []
+                  idx = 1
+                  for p in result["proposals"]:
+                      fname = f"{idx:02d}_{p['who']}.md"
+                      write_text(session_dir, fname, p["out"].get("text",""))
+                      turns.append(Turn(who=p["who"], output=p["out"].get("text","")))
+                      idx += 1
+
+                  final_text = result["final"].get("text","")
+                  write_text(session_dir, "03_referee.md", final_text)
+
+                  status = "PAUSED_FOR_REVIEW" if req.human_gate else "OK"
+                  return JSONResponse(RunResponse(status=status, session_path=str(session_dir), strategy=req.strategy, turns=turns, final=final_text).model_dump())
+
+              @app.post("/v1/continue", response_model=RunResponse)
+              async def continue_collab(req: ContinueRequest, x_admin_token: str | None = Header(default=None)):
+                  auth_or_403(x_admin_token)
+                  p = pathlib.Path(req.session_path)
+                  if not p.exists():
+                      raise HTTPException(404, "Session path not found")
+                  final_text = ""
+                  ref = p / "03_referee.md"
+                  if ref.exists():
+                      final_text = ref.read_text(encoding="utf-8").strip()
+                  return JSONResponse(RunResponse(status="OK", session_path=str(p), strategy="consensus", final=final_text, turns=[]).model_dump())
+          - path: "hybrid-collab-bridge/sessions/.keep"
+            mode: "100644"
+            contents: ""
+          - path: "hybrid-collab-bridge/.github/workflows/ci.yml"
+            mode: "100644"
+            contents: |
+              name: hybrid-bridge-ci
+              on: [push, pull_request]
+              jobs:
+                lint:
+                  runs-on: ubuntu-latest
+                  steps:
+                    - uses: actions/checkout@v4
+                    - uses: actions/setup-python@v5
+                      with:
+                        python-version: "3.11"
+                    - run: |
+                        cd hybrid-collab-bridge/api && pip install -r requirements.txt
+                        python -m compileall app
+      - commit:
+          message: "init: hybrid bridge (Claude-first, modular adapters, human-coordination traces)"
