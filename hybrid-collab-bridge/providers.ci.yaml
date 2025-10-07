@@ -1,0 +1,5 @@
+providers:
+  - name: claude
+    type: mock_text
+    enabled: true
+    capabilities: ["text-generate"]
