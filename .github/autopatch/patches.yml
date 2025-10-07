@@ -1,19 +1,4 @@
 version: 1
-
-# Most runners look for `patches:` (list of objects).
-# Others accept a simple `files:` list of patch specs.
-# We include BOTH, and over-specify keys so your runner will recognize at least one.
-patches:
-  - id: hybrid-collab-bridge-init
-    enabled: true
-    type: yaml          # common key
-    kind: yaml          # alt key used by some runners
-    file: .github/autopatch/hybrid-bridge.patch.yml   # common key
-    path: .github/autopatch/hybrid-bridge.patch.yml   # alt key
-    spec: .github/autopatch/hybrid-bridge.patch.yml   # alt key
-    apply_to_repo_root: true
-    root: true
-
-# Fallback schema used by some minimal runners
+patches: []
 files:
-  - .github/autopatch/hybrid-bridge.patch.yml
+- .github/autopatch/hybrid-bridge.patch.yml
