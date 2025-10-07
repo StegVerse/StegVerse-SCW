@@ -1,0 +1,56 @@
+name: hybrid-bridge-functional
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - "hybrid-collab-bridge/**"
+      - ".github/workflows/hybrid_bridge_functional.yml"
+permissions:
+  contents: read
+jobs:
+  functional:
+    runs-on: ubuntu-latest
+    env:
+      ADMIN_TOKEN: "test_token"
+      HCB_PROVIDERS_PATH: "hybrid-collab-bridge/providers.ci.yaml"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        working-directory: hybrid-collab-bridge/api
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compile sources
+        working-directory: hybrid-collab-bridge/api
+        run: python -m compileall app
+      - name: Boot API and run /v1/run
+        working-directory: hybrid-collab-bridge/api
+        run: |
+          set -e
+          uvicorn app.main:app --host 127.0.0.1 --port 8080 &
+          SV_PID=$!
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+          echo '>>> /health'
+          curl -fsS http://127.0.0.1:8080/health | tee /tmp/health.json
+          echo '>>> /v1/run'
+          curl -fsS -X POST http://127.0.0.1:8080/v1/run \
+            -H "Content-Type: application/json" \
+            -H "X-ADMIN-TOKEN: ${ADMIN_TOKEN}" \
+            -d '{"slug":"ci-functional","question":"Give a one-line project summary.","context":"HCB functional test","experts":["claude"],"strategy":"consensus","human_gate":true,"temperature":0.1}' \
+            | tee /tmp/run.json
+          kill $SV_PID || true
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hcb_functional_outputs
+          path: |
+            /tmp/health.json
+            /tmp/run.json
