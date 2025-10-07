@@ -16,3 +16,9 @@ patches:
   file: .github/autopatch/hybrid-bridge.patch.yml
   apply_to_repo_root: true
   mode: apply
+- id: hybrid-collab-bridge-init-v1
+  enabled: true
+  type: yaml
+  file: .github/autopatch/hybrid-bridge.patch.yml
+  apply_to_repo_root: true
+  mode: apply
