@@ -1,0 +1,13 @@
+services:
+  bridge:
+    build:
+      context: ../api
+      dockerfile: dockerfile
+    env_file:
+      - ../.env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../sessions:/app/sessions
+      - ../providers.yaml:/app/providers.yaml:ro
+    restart: unless-stopped

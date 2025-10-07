@@ -1,0 +1,6 @@
+providers:
+  - name: claude
+    type: anthropic_text
+    enabled: true
+    capabilities: ["text-generate"]
+# To add more later, append entries here (e.g., openai_chat, stability_image, music, etc.)
