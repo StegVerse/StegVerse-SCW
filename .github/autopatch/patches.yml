@@ -1,6 +1,2 @@
 version: 1
-patches:
-  - id: smoke-test
-    type: yaml
-    path: .github/autopatch/smoke-test.patch.yml
-    apply_to_repo_root: true
+patches: []
