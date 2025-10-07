@@ -1,2 +1,6 @@
 version: 1
-patches: []
+patches:
+  - id: hybrid-collab-bridge-init
+    type: yaml
+    path: .github/autopatch/hybrid-bridge.patch.yml
+    apply_to_repo_root: true
