@@ -1,0 +1,14 @@
+version: 1
+actions:
+  - write_files:
+      - path: "hybrid-collab-bridge/.applied_bridge_min_v1"
+        mode: "100644"
+        contents: "applied by AutoPatch (bridge-min)"
+      - path: "hybrid-collab-bridge/README.md"
+        mode: "100644"
+        contents: |
+          # hybrid-collab-bridge
+          Minimal seed to prove AutoPatch can write into this subtree.
+          Next patch will add API, providers, and CI.
+  - commit:
+      message: "init: hybrid bridge (minimal seed)"
