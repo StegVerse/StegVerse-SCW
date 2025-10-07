@@ -1,4 +1,2 @@
 version: 1
-patches:
-  - id: docs-suite
-    path: .github/autopatch/docs-suite.patch.yml
+patches: []
