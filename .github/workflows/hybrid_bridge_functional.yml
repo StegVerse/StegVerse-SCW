@@ -2,6 +2,7 @@ name: hybrid-bridge-functional
 on:
   workflow_dispatch: {}
   push:
+    branches: [ "main" ]
     paths:
       - "hybrid-collab-bridge/**"
       - ".github/workflows/hybrid_bridge_functional.yml"
