@@ -29,17 +29,17 @@ jobs:
         run: |
           set -e
           mkdir -p .github/autopatch scripts self_healing_out
-          [ -f .github/autopatch/patches.yml ] || cat > .github/autopatch/patches.yml <<'YML'
-version: 1
-patches: []
-YML
-          [ -f .github/autopatch/patches_deferred.yml ] || cat > .github/autopatch/patches_deferred.yml <<'YML'
-version: 1
-patches: []
-YML
+          if [ ! -f .github/autopatch/patches.yml ]; then
+            printf '%s\n' 'version: 1' 'patches: []' > .github/autopatch/patches.yml
+          fi
+          if [ ! -f .github/autopatch/patches_deferred.yml ]; then
+            printf '%s\n' 'version: 1' 'patches: []' > .github/autopatch/patches_deferred.yml
+          fi
 
-      - name: Make runner executable
-        run: chmod +x scripts/autopatch_runner.py
+      - name: Make runner executable (ignore if missing)
+        run: |
+          set -e
+          [ -f scripts/autopatch_runner.py ] && chmod +x scripts/autopatch_runner.py || true
 
       - name: Dry-run AutoPatch (preview only)
         env:
