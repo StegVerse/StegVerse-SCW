@@ -1,0 +1,126 @@
+# 🧠 Hybrid Collab Bridge (HCB)
+**StegVerse-SCW AutoPatch Integration Report**
+
+[![hybrid-bridge-ci](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/hybrid_bridge_ci.yml/badge.svg)](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/hybrid_bridge_ci.yml)
+
+---
+
+## 📘 Overview
+
+The **Hybrid Collab Bridge (HCB)** module is a self-contained **FastAPI microservice** that enables human–AI collaborative orchestration.  
+It was bootstrapped entirely through **AutoPatch automation**, validated via **GitHub Actions CI**, and now passes a `/health` smoke test in CI.
+
+This doc captures what was created, how it was validated, and how to consolidate/automate further.
+
+---
+
+## 🧩 1. Creation Phase — One-Shot AutoPatch Deployment
+
+**Goal:** Provision a complete `hybrid-collab-bridge/` subtree and verify structural/runtime integrity.
+
+**Artifacts created by patch:**
+
+| Component | Path | Purpose |
+|---|---|---|
+| API Service | `hybrid-collab-bridge/api/app/` | FastAPI endpoints: `/health`, `/v1/run`, `/v1/continue` |
+| Infra / Docker | `hybrid-collab-bridge/infra/docker-compose.yml` | Local & CI bootstrap |
+| Providers Registry | `hybrid-collab-bridge/providers.yaml` | Declares adapters (starts with `claude`) |
+| Env Template | `hybrid-collab-bridge/.env.example` | `ADMIN_TOKEN`, `ANTHROPIC_API_KEY`, etc. |
+| Project README | `hybrid-collab-bridge/README.md` | Quick start |
+| Proof markers | `.applied_hybrid-*` | Ensure idempotence |
+
+**Patch specs & manifest:**
+- `.github/autopatch/hybrid-bridge.patch.yml`
+- `.github/autopatch/patches.yml` (tracking)  
+- `.github/autopatch/patches_deferred.yml` (defer queue)
+
+---
+
+## ⚙️ 2. CI Phase — Root-Level Smoke Test
+
+**Workflow added:** `.github/workflows/hybrid_bridge_ci.yml`
+
+**What it does**
+1) Setup Python 3.11  
+2) Install deps from `hybrid-collab-bridge/api/requirements.txt`  
+3) Compile sources (`python -m compileall app`)  
+4) Boot API with `uvicorn`  
+5) `curl` `/health` and print JSON
+
+**Outcome**
+- Dependencies install ✅  
+- API boots ✅  
+- `/health` responds ✅  
+
+_Log excerpt_
+```
+Successfully installed fastapi==0.115.0 uvicorn==0.30.6 ...
+{"ok": true, "version": "0.1.0", "providers": ["claude"]}
+```
+
+---
+
+## 🧭 3. Providers Config Path Fix
+
+**Issue:** CI ran in `hybrid-collab-bridge/api`, but the app looked for
+`hybrid-collab-bridge/providers.yaml`, causing `FileNotFoundError`.
+
+**Fix:** In `hybrid-collab-bridge/api/app/main.py`:
+```python
+REG = ProviderRegistry(cfg_path="../providers.yaml")
+```
+
+**Alternative (not used):** Copy `providers.yaml` into the expected subpath in CI.
+
+---
+
+## 🔄 4. Consolidation Options
+
+| Current | Suggested | Why |
+|---|---|---|
+| `.github/workflows/hybrid_bridge_ci.yml` | `hcb-pipeline.yml` (smoke + functional) | One workflow to rule them all |
+| `hybrid-collab-bridge/providers.yaml` | `api/app/providers.yaml` | No relative path ambiguity |
+| `.applied_*` markers | `.github/autopatch/status/hcb/` | Centralized patch-state |
+| `README-HCB.md` | `docs/HCB_SETUP.md` | Standardize docs location once stable |
+
+**Automation Enhancements (future)**
+- Meta-patch: initialize bridge → run CI → attach artifacts → optional deploy
+- Re-enable `patches/manifest.json` for surgical file edits alongside scaffold patches
+- Trigger via `.github/trigger/autopatch/` file drop
+
+---
+
+## ✅ 5. Validation Summary
+
+| Phase | Description | Result |
+|---|---|---|
+| Bridge initialization | AutoPatch created subtree | ✅ |
+| Smoke CI | Boot + `/health` | ✅ |
+| Providers path fix | `../providers.yaml` | ✅ |
+| CI re-run | Green | ✅ |
+| Functional test (next) | Pending | ⏳ |
+
+---
+
+## 🧪 6. Next Step — Functional Test
+
+Planned patch `bridge-functional.patch.yml` will:
+- Boot API
+- Send mock `/v1/run` request (no external calls)
+- Validate response structure
+- Upload `bridge_run.json` as artifact
+
+---
+
+## ⚡ 7. Replay / Rebuild
+
+```bash
+# Re-apply scaffold (via One-Shot)
+gh workflow run One-Shot Patch Apply -f patch_path=.github/autopatch/hybrid-bridge.patch.yml
+
+# Run CI validation
+gh workflow run hybrid-bridge-ci
+```
+
+---
+_Doc generated for StegVerse-SCW on 2025-10-07._
