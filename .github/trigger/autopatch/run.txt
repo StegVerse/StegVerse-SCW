@@ -1,4 +1,4 @@
-path: .github/trigger/autopatch/run.txt
+path: .github/trigger/autopatch/**
 contents:
 rid: RID-2025-10-02-001
 task: STEG-200
