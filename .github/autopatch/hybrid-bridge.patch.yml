@@ -1,9 +1,9 @@
 version: 1
 actions:
   - write_files:
-      - path: "hybrid-collab-bridge/.applied_hybrid-collab-bridge-init-v4"
+      - path: "hybrid-collab-bridge/.applied_hybrid-collab-bridge-init-v5"
         mode: "100644"
-        contents: "applied by AutoPatch (primary)"  - write_files:
+        contents: "applied by AutoPatch"  - write_files:
       - path: "hybrid-collab-bridge/.gitignore"
         mode: "100644"
         contents: |
