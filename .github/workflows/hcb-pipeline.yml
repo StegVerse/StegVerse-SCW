@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
 
+# Global env (available to all jobs/steps)
 env:
   PYTHON_VERSION: "3.11"
   ADMIN_TOKEN: "test_token"
@@ -33,9 +34,6 @@ jobs:
         run: python -m compileall app
       - name: Boot API and hit /health
         working-directory: hybrid-collab-bridge/api
-        env:
-          # smoke test uses default providers.yaml resolution
-          HCB_PROVIDERS_PATH: ${{ env.HCB_PROVIDERS_PATH }}
         run: |
           set -e
           uvicorn app.main:app --host 127.0.0.1 --port 8080 &
@@ -57,9 +55,6 @@ jobs:
   functional:
     runs-on: ubuntu-latest
     needs: smoke
-    env:
-      ADMIN_TOKEN: ${{ env.ADMIN_TOKEN }}
-      HCB_PROVIDERS_PATH: ${{ env.HCB_PROVIDERS_PATH }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
