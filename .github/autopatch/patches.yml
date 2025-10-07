@@ -1,2 +1,8 @@
 version: 1
-patches: []
+patches:
+  - id: hybrid-collab-bridge-init-v1   # bumping id avoids caches
+    enabled: true
+    type: yaml
+    file: .github/autopatch/hybrid-bridge.patch.yml
+    apply_to_repo_root: true
+    mode: apply
