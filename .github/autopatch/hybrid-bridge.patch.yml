@@ -3,7 +3,7 @@ actions:
   - write_files:
       - path: "hybrid-collab-bridge/.applied_hybrid-collab-bridge-init-v6"
         mode: "100644"
-        contents: "applied by AutoPatch"  - write_files:
+        contents: "applied by AutoPatch"
       - path: "hybrid-collab-bridge/.gitignore"
         mode: "100644"
         contents: |
