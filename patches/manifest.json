@@ -2,9 +2,9 @@
   "version": 1,
   "patches": [
     {
-      "id": "smoke-test",
+      "id": "hybrid-collab-bridge-init",
       "type": "yaml",
-      "path": "patches/smoke-test.patch.yml",
+      "path": "patches/hybrid-bridge.patch.yml",
       "apply_to_repo_root": true
     }
   ]
