@@ -1,2 +1,12 @@
 version: 1
-patches: []
+patches:
+- id: remediate-autopatch-layout
+  type: yaml
+  file: .github/autopatch/remediate-autopatch-layout.patch.yml
+  apply_to_repo_root: true
+  enabled: true
+- id: hybrid-collab-bridge-init
+  type: yaml
+  file: .github/autopatch/hybrid-bridge.patch.yml
+  apply_to_repo_root: true
+  enabled: true
