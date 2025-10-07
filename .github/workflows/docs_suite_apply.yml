@@ -16,120 +16,42 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 1) Ensure docs/ exists
+          echo "📘 Ensuring docs directory exists..."
           mkdir -p docs
 
-          # 2) (Re)write docs/INDEX.md – idempotent
-          cat > docs/INDEX.md <<'MD'
-          # 🧭 StegVerse Documentation Index
-          _Last updated: 2025-10-07_
+          echo "🧭 Writing docs/INDEX.md..."
+          cat <<'EOF' > docs/INDEX.md
+# 🧭 StegVerse Documentation Index
+_Last updated: 2025-10-07_
 
-          This index keeps StegVerse project documentation, autopatch snapshots, and versioned `.md` records consistent and discoverable.
+This index keeps StegVerse project documentation, autopatch snapshots, and versioned `.md` records consistent and discoverable.
 
-          ---
-
-          ## 🧩 Core Repositories
-          | Module | Description | Primary Docs |
-          |---------|--------------|--------------|
-          | **StegVerse-SCW** | Secure Code Writer (core infra, deploy hooks, patch orchestration) | [README-SCW.md](../README-SCW.md) |
-          | **StegVerse-Site** | Public portal / user-facing app | _TBD_ |
-          | **StegTalk** | Secure sovereign messenger | _TBD_ |
-          | **Hybrid Collab Bridge (HCB)** | AI–AI + human collaboration bridge for cross-provider orchestration | [README-HCB.md](../README-HCB.md) |
-
-          ---
-
-          ## 🧱 Hybrid Collab Bridge (HCB)
-          | Version | Path | Type | Notes |
-          |----------|------|------|-------|
-          | **1.0.0** | [../README-HCB.md](../README-HCB.md) | Live / Public | Current working version; integrates CI functional test |
-          | **1.0.0-autopatch** | [../.github/autopatch/README-HCB.md](../.github/autopatch/README-HCB.md) | Internal Snapshot | AutoPatch reference baseline for version sync |
-          | **Archive** | [../.github/autopatch/archive/README-HCB-v0.9.3.md](../.github/autopatch/archive/README-HCB-v0.9.3.md) | Archived | Pre-CI bootstrap and one-shot apply notes |
-
-          #### Related Workflows
-          - [.github/workflows/hcb-pipeline.yml](../.github/workflows/hcb-pipeline.yml)
-          - [.github/workflows/AutoPatch.yml](../.github/workflows/AutoPatch.yml)
-
-          #### Related Autopatch Rules
-          - [.github/autopatch/patches.yml](../.github/autopatch/patches.yml)
-          - [.github/autopatch/hcb-version-sync.patch.yml](../.github/autopatch/hcb-version-sync.patch.yml)
-          - [.github/autopatch/hybrid-bridge.patch.yml](../.github/autopatch/hybrid-bridge.patch.yml)
-
-          #### Series Metadata
-          ```
-          doc_series: hybrid-collab-bridge
-          latest_version: 1.0.0
-          previous_versions: [0.9.3]
-          ```
-
-          ---
-
-          ## ⚙️ System Core Wrapper (SCW)
-          | Version | Path | Notes |
-          |----------|------|-------|
-          | — | [../README-SCW.md](../README-SCW.md) | Core API + Admin Token reset system |
-          | — | [../.github/workflows/AutoPatch.yml](../.github/workflows/AutoPatch.yml) | Handles autopatch triggers |
-
-          ---
-
-          ## 📜 Autopatch System Docs
-          | Document | Path | Purpose |
-          |-----------|------|----------|
-          | **AutoPatch Manifest** | [.github/autopatch/patches.yml](../.github/autopatch/patches.yml) | Tracks all active patch rules |
-          | **README (internal)** | [.github/autopatch/README-HCB.md](../.github/autopatch/README-HCB.md) | Autopatch internal reference for HCB |
-          | **Patch Templates** | [.github/autopatch/snippets/](../.github/autopatch/snippets/) | Base snippets and templates for new patch sets |
-
-          ---
-
-          ## 🧠 Documentation Series Map
-          | Series | Latest Doc | Autopatch Reference | Description |
-          |---------|-------------|---------------------|--------------|
-          | `hybrid-collab-bridge` | [README-HCB.md](../README-HCB.md) | [.github/autopatch/README-HCB.md](../.github/autopatch/README-HCB.md) | Collaboration bridge between AIs and humans |
-          | `system-core-wrapper` | [README-SCW.md](../README-SCW.md) | N/A | StegVerse secure admin orchestration layer |
-          | `autopatch-system` | [patches.yml](../.github/autopatch/patches.yml) | N/A | Automated patch version management |
-
-          ---
-
-          ## 🪜 Cross-References and Navigation
-          Add this footer to documentation pages to link back here:
-          ```
-          [⬆ Return to Documentation Index](docs/INDEX.md)
-          ```
-
-          ---
-
-          ## 🧰 Maintenance
-          This index is tracked by docs-suite apply workflow.
-          MD
-
-          # 3) Ensure README-HCB.md has the backlink footer (idempotent)
-          if ! grep -q 'Return to Documentation Index' README-HCB.md; then
-            printf '\n\n[⬆ Return to Documentation Index](docs/INDEX.md)\n' >> README-HCB.md
-          fi
-
-          # 4) Ensure a minimal version header exists (idempotent)
-          if ! grep -q '^---$' README-HCB.md || ! grep -q '^version:' README-HCB.md; then
-            tmp="$(mktemp)"
-            cat > "$tmp" <<'HDR'
 ---
-version: 1.0.0
-doc_series: hybrid-collab-bridge
-autopatch_ref: .github/autopatch/README-HCB.md
-updated: 2025-10-07
----
-HDR
-            cat README-HCB.md >> "$tmp"
-            mv "$tmp" README-HCB.md
-          fi
 
-      - name: Commit changes (if any)
-        run: |
-          set -e
-          git config user.name "docs-bot"
-          git config user.email "bot@stegverse.local"
-          git add README-HCB.md docs/INDEX.md || true
-          if git diff --cached --quiet; then
-            echo "No doc changes to commit."
-          else
-            git commit -m "docs: generate docs/INDEX.md and normalize README-HCB.md"
-            git push origin HEAD:main
-          fi
+## 🧩 Core Repositories
+| Module | Description | Primary Docs |
+|---------|--------------|--------------|
+| **StegVerse-SCW** | Secure Code Writer (core infra, deploy hooks, patch orchestration) | [README-SCW.md](../README-SCW.md) |
+| **StegVerse-Site** | Public portal / user-facing app | _TBD_ |
+| **StegTalk** | Secure sovereign messenger | _TBD_ |
+| **Hybrid Collab Bridge (HCB)** | AI–AI + human collaboration bridge for cross-provider orchestration | [README-HCB.md](../README-HCB.md) |
+
+---
+
+## 🧱 Hybrid Collab Bridge (HCB)
+| Version | Path | Type | Notes |
+|----------|------|------|-------|
+| **1.0.0** | [../README-HCB.md](../README-HCB.md) | Live / Public | Current working version; integrates CI functional test |
+| **1.0.0-autopatch** | [../.github/autopatch/README-HCB.md](../.github/autopatch/README-HCB.md) | Internal Snapshot | AutoPatch reference baseline for version sync |
+| **Archive** | [../.github/autopatch/archive/README-HCB-v0.9.3.md](../.github/autopatch/archive/README-HCB-v0.9.3.md) | Archived | Pre-CI bootstrap and one-shot apply notes |
+
+#### Related Workflows
+- [.github/workflows/hcb-pipeline.yml](../.github/workflows/hcb-pipeline.yml)
+- [.github/workflows/AutoPatch.yml](../.github/workflows/AutoPatch.yml)
+
+#### Related Autopatch Rules
+- [.github/autopatch/patches.yml](../.github/autopatch/patches.yml)
+- [.github/autopatch/hcb-version-sync.patch.yml](../.github/autopatch/hcb-version-sync.patch.yml)
+- [.github/autopatch/hybrid-bridge.patch.yml](../.github/autopatch/hybrid-bridge.patch.yml)
+
+#### Series Metadata
