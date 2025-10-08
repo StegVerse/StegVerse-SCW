@@ -1,0 +1,15 @@
+version: 1
+actions:
+  - run_shell:
+      name: Configure Git to use commit template
+      script: |
+        set -e
+        if [ -f templates/commit_template.txt ]; then
+          git config commit.template templates/commit_template.txt
+          echo "[AutoPatch] Commit template configured successfully."
+        else
+          echo "[AutoPatch] Warning: commit_template.txt not found — skipping configuration."
+        fi
+
+  - commit:
+      message: "chore(autopatch): auto-configure commit template for local environments"
