@@ -1,8 +1,2 @@
 version: 1
-patches:
-  - id: docs-suite
-    path: .github/autopatch/docs-suite.patch.yml
-  - id: commit-template
-    path: .github/autopatch/commit-template.patch.yml
-  - id: commit-template-config
-    path: .github/autopatch/commit-template-config.patch.yml
+patches: []
