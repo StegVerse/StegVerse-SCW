@@ -143,10 +143,27 @@ jobs:
               )
 
               subprocess.run(["git", "-C", str(repo_dir), "add", "-A"], check=True)
-              if subprocess.run(["git", "-C", str(repo_dir), "diff", "--cached", "--quiet"]).returncode != 0:
-                  subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "chore(templates): add universal commit template + autopatch config"], check=True)
-                  subprocess.run(["git", "-C", str(repo_dir), "push", "-u", "origin", pr_branch], check=True)
-                  open_pr(repo, pr_branch)
-              else:
-                  print(f"{repo}: no changes needed.")
+
+# Ensure Git user identity
+subprocess.run([
+    "git", "-C", str(repo_dir), "config", "user.email", "bot@stegverse.org"
+], check=True)
+subprocess.run([
+    "git", "-C", str(repo_dir), "config", "user.name", "StegVerse Bot"
+], check=True)
+
+# Commit and push if changes exist
+if subprocess.run(["git", "-C", str(repo_dir), "diff", "--cached", "--quiet"]).returncode != 0:
+    subprocess.run([
+        "git", "-C", str(repo_dir), "commit", "-m",
+        "chore(templates): add universal commit template + autopatch config"
+    ], check=True)
+    subprocess.run([
+        "git", "-C", str(repo_dir), "push", "-u", "origin", pr_branch
+    ], check=True)
+    open_pr(repo, pr_branch)
+else:
+    print(f"{repo}: no changes needed.")                  open_pr(repo, pr_branch)
+    else:
+        print(f"{repo}: no changes needed.")
           PY
