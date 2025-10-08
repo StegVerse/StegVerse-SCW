@@ -15,6 +15,67 @@ permissions:
   pull-requests: write
 
 env:
+  DEFAULT_REPOS_CSV: ""
+  PR_TITLE: "chore(templates): add universal commit template + autopatch config"
+  PR_BODY: |
+    This PR adds the standard StegVerse commit template and AutoPatch rules:
+    - `templates/commit_template.txt`
+    - `.github/autopatch/commit-template.patch.yml`
+    - `.github/autopatch/commit-template-config.patch.yml`
+
+    It also registers both in `.github/autopatch/patches.yml` (idempotent).
+    Safe to merge anytime; re-running will be a no-op if already applied.
+
+jobs:
+  propagate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.repos_csv }}" ]; then
+            echo "REPOS_CSV=${{ github.event.inputs.repos_csv }}" >> $GITHUB_ENV
+          elif [ -n "${DEFAULT_REPOS_CSV}" ]; then
+            echo "REPOS_CSV=${DEFAULT_REPOS_CSV}" >> $GITHUB_ENV
+          else
+            echo "No repos provided. Supply 'repos_csv' on dispatch."
+            exit 1
+          fi
+          BR="${{ github.event.inputs.pr_branch || 'chore/commit-template-propagation' }}"
+          echo "PR_BRANCH=$BR" >> $GITHUB_ENV
+
+      - name: Parse repos
+        id: split
+        run: |
+          python3 - <<'PY'
+          import os, json
+          csv = os.environ["REPOS_CSV"]
+          repos = [r.strip() for r in csv.split(",") if r.strip()]
+          print(f"::set-output name=repos::{json.dumps(repos)}")
+          PY
+
+      - name: Run propagation script
+        run: |
+          echo "Running commit template propagation..."
+          echo "${{ steps.split.outputs.repos }}" > repos.json
+          echo "Will create PRs for each listed repo."
+          # The actual implementation script will be inserted here in next stepname: propagate-commit-template
+on:
+  workflow_dispatch:
+    inputs:
+      repos_csv:
+        description: "Comma-separated list of org/repo (e.g. StegVerse/StegVerse-Site,StegVerse/Hybrid-Collab-Bridge)"
+        required: true
+      pr_branch:
+        description: "Branch name to use for PRs"
+        required: false
+        default: "chore/commit-template-propagation"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
   # Default list can be empty; override via dispatch input.
   DEFAULT_REPOS_CSV: ""
   PR_TITLE: "chore(templates): add universal commit template + autopatch config"
