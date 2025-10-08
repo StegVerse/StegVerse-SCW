@@ -1,80 +1,53 @@
 name: propagate-commit-template
+
 on:
   workflow_dispatch:
     inputs:
       repos_csv:
-        description: "Comma-separated list of org/repo (e.g. StegVerse/StegVerse-Site,StegVerse/Hybrid-Collab-Bridge)"
+        description: "Comma-separated list of repos (owner/repo,owner/repo)"
         required: true
       pr_branch:
-        description: "Branch name to use for PRs"
+        description: "Branch name to push"
         required: false
         default: "chore/commit-template-propagation"
 
 permissions:
-  contents: write
-  pull-requests: write
-
-env:
-  DEFAULT_REPOS_CSV: ""
-  PR_TITLE: "chore(templates): add universal commit template + autopatch config"
-  PR_BODY: |
-    This PR adds the standard StegVerse commit template and AutoPatch rules:
-    - `templates/commit_template.txt`
-    - `.github/autopatch/commit-template.patch.yml`
-    - `.github/autopatch/commit-template-config.patch.yml`
-
-    It also registers both in `.github/autopatch/patches.yml` (idempotent).
-    Safe to merge anytime; re-running will be a no-op if already applied.
+  contents: write   # needed to push branches
 
 jobs:
   propagate:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate inputs
-        run: |
-          set -euo pipefail
-          if [ -n "${{ github.event.inputs.repos_csv }}" ]; then
-            echo "REPOS_CSV=${{ github.event.inputs.repos_csv }}" >> $GITHUB_ENV
-          elif [ -n "${DEFAULT_REPOS_CSV}" ]; then
-            echo "REPOS_CSV=${DEFAULT_REPOS_CSV}" >> $GITHUB_ENV
-          else
-            echo "No repos provided. Supply 'repos_csv' on dispatch."
-            exit 1
-          fi
-          BR="${{ github.event.inputs.pr_branch || 'chore/commit-template-propagation' }}"
-          echo "PR_BRANCH=$BR" >> $GITHUB_ENV
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Parse repos
-        id: split
-        run: |
-          python3 - <<'PY'
-          import os, json
-          csv = os.environ["REPOS_CSV"]
-          repos = [r.strip() for r in csv.split(",") if r.strip()]
-          print(f"::set-output name=repos::{json.dumps(repos)}")
-          PY
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-            - name: Run propagation script
+      # (No set-output. We pass inputs to the script via env.)
+      - name: Run propagation script
+        env:
+          STEGVERSE_BOT_TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+          REPOS_CSV_INPUT: ${{ inputs.repos_csv }}
+          PR_BRANCH: ${{ inputs.pr_branch }}
         run: |
-          echo "Running commit template propagation..."
-          echo "${{ steps.split.outputs.repos }}" > repos.json
-          python3 - <<'PY'
-          import os, json, subprocess, pathlib, sys, textwrap, requests
+          python - <<'PY'
+          import os, json, subprocess, pathlib, sys, textwrap, urllib.request, urllib.error
 
           token = os.getenv("STEGVERSE_BOT_TOKEN")
           if not token:
               print("❌ Missing secret: STEGVERSE_BOT_TOKEN", file=sys.stderr)
               sys.exit(1)
 
-          repos = json.loads(os.getenv("REPOS_CSV", "[]"))
+          csv = (os.getenv("REPOS_CSV_INPUT") or "").strip()
+          repos = [r.strip() for r in csv.split(",") if r.strip()]
           if not repos:
-              with open("repos.json") as f:
-                  repos = json.load(f)
-          if not repos:
-              print("❌ No repos provided.")
+              print("❌ No repos provided.", file=sys.stderr)
               sys.exit(1)
 
-          pr_branch = os.getenv("PR_BRANCH", "chore/commit-template-propagation")
+          pr_branch = os.getenv("PR_BRANCH") or "chore/commit-template-propagation"
 
           commit_template = textwrap.dedent("""\
           # 🧭 StegVerse Commit Template (v1.0)
@@ -86,7 +59,7 @@ jobs:
           #
           # Footer (optional): references, automation tags, etc.
           # Refs: #42
-          # Signed-off-by: Rigel Randolph <rigel@stegverse.org>
+          # Signed-off-by: Name <email@example.com>
           """)
 
           patch_commit = f'''version: 1
@@ -116,13 +89,30 @@ actions:
       message: "chore(autopatch): auto-configure commit template"
 """
 
+          def open_pr(repo, branch):
+              data = json.dumps({
+                  "title": "chore(templates): add universal commit template + autopatch config",
+                  "head": branch,
+                  "base": "main",
+                  "body": "Adds a universal commit template and autopatch config for consistent message conventions."
+              }).encode()
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/pulls", data=data, method="POST")
+              req.add_header("Authorization", f"token {token}")
+              req.add_header("Accept", "application/vnd.github+json")
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      j = json.loads(resp.read())
+                      print(f"✅ PR opened for {repo}: {j.get('html_url')}")
+              except urllib.error.HTTPError as e:
+                  print(f"⚠️  PR failed for {repo}: {e.code} {e.read().decode()}", file=sys.stderr)
+
           for repo in repos:
               print(f"\n=== Processing {repo} ===")
               repo_dir = pathlib.Path(repo.replace("/", "__"))
               subprocess.run(["git", "clone", f"https://x-access-token:{token}@github.com/{repo}.git", str(repo_dir)], check=True)
-              os.chdir(repo_dir)
+              subprocess.run(["git", "-C", str(repo_dir), "checkout", "-b", pr_branch], check=True)
 
-              ap_dir = pathlib.Path(".github/autopatch")
+              ap_dir = repo_dir / ".github" / "autopatch"
               ap_dir.mkdir(parents=True, exist_ok=True)
 
               (ap_dir / "commit-template.patch.yml").write_text(patch_commit, encoding="utf-8")
@@ -132,36 +122,17 @@ actions:
               if not patches_file.exists():
                   patches_file.write_text("version: 1\npatches: []\n", encoding="utf-8")
               txt = patches_file.read_text(encoding="utf-8")
-              if "commit-template" not in txt:
+              if "commit-template.patch.yml" not in txt:
                   txt += "\n  - id: commit-template\n    path: .github/autopatch/commit-template.patch.yml"
-              if "commit-template-config" not in txt:
+              if "commit-template-config.patch.yml" not in txt:
                   txt += "\n  - id: commit-template-config\n    path: .github/autopatch/commit-template-config.patch.yml"
               patches_file.write_text(txt, encoding="utf-8")
 
-              subprocess.run(["git", "checkout", "-b", pr_branch], check=True)
-              subprocess.run(["git", "add", "-A"], check=True)
-              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
-                  subprocess.run(["git", "commit", "-m", "chore(templates): add universal commit template + autopatch config"], check=True)
-                  subprocess.run(["git", "push", "-u", "origin", pr_branch], check=True)
-
-                  headers = {
-                      "Authorization": f"token {token}",
-                      "Accept": "application/vnd.github+json"
-                  }
-                  pr_data = {
-                      "title": "chore(templates): add universal commit template + autopatch config",
-                      "head": pr_branch,
-                      "base": "main",
-                      "body": "Adds a universal commit template and autopatch config for consistent message conventions."
-                  }
-                  r = requests.post(f"https://api.github.com/repos/{repo}/pulls", headers=headers, json=pr_data)
-                  if r.status_code not in (200, 201):
-                      print(f"⚠️  PR failed for {repo}: {r.status_code} {r.text}")
-                  else:
-                      print(f"✅ PR opened for {repo}: {r.json().get('html_url')}")
+              subprocess.run(["git", "-C", str(repo_dir), "add", "-A"], check=True)
+              if subprocess.run(["git", "-C", str(repo_dir), "diff", "--cached", "--quiet"]).returncode != 0:
+                  subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "chore(templates): add universal commit template + autopatch config"], check=True)
+                  subprocess.run(["git", "-C", str(repo_dir), "push", "-u", "origin", pr_branch], check=True)
+                  open_pr(repo, pr_branch)
               else:
                   print(f"⏭  {repo}: no changes needed.")
-              os.chdir("..")
           PY
-        env:
-          STEGVERSE_BOT_TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
