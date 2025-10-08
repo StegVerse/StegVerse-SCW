@@ -1,5 +1,4 @@
 name: propagate-commit-template
-
 on:
   workflow_dispatch:
     inputs:
