@@ -4,31 +4,14 @@ actions:
       - path: "templates/commit_template.txt"
         mode: "100644"
         contents: |
-          # 🧭 StegVerse Commit Template (v1.0)
-          # Fill in each section below before committing.
-          # Lines starting with # will be ignored automatically.
+          <type>(<scope>): <summary>
+          # feat(api): add provider registry for hybrid bridge
 
-          <type>(<scope>): <short summary>
-          # Example: feat(api): add provider registry for hybrid bridge
-          # ------------------------------------------------------------
-          # Valid types:
-          # feat, fix, docs, chore, refactor, perf, test, ci, style, revert
-          # ------------------------------------------------------------
-          # Common scopes:
-          # api, bridge, autopatch, workflows, docs, core, tests
-          # ------------------------------------------------------------
+          # Body (optional): details on what changed and why
 
-          # 🧱 Optional Body (describe what changed and why)
-          # Example:
-          # - Added new Anthropic adapter to registry
-          # - Introduced strategy orchestration for Claude
-          # - Next: add image and audio adapters
-
-          # 🏁 Optional Footer (references, metadata, or automation tags)
-          # Example:
+          # Footer (optional): references, automation tags, etc.
           # Refs: #42
-          # Signed-off-by: Rigel Randolph <rigel@stegverse.org>
-          # AutoPatch-ID: hybrid-collab-bridge-init-v7
-
+          # Signed-off-by: Name <email@example.com>
+          # Version: v1.0
   - commit:
-      message: "chore(templates): add universal commit message template (autopatch)"
+      message: "chore(templates): add universal commit template v1.0 (autopatch)"
