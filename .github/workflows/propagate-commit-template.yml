@@ -10,7 +10,7 @@ on:
         description: "Branch name to push"
         required: false
         default: "chore/commit-template-propagation"
-
+        
 permissions:
   contents: write   # needed to push branches
 
