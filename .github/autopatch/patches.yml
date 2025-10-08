@@ -4,6 +4,6 @@ patches:
     path: .github/autopatch/docs-suite.patch.yml
   - id: commit-template
     path: .github/autopatch/commit-template.patch.yml
-      - id: commit-template
+  - id: commit-template
     path: .github/autopatch/commit-template.patch.yml
     
