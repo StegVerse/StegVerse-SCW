@@ -6,10 +6,9 @@ actions:
         set -e
         if [ -f templates/commit_template.txt ]; then
           git config commit.template templates/commit_template.txt
-          echo "[AutoPatch] Commit template configured successfully."
+          echo "[AutoPatch] Commit template configured successfully (v1.0)."
         else
-          echo "[AutoPatch] Warning: commit_template.txt not found — skipping configuration."
+          echo "[AutoPatch] Warning: commit_template.txt not found — skipping."
         fi
-
   - commit:
-      message: "chore(autopatch): auto-configure commit template for local environments"
+      message: "chore(autopatch): auto-configure commit template v1.0"
