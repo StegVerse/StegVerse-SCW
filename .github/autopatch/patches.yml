@@ -1,5 +1,5 @@
 version: 1
-patches: []
+patches:
   - id: commit-template
     path: .github/autopatch/commit-template.patch.yml
   - id: commit-template-config
