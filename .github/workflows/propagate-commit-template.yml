@@ -54,9 +54,114 @@ jobs:
           print(f"::set-output name=repos::{json.dumps(repos)}")
           PY
 
-      - name: Run propagation script
+            - name: Run propagation script
         run: |
           echo "Running commit template propagation..."
           echo "${{ steps.split.outputs.repos }}" > repos.json
-          echo "Will create PRs for each listed repo."
-          # The actual implementation script will be inserted here in next step
+          python3 - <<'PY'
+          import os, json, subprocess, pathlib, sys, textwrap, requests
+
+          token = os.getenv("STEGVERSE_BOT_TOKEN")
+          if not token:
+              print("❌ Missing secret: STEGVERSE_BOT_TOKEN", file=sys.stderr)
+              sys.exit(1)
+
+          repos = json.loads(os.getenv("REPOS_CSV", "[]"))
+          if not repos:
+              with open("repos.json") as f:
+                  repos = json.load(f)
+          if not repos:
+              print("❌ No repos provided.")
+              sys.exit(1)
+
+          pr_branch = os.getenv("PR_BRANCH", "chore/commit-template-propagation")
+
+          commit_template = textwrap.dedent("""\
+          # 🧭 StegVerse Commit Template (v1.0)
+          # Lines starting with # are ignored.
+          <type>(<scope>): <summary>
+          # feat(api): add provider registry for hybrid bridge
+          #
+          # Body (optional): details on what changed and why
+          #
+          # Footer (optional): references, automation tags, etc.
+          # Refs: #42
+          # Signed-off-by: Rigel Randolph <rigel@stegverse.org>
+          """)
+
+          patch_commit = f'''version: 1
+actions:
+  - write_files:
+      - path: "templates/commit_template.txt"
+        mode: "100644"
+        contents: |
+{textwrap.indent(commit_template, "          ")}
+  - commit:
+      message: "chore(templates): add universal commit message template (autopatch)"
+'''
+
+          patch_config = """version: 1
+actions:
+  - run_shell:
+      name: Configure Git to use commit template
+      script: |
+        set -e
+        if [ -f templates/commit_template.txt ]; then
+          git config commit.template templates/commit_template.txt
+          echo "[AutoPatch] Commit template configured successfully."
+        else
+          echo "[AutoPatch] Warning: commit_template.txt not found — skipping."
+        fi
+  - commit:
+      message: "chore(autopatch): auto-configure commit template"
+"""
+
+          for repo in repos:
+              print(f"\n=== Processing {repo} ===")
+              repo_dir = pathlib.Path(repo.replace("/", "__"))
+              subprocess.run(["git", "clone", f"https://x-access-token:{token}@github.com/{repo}.git", str(repo_dir)], check=True)
+              os.chdir(repo_dir)
+
+              ap_dir = pathlib.Path(".github/autopatch")
+              ap_dir.mkdir(parents=True, exist_ok=True)
+
+              (ap_dir / "commit-template.patch.yml").write_text(patch_commit, encoding="utf-8")
+              (ap_dir / "commit-template-config.patch.yml").write_text(patch_config, encoding="utf-8")
+
+              patches_file = ap_dir / "patches.yml"
+              if not patches_file.exists():
+                  patches_file.write_text("version: 1\npatches: []\n", encoding="utf-8")
+              txt = patches_file.read_text(encoding="utf-8")
+              if "commit-template" not in txt:
+                  txt += "\n  - id: commit-template\n    path: .github/autopatch/commit-template.patch.yml"
+              if "commit-template-config" not in txt:
+                  txt += "\n  - id: commit-template-config\n    path: .github/autopatch/commit-template-config.patch.yml"
+              patches_file.write_text(txt, encoding="utf-8")
+
+              subprocess.run(["git", "checkout", "-b", pr_branch], check=True)
+              subprocess.run(["git", "add", "-A"], check=True)
+              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+                  subprocess.run(["git", "commit", "-m", "chore(templates): add universal commit template + autopatch config"], check=True)
+                  subprocess.run(["git", "push", "-u", "origin", pr_branch], check=True)
+
+                  headers = {
+                      "Authorization": f"token {token}",
+                      "Accept": "application/vnd.github+json"
+                  }
+                  pr_data = {
+                      "title": "chore(templates): add universal commit template + autopatch config",
+                      "head": pr_branch,
+                      "base": "main",
+                      "body": "Adds a universal commit template and autopatch config for consistent message conventions."
+                  }
+                  r = requests.post(f"https://api.github.com/repos/{repo}/pulls", headers=headers, json=pr_data)
+                  if r.status_code not in (200, 201):
+                      print(f"⚠️  PR failed for {repo}: {r.status_code} {r.text}")
+                  else:
+                      print(f"✅ PR opened for {repo}: {r.json().get('html_url')}")
+              else:
+                  print(f"⏭  {repo}: no changes needed.")
+              os.chdir("..")
+          PY
+        env:
+          STEGVERSE_BOT_TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
