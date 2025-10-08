@@ -12,6 +12,171 @@ on:
         default: "chore/commit-template-propagation"
 
 permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  propagate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run propagation script
+        env:
+          STEGVERSE_BOT_TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+          REPOS_CSV_INPUT: ${{ inputs.repos_csv }}
+          PR_BRANCH: ${{ inputs.pr_branch }}
+        run: |
+          python - <<'PY'
+          import os, json, subprocess, pathlib, sys, textwrap, urllib.request, urllib.error, re
+
+          token = os.getenv("STEGVERSE_BOT_TOKEN")
+          if not token:
+              print("❌ Missing secret: STEGVERSE_BOT_TOKEN", file=sys.stderr)
+              sys.exit(1)
+
+          csv = (os.getenv("REPOS_CSV_INPUT") or "").strip()
+          repos = [r.strip() for r in csv.split(",") if r.strip()]
+          if not repos:
+              print("❌ No repos provided.", file=sys.stderr)
+              sys.exit(1)
+
+          pr_branch = os.getenv("PR_BRANCH") or "chore/commit-template-propagation"
+
+          commit_template = textwrap.dedent("""\
+          # 🧭 StegVerse Commit Template (v1.0)
+          # Lines starting with # are ignored.
+          <type>(<scope>): <summary>
+          # feat(api): add provider registry for hybrid bridge
+          #
+          # Body (optional): details on what changed and why
+          #
+          # Footer (optional): references, automation tags, etc.
+          # Refs: #42
+          # Signed-off-by: Name <email@example.com>
+          """)
+
+          patch_commit = f'''version: 1
+actions:
+  - write_files:
+      - path: "templates/commit_template.txt"
+        mode: "100644"
+        contents: |
+{textwrap.indent(commit_template, "          ")}
+  - commit:
+      message: "chore(templates): add universal commit message template (autopatch)"
+'''
+
+          patch_config = """version: 1
+actions:
+  - run_shell:
+      name: Configure Git to use commit template
+      script: |
+        set -e
+        if [ -f templates/commit_template.txt ]; then
+          git config commit.template templates/commit_template.txt
+          echo "[AutoPatch] Commit template configured successfully."
+        else:
+          echo "[AutoPatch] Warning: commit_template.txt not found — skipping."
+        fi
+  - commit:
+      message: "chore(autopatch): auto-configure commit template"
+"""
+
+          def open_pr(repo, branch):
+              data = json.dumps({
+                  "title": "chore(templates): add universal commit template + autopatch config",
+                  "head": branch,
+                  "base": "main",
+                  "body": "Adds a universal commit template and autopatch config for consistent message conventions."
+              }).encode()
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/pulls", data=data, method="POST")
+              req.add_header("Authorization", f"token {token}")
+              req.add_header("Accept", "application/vnd.github+json")
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      j = json.loads(resp.read())
+                      print(f"✅ PR opened for {repo}: {j.get('html_url')}")
+              except urllib.error.HTTPError as e:
+                  print(f"⚠️  PR failed for {repo}: {e.code} {e.read().decode()}", file=sys.stderr)
+
+          def ensure_patches_yaml_has(entries, patches_file: pathlib.Path):
+              """
+              Keep existing patches, fix common bad shape:
+              - 'patches: []'  ➜  'patches:' then append
+              - missing 'patches:' ➜ create minimal header
+              Avoid duplicates.
+              """
+              if not patches_file.exists():
+                  txt = "version: 1\npatches:\n"
+              else:
+                  txt = patches_file.read_text(encoding="utf-8")
+                  if "patches:" not in txt:
+                      # keep version line if present, otherwise add one
+                      m = re.search(r"^version:\s*\d+\s*$", txt, re.M)
+                      header = m.group(0) + "\n" if m else "version: 1\n"
+                      txt = header + "patches:\n"
+                  # normalize the empty-list anti-pattern
+                  txt = txt.replace("patches: []", "patches:")
+
+              # append any missing entries
+              for _id, _path in entries:
+                  needle = f"path: {_path}"
+                  if needle not in txt:
+                      if not txt.endswith("\n"):
+                          txt += "\n"
+                      txt += f"  - id: {_id}\n    path: {_path}\n"
+
+              patches_file.write_text(txt, encoding="utf-8")
+
+          for repo in repos:
+              print(f"\n=== Processing {repo} ===")
+              repo_dir = pathlib.Path(repo.replace("/", "__"))
+              subprocess.run(["git", "clone", f"https://x-access-token:{token}@github.com/{repo}.git", str(repo_dir)], check=True)
+              subprocess.run(["git", "-C", str(repo_dir), "checkout", "-b", pr_branch], check=True)
+
+              ap_dir = repo_dir / ".github" / "autopatch"
+              ap_dir.mkdir(parents=True, exist_ok=True)
+
+              (ap_dir / "commit-template.patch.yml").write_text(patch_commit, encoding="utf-8")
+              (ap_dir / "commit-template-config.patch.yml").write_text(patch_config, encoding="utf-8")
+
+              patches_file = ap_dir / "patches.yml"
+              ensure_patches_yaml_has(
+                  [
+                      ("commit-template", ".github/autopatch/commit-template.patch.yml"),
+                      ("commit-template-config", ".github/autopatch/commit-template-config.patch.yml"),
+                  ],
+                  patches_file,
+              )
+
+              subprocess.run(["git", "-C", str(repo_dir), "add", "-A"], check=True)
+              if subprocess.run(["git", "-C", str(repo_dir), "diff", "--cached", "--quiet"]).returncode != 0:
+                  subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "chore(templates): add universal commit template + autopatch config"], check=True)
+                  subprocess.run(["git", "-C", str(repo_dir), "push", "-u", "origin", pr_branch], check=True)
+                  open_pr(repo, pr_branch)
+              else:
+                  print(f"⏭  {repo}: no changes needed.")
+          PYname: propagate-commit-template
+
+on:
+  workflow_dispatch:
+    inputs:
+      repos_csv:
+        description: "Comma-separated list of repos (owner/repo,owner/repo)"
+        required: true
+      pr_branch:
+        description: "Branch name to push"
+        required: false
+        default: "chore/commit-template-propagation"
+
+permissions:
   contents: write   # needed to push branches
 
 jobs:
