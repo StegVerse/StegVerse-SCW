@@ -6,12 +6,12 @@ actions:
         contents: |
           <type>(<scope>): <summary>
           # feat(api): add provider registry for hybrid bridge
-
-          # Body (optional): details on what changed and why
-
-          # Footer (optional): references, automation tags, etc.
+          #
+          # Body (optional): what/why, key details, risks, follow-ups
+          #
+          # Footer (optional): references, automation tags, metadata
           # Refs: #42
           # Signed-off-by: Name <email@example.com>
-          # Version: v1.0
+          # Version: v1.1
   - commit:
-      message: "chore(templates): add universal commit template v1.0 (autopatch)"
+      message: "chore(templates): add/refresh universal commit template v1.1 (autopatch)" DM
