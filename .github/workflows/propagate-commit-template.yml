@@ -18,14 +18,16 @@ on:
 permissions:
   contents: write
 
-# Prevent overlapping runs with the same inputs
 concurrency:
-  group: propagate-commit-template-${{ github.ref }}-${{ github.event.inputs.pr_branch || 'auto' }}
+  group: propagate-commit-template
   cancel-in-progress: false
 
 jobs:
   propagate:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,7 +45,7 @@ jobs:
           TEMPLATE_VERSION: ${{ inputs.template_version }}
         run: |
           python - <<'PY'
-          import os, json, subprocess, pathlib, sys, textwrap, time, urllib.request, urllib.error
+          import os, json, subprocess, pathlib, sys, textwrap, urllib.request, urllib.error
 
           token = os.getenv("STEGVERSE_BOT_TOKEN")
           if not token:
@@ -122,14 +124,12 @@ actions:
               print(f"\n=== Processing {repo} ===")
               repo_dir = pathlib.Path(repo.replace("/", "__"))
               subprocess.run(["git", "clone", f"https://x-access-token:{token}@github.com/{repo}.git", str(repo_dir)], check=True)
-              # Create or switch to branch
               subprocess.run(["git", "-C", str(repo_dir), "checkout", "-B", pr_branch], check=True)
 
-              # Ensure bot identity so commits succeed in CI
+              # Configure bot identity
               subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "StegVerse Bot"], check=True)
               subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "bot@stegverse.org"], check=True)
 
-              # Write autopatch files
               ap_dir = repo_dir / ".github" / "autopatch"
               ap_dir.mkdir(parents=True, exist_ok=True)
 
@@ -146,7 +146,6 @@ actions:
                   txt += "\n  - id: commit-template-config\n    path: .github/autopatch/commit-template-config.patch.yml"
               patches_file.write_text(txt, encoding="utf-8")
 
-              # Stage & commit if there are changes
               subprocess.run(["git", "-C", str(repo_dir), "add", "-A"], check=True)
               has_changes = subprocess.run(["git", "-C", str(repo_dir), "diff", "--cached", "--quiet"]).returncode != 0
               if not has_changes:
@@ -158,18 +157,15 @@ actions:
                   "-m", f"chore(templates): add universal commit template {version} + autopatch config"
               ], check=True)
 
-              # Try a normal push; if rejected, rebase on remote and retry (no force push)
               try:
                   subprocess.run(["git", "-C", str(repo_dir), "push", "-u", "origin", pr_branch], check=True)
               except subprocess.CalledProcessError:
                   print(f"⚠️  Push rejected for {repo} — attempting rebase")
-                  # If remote branch exists, rebase onto it then push
                   subprocess.run(["git", "-C", str(repo_dir), "fetch", "origin", pr_branch], check=True)
-                  # Rebase only if the remote branch actually fetched
                   subprocess.run(["git", "-C", str(repo_dir), "rebase", f"origin/{pr_branch}"], check=True)
                   subprocess.run(["git", "-C", str(repo_dir), "push", "-u", "origin", pr_branch], check=True)
 
               open_pr(repo, pr_branch)
 
-          print("\n✅ Propagation finished.")
+          print("\n✅ Propagation finished successfully.")
           PY
