@@ -1,0 +1,190 @@
+name: propagate-commit-template
+on:
+  workflow_dispatch:
+    inputs:
+      repos_csv:
+        description: "Comma-separated list of org/repo (e.g. StegVerse/StegVerse-Site,StegVerse/Hybrid-Collab-Bridge)"
+        required: true
+      pr_branch:
+        description: "Branch name to use for PRs"
+        required: false
+        default: "chore/commit-template-propagation"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # Default list can be empty; override via dispatch input.
+  DEFAULT_REPOS_CSV: ""
+  PR_TITLE: "chore(templates): add universal commit template + autopatch config"
+  PR_BODY: |
+    This PR adds the standard StegVerse commit template and AutoPatch rules:
+    - `templates/commit_template.txt`
+    - `.github/autopatch/commit-template.patch.yml`
+    - `.github/autopatch/commit-template-config.patch.yml`
+
+    It also registers both in `.github/autopatch/patches.yml` (idempotent).
+    Safe to merge anytime; re-running will be a no-op if already applied.
+
+jobs:
+  propagate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.repos_csv }}" ]; then
+            echo "REPOS_CSV=${{ github.event.inputs.repos_csv }}" >> $GITHUB_ENV
+          elif [ -n "${DEFAULT_REPOS_CSV}" ]; then
+            echo "REPOS_CSV=${DEFAULT_REPOS_CSV}" >> $GITHUB_ENV
+          else
+            echo "No repos provided. Supply 'repos_csv' on dispatch."
+            exit 1
+          fi
+          BR="${{ github.event.inputs.pr_branch || 'chore/commit-template-propagation' }}"
+          echo "PR_BRANCH=$BR" >> $GITHUB_ENV
+
+      - name: Parse repos and run matrix
+        id: split
+        run: |
+          python3 - <<'PY'
+          import os, json
+          csv = os.environ["REPOS_CSV"]
+          repos = [r.strip() for r in csv.split(",") if r.strip()]
+          print("::set-output name=repos::" + json.dumps(repos))
+          PY
+
+      - name: Run per-repo
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 2
+          command: |
+            bash -euo pipefail -c '
+            REPOS_JSON="${{ steps.split.outputs.repos }}"
+            python3 - <<PY
+            import os, json, subprocess, textwrap, pathlib, sys
+
+            token = os.environ.get("STEGVERSE_BOT_TOKEN")
+            if not token:
+              print("Missing required secret: STEGVERSE_BOT_TOKEN", file=sys.stderr)
+              sys.exit(1)
+
+            repos = json.loads(os.environ["REPOS_JSON"])
+            pr_branch = os.environ["PR_BRANCH"]
+
+            commit_template = """# 🧭 StegVerse Commit Template (v1.0)
+# Fill in each section below before committing.
+# Lines starting with # will be ignored automatically.
+
+<type>(<scope>): <short summary>
+# Example: feat(api): add provider registry for hybrid bridge
+# ------------------------------------------------------------
+# Valid types:
+# feat, fix, docs, chore, refactor, perf, test, ci, style, revert
+# ------------------------------------------------------------
+# Common scopes:
+# api, bridge, autopatch, workflows, docs, core, tests
+# ------------------------------------------------------------
+
+# 🧱 Optional Body (describe what changed and why)
+# Example:
+# - Added new Anthropic adapter to registry
+# - Introduced strategy orchestration for Claude
+# - Next: add image and audio adapters
+
+# 🏁 Optional Footer (references, metadata, or automation tags)
+# Example:
+# Refs: #42
+# Signed-off-by: Rigel Randolph <rigel@stegverse.org>
+# AutoPatch-ID: hybrid-collab-bridge-init-v7
+"""
+
+            patch_commit = """version: 1
+actions:
+  - write_files:
+      - path: "templates/commit_template.txt"
+        mode: "100644"
+        contents: |
+{body}
+  - commit:
+      message: "chore(templates): add universal commit message template (autopatch)"
+""".format(body="".join(["          "+line for line in commit_template.splitlines(True)]))
+
+            patch_config = """version: 1
+actions:
+  - run_shell:
+      name: Configure Git to use commit template
+      script: |
+        set -e
+        if [ -f templates/commit_template.txt ]; then
+          git config commit.template templates/commit_template.txt
+          echo "[AutoPatch] Commit template configured successfully."
+        else
+          echo "[AutoPatch] Warning: commit_template.txt not found — skipping configuration."
+        fi
+
+  - commit:
+      message: "chore(autopatch): auto-configure commit template for local environments"
+"""
+
+            for repo in repos:
+              workdir = pathlib.Path.cwd()/repo.replace("/", "__")
+              subprocess.run(["git","clone","https://x-access-token:%s@github.com/%s.git"%(token, repo), str(workdir)], check=True)
+              os.chdir(workdir)
+
+              # Create/append files idempotently
+              pathlib.Path(".github/autopatch").mkdir(parents=True, exist_ok=True)
+              (pathlib.Path(".github/autopatch")/"commit-template.patch.yml").write_text(patch_commit, encoding="utf-8")
+              (pathlib.Path(".github/autopatch")/"commit-template-config.patch.yml").write_text(patch_config, encoding="utf-8")
+
+              # Update patches.yml
+              pyml = pathlib.Path(".github/autopatch/patches.yml")
+              if not pyml.exists():
+                pyml.write_text("version: 1\npatches: []\n", encoding="utf-8")
+
+              # Append entries if missing
+              txt = pyml.read_text(encoding="utf-8")
+              if "id: commit-template\n" not in txt:
+                txt = txt.replace("patches: []", "patches:\n  - id: commit-template\n    path: .github/autopatch/commit-template.patch.yml")
+                if "patches:" in txt and "id: commit-template" not in txt:
+                  txt = txt.replace("patches:\n", "patches:\n  - id: commit-template\n    path: .github/autopatch/commit-template.patch.yml\n", 1)
+              if "id: commit-template-config\n" not in txt:
+                if "patches:" in txt:
+                  txt = txt.replace("patches:\n", "patches:\n  - id: commit-template-config\n    path: .github/autopatch/commit-template-config.patch.yml\n", 1)
+                else:
+                  txt += "\npatches:\n  - id: commit-template-config\n    path: .github/autopatch/commit-template-config.patch.yml\n"
+              pyml.write_text(txt, encoding="utf-8")
+
+              # Create branch, commit, push, open PR
+              subprocess.run(["git","checkout","-b", pr_branch], check=True)
+              subprocess.run(["git","add","-A"], check=True)
+              # Only commit if changes exist
+              if subprocess.run(["git","diff","--cached","--quiet"]).returncode != 0:
+                subprocess.run(["git","commit","-m", "chore(templates): add universal commit template + autopatch config"], check=True)
+                subprocess.run(["git","push","-u","origin", pr_branch], check=True)
+
+                # Create PR via API
+                import requests, json
+                api = f"https://api.github.com/repos/{repo}/pulls"
+                headers = {"Authorization": f"token {token}", "Accept":"application/vnd.github+json"}
+                data = {
+                  "title": "chore(templates): add universal commit template + autopatch config",
+                  "head": pr_branch,
+                  "base": "main",
+                  "body": os.environ.get("PR_BODY","")
+                }
+                r = requests.post(api, headers=headers, data=json.dumps(data))
+                if r.status_code not in (200,201):
+                  print(f"[WARN] PR create returned {r.status_code} for {repo}: {r.text}")
+                else:
+                  print(f"[OK] PR opened for {repo}: {r.json().get('html_url')}")
+              else:
+                print(f"[NOOP] {repo}: no changes needed.")
+              os.chdir("..")
+            PY
+        env:
+          REPOS_JSON: ${{ steps.split.outputs.repos }}
+          PR_BRANCH: ${{ env.PR_BRANCH }}
+          STEGVERSE_BOT_TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
