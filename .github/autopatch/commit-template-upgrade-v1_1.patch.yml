@@ -1,0 +1,36 @@
+version: 1
+actions:
+  - run_shell:
+      name: Upgrade commit template & patches to v1.1
+      script: |
+        set -euo pipefail
+
+        # Ensure template exists; if not, we create the directory (write_files will still run later)
+        mkdir -p templates
+
+        # --- 1) Upgrade an existing template file in the repo (if present) ---
+        if [ -f templates/commit_template.txt ]; then
+          # Bump embedded version tag (or add if missing)
+          if grep -qE '^# Version:' templates/commit_template.txt; then
+            sed -i 's/^# Version: v[0-9]\+\.[0-9]\+/# Version: v1.1/' templates/commit_template.txt
+          else
+            printf "\n# Version: v1.1\n" >> templates/commit_template.txt
+          fi
+
+          # Ensure modern guidance lines appear (lightweight; avoids duplicating lines if already present)
+          grep -q 'Body (optional): what/why' templates/commit_template.txt || \
+            sed -i '1,$ s/^# Body (optional).*/# Body (optional): what\/why, key details, risks, follow-ups/' templates/commit_template.txt
+          grep -q 'Footer (optional): references, automation tags, metadata' templates/commit_template.txt || \
+            sed -i '1,$ s/^# Footer (optional).*/# Footer (optional): references, automation tags, metadata/' templates/commit_template.txt
+        fi
+
+        # --- 2) Update patch files themselves to v1.1 if they exist ---
+        for f in ".github/autopatch/commit-template.patch.yml" ".github/autopatch/commit-template-config.patch.yml"; do
+          if [ -f "$f" ]; then
+            sed -i 's/v1\.0/v1.1/g' "$f" || true
+          fi
+        done
+
+        echo "[AutoPatch] Upgrade routine completed (v1.1)."
+  - commit:
+      message: "chore(templates): bump commit template to v1.1 (upgrade patch)"
