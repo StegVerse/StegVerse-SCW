@@ -1,0 +1,213 @@
+name: propagate-commit-template-v1_1
+
+on:
+  workflow_dispatch:
+    inputs:
+      repos_csv:
+        description: "Comma-separated: owner/repo,owner/repo"
+        required: true
+      pr_branch:
+        description: "Branch to push (leave blank to auto-generate)"
+        required: false
+        default: ""
+      reset_if_conflict:
+        description: "If rebase fails, delete remote branch and retry"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  propagate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run propagation (v1.1)
+        env:
+          STEGVERSE_BOT_TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+          REPOS_CSV_INPUT: ${{ inputs.repos_csv }}
+          PR_BRANCH_INPUT: ${{ inputs.pr_branch }}
+          RESET_IF_CONFLICT: ${{ inputs.reset_if_conflict }}
+        run: |
+          python - <<'PY'
+          import os, json, subprocess, sys, textwrap, pathlib, shlex, urllib.request, urllib.error
+
+          token = os.getenv("STEGVERSE_BOT_TOKEN")
+          if not token:
+            print("❌ Missing secret: STEGVERSE_BOT_TOKEN", file=sys.stderr)
+            sys.exit(1)
+
+          repos = [r.strip() for r in (os.getenv("REPOS_CSV_INPUT") or "").split(",") if r.strip()]
+          if not repos:
+            print("❌ No repos provided.", file=sys.stderr)
+            sys.exit(1)
+
+          pr_branch = (os.getenv("PR_BRANCH_INPUT") or "").strip()
+          if not pr_branch:
+            pr_branch = "chore/commit-template-v1.1"
+
+          reset_on_conflict = (os.getenv("RESET_IF_CONFLICT") or "true").lower() in ("1","true","yes","y")
+
+          # --- v1.1 content (template + autopatch) ---
+          commit_template_v11 = textwrap.dedent("""\
+          <type>(<scope>): <summary>
+          # feat(api): add provider registry for hybrid bridge
+
+          # Body (optional): details on what changed and why
+
+          # Footer (optional): references, automation tags, etc.
+          # Refs: #42
+          # Signed-off-by: Name <email@example.com>
+          # Version: v1.1
+          """)
+
+          patch_commit_v11 = f"""version: 1
+actions:
+  - write_files:
+      - path: "templates/commit_template.txt"
+        mode: "100644"
+        contents: |
+{ textwrap.indent(commit_template_v11, "          ") }
+  - commit:
+      message: "chore(templates): add/update universal commit template v1.1 (autopatch)"
+"""
+
+          patch_config_v11 = """version: 1
+actions:
+  - run_shell:
+      name: Configure Git to use commit template (v1.1)
+      script: |
+        set -e
+        if [ -f templates/commit_template.txt ]; then
+          git config commit.template templates/commit_template.txt
+          echo "[AutoPatch] Commit template configured successfully (v1.1)."
+        else
+          echo "[AutoPatch] Warning: commit_template.txt not found — skipping."
+        fi
+  - commit:
+      message: "chore(autopatch): auto-configure commit template v1.1"
+"""
+
+          def api(method, url, data=None, headers=None):
+            req = urllib.request.Request(url, method=method)
+            req.add_header("Authorization", f"token {token}")
+            req.add_header("Accept", "application/vnd.github+json")
+            if headers:
+              for k,v in headers.items():
+                req.add_header(k,v)
+            if data is not None:
+              data = json.dumps(data).encode()
+            try:
+              with urllib.request.urlopen(req, data=data) as resp:
+                return json.loads(resp.read() or b"{}")
+            except urllib.error.HTTPError as e:
+              err = e.read().decode()
+              print(f"HTTP {e.code} error: {err}", file=sys.stderr)
+              raise
+
+          def open_pr(repo, branch):
+            try:
+              j = api("POST", f"https://api.github.com/repos/{repo}/pulls", {
+                "title": "chore(templates): commit template v1.1 + autopatch config",
+                "head": branch,
+                "base": "main",
+                "body": "Rollout of commit template v1.1 (autopatch)."
+              })
+              print(f"✅ PR opened for {repo}: {j.get('html_url')}")
+            except Exception as e:
+              print(f"⚠️  PR creation failed for {repo}: {e}", file=sys.stderr)
+
+          def branch_exists_remote(repo_dir, branch):
+            r = subprocess.run(["git","-C",str(repo_dir),"ls-remote","--heads","origin",branch],
+                               capture_output=True, text=True)
+            return bool(r.stdout.strip())
+
+          def ensure_branch(repo_dir, branch):
+            subprocess.run(["git","-C",str(repo_dir),"fetch","origin","--prune"], check=True)
+            if branch_exists_remote(repo_dir, branch):
+              # create local branch tracking the remote if missing
+              local = subprocess.run(["git","-C",str(repo_dir),"rev-parse","--verify",branch])
+              if local.returncode != 0:
+                subprocess.run(["git","-C",str(repo_dir),"checkout","-b",branch,f"origin/{branch}"], check=True)
+              else:
+                subprocess.run(["git","-C",str(repo_dir),"checkout",branch], check=True)
+                subprocess.run(["git","-C",str(repo_dir),"reset","--hard",f"origin/{branch}"], check=True)
+            else:
+              subprocess.run(["git","-C",str(repo_dir),"checkout","-b",branch], check=True)
+
+          def try_rebase(repo_dir, branch):
+            try:
+              subprocess.run(["git","-C",str(repo_dir),"rebase","origin/main"], check=True)
+              return True
+            except subprocess.CalledProcessError:
+              return False
+
+          def delete_remote_branch(repo, branch):
+            owner, name = repo.split("/",1)
+            # Use GitHub API to delete ref
+            try:
+              api("DELETE", f"https://api.github.com/repos/{owner}/{name}/git/refs/heads/{branch}")
+              print(f"🧹 Deleted remote branch {repo}:{branch}")
+            except Exception as e:
+              print(f"⚠️  Failed to delete remote branch {repo}:{branch}: {e}", file=sys.stderr)
+
+          for repo in repos:
+            print(f"\n=== Processing {repo} ===")
+            repo_dir = pathlib.Path(repo.replace("/", "__"))
+            subprocess.run(["git","clone",f"https://x-access-token:{token}@github.com/{repo}.git",str(repo_dir)], check=True)
+
+            # Set bot identity
+            subprocess.run(["git","-C",str(repo_dir),"config","user.name","StegVerse Bot"], check=True)
+            subprocess.run(["git","-C",str(repo_dir),"config","user.email","bot@stegverse.org"], check=True)
+
+            ensure_branch(repo_dir, pr_branch)
+
+            # Rebase on origin/main; if conflicts and allowed, purge branch and recreate
+            if not try_rebase(repo_dir, pr_branch):
+              if reset_on_conflict:
+                print("🔁 Rebase failed — resetting branch as requested.")
+                delete_remote_branch(repo, pr_branch)
+                subprocess.run(["git","-C",str(repo_dir),"checkout","main"], check=True)
+                subprocess.run(["git","-C",str(repo_dir),"pull","--ff-only","origin","main"], check=True)
+                subprocess.run(["git","-C",str(repo_dir),"checkout","-B",pr_branch], check=True)
+              else:
+                print("❌ Rebase failed and reset_if_conflict=false. Skipping repo.")
+                continue
+
+            ap_dir = repo_dir / ".github" / "autopatch"
+            ap_dir.mkdir(parents=True, exist_ok=True)
+
+            (ap_dir / "commit-template.patch.yml").write_text(patch_commit_v11, encoding="utf-8")
+            (ap_dir / "commit-template-config.patch.yml").write_text(patch_config_v11, encoding="utf-8")
+
+            patches_file = ap_dir / "patches.yml"
+            if not patches_file.exists():
+              patches_file.write_text("version: 1\npatches: []\n", encoding="utf-8")
+            txt = patches_file.read_text(encoding="utf-8")
+            if "commit-template.patch.yml" not in txt:
+              txt += "\n  - id: commit-template\n    path: .github/autopatch/commit-template.patch.yml"
+            if "commit-template-config.patch.yml" not in txt:
+              txt += "\n  - id: commit-template-config\n    path: .github/autopatch/commit-template-config.patch.yml"
+            patches_file.write_text(txt, encoding="utf-8")
+
+            subprocess.run(["git","-C",str(repo_dir),"add","-A"], check=True)
+            # Only commit if there are staged changes
+            if subprocess.run(["git","-C",str(repo_dir),"diff","--cached","--quiet"]).returncode != 0:
+              subprocess.run(["git","-C",str(repo_dir),"commit","-m","chore(templates): commit template v1.1 + autopatch config"], check=True)
+              # Try a normal push; if rejected (out-of-date), use --force-with-lease
+              p = subprocess.run(["git","-C",str(repo_dir),"push","-u","origin",pr_branch])
+              if p.returncode != 0:
+                subprocess.run(["git","-C",str(repo_dir),"push","--force-with-lease","-u","origin",pr_branch], check=True)
+              open_pr(repo, pr_branch)
+            else:
+              print(f"⏭  {repo}: no changes needed for v1.1.")
+          PY
