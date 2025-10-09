@@ -1,2 +1,4 @@
 version: 1
 patches: []
+  - id: taskops-bootstrap
+    path: .github/autopatch/taskops-bootstrap.patch.yml
