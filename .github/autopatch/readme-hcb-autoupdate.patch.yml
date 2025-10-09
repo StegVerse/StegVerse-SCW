@@ -206,3 +206,32 @@ Run manually and pass `force_push=true` to skip the dry-run and push immediately
    │   • PR / Direct Commit         │
    │   • Tag / Release ({core["version_tag"]})  │
    └─────────────────────────────┘
+
+  - append_text:
+      path: "docs/README-HCB.md"
+      contents: |
+        ## 🧱 Future Enhancements
+
+        | Feature | Description |
+        |:--|:--|
+        | ✅ **TaskOps integration** | Central task tracking for exports |
+        | 🔄 **Auto version increment** | Automatically bump tag (e.g., v1.2 → v1.3) |
+        | ⚙️ **Rollback workflow** | Auto-revert failed exports |
+        | 🧪 **Bridge integrity tests** | Validate file structure before release |
+        | 📦 **ATTIC integration** | Archive old releases automatically |
+
+---
+
+## 🧰 Migration & Maintenance Notes
+
+These steps apply if the documentation folder structure changes or
+you regenerate `README-HCB.md` manually.
+
+**Migration steps**
+
+1. Create the folder:
+   ```bash
+   mkdir -p .github/docs
+
+        _Maintained automatically by **StegVerse CI** (Hybrid Bridge Channel)._
+
