@@ -3,127 +3,247 @@ name: export-hcb
 on:
   workflow_dispatch:
     inputs:
-      target_owner:
-        description: "Destination owner/org (e.g., StegVerse)"
-        required: true
-        default: "StegVerse"
-      target_repo:
-        description: "Destination repo name"
-        required: true
-        default: "hybrid-collab-bridge"
-      tag_name:
-        description: "Tag to create (e.g., v0.1.0). Leave blank to skip tagging."
-        required: false
-        default: "v0.1.0"
-      release_title:
-        description: "Release title (optional)"
-        required: false
-        default: "Hybrid Collab Bridge"
-      release_notes:
-        description: "Release notes (optional; if blank and tag present, auto-generate)"
+      repos_csv:
+        description: "Comma-separated targets (owner/repo). Blank -> StegVerse/hybrid-collab-bridge"
         required: false
         default: ""
-      force_push:
-        description: "Force-push snapshot (overwrites remote)"
+      export_branch:
+        description: "Branch to create/overwrite in a NEW repo (default: main)"
         required: false
-        default: "true"
-      create_release:
-        description: "Create a GitHub Release when tag_name is provided"
+        default: "main"
+      push_strategy:
+        description: |
+          Push mode:
+          - direct  : push to export_branch (no PR)
+          - pr      : push to pr_branch and open a PR into pr_base
         required: false
-        default: "true"
-  push:
-    paths:
-      - "hybrid-collab-bridge/**"
+        default: "pr"
+      pr_branch:
+        description: "Feature branch name for PR mode (e.g., chore/hcb-export-YYYYMMDD-HHMM)"
+        required: false
+        default: ""
+      pr_base:
+        description: "PR base branch (target). Usually main."
+        required: false
+        default: "main"
+      pr_title:
+        description: "PR title (only used in pr mode)"
+        required: false
+        default: "chore(hcb): sync export from StegVerse-SCW"
+      pr_body:
+        description: "PR body (only used in pr mode)"
+        required: false
+        default: "Automated export of hybrid-collab-bridge/ from StegVerse-SCW."
+      force_with_lease:
+        description: "Use --force-with-lease for pushes (true/false)"
+        required: false
+        default: "false"
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   export:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout SCW
+      - name: Checkout source repo
         uses: actions/checkout@v4
 
-      - name: Prepare snapshot
-        id: prep
-        run: |
-          set -euo pipefail
-          test -d hybrid-collab-bridge || { echo "hybrid-collab-bridge/ not found"; exit 1; }
-          mkdir -p /tmp/hcb-export
-          rsync -a --delete hybrid-collab-bridge/ /tmp/hcb-export/
-          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-      - name: Write VERSION file (if tag provided)
+      - name: Export hybrid-collab-bridge and push
         env:
-          TAG_NAME: ${{ github.event.inputs.tag_name }}
+          GITHUB_TOKEN_BOT: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+          INPUT_REPOS_CSV: ${{ inputs.repos_csv }}
+          INPUT_EXPORT_BRANCH: ${{ inputs.export_branch }}
+          INPUT_PUSH_STRATEGY: ${{ inputs.push_strategy }}
+          INPUT_PR_BRANCH: ${{ inputs.pr_branch }}
+          INPUT_PR_BASE: ${{ inputs.pr_base }}
+          INPUT_PR_TITLE: ${{ inputs.pr_title }}
+          INPUT_PR_BODY: ${{ inputs.pr_body }}
+          INPUT_FORCE_WITH_LEASE: ${{ inputs.force_with_lease }}
         run: |
-          set -euo pipefail
-          if [ -n "${TAG_NAME:-}" ]; then
-            echo "${TAG_NAME}" > /tmp/hcb-export/VERSION
-          fi
+          python - <<'PY'
+          import os, sys, json, shutil, pathlib, subprocess, urllib.request, urllib.error, tempfile, datetime
 
-      - name: Push to standalone repo
-        env:
-          TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
-          OWNER: ${{ github.event.inputs.target_owner || 'StegVerse' }}
-          REPO:  ${{ github.event.inputs.target_repo  || 'hybrid-collab-bridge' }}
-          FORCE: ${{ github.event.inputs.force_push   || 'true' }}
-        run: |
-          set -euo pipefail
-          cd /tmp/hcb-export
+          token = os.getenv("GITHUB_TOKEN_BOT")
+          if not token:
+              print("❌ Missing secret STEGVERSE_BOT_TOKEN", file=sys.stderr)
+              sys.exit(1)
 
-          git init -b main
-          git config user.name "StegVerse Bot"
-          git config user.email "bot@stegverse.org"
-          git add -A
-          git commit -m "export: snapshot from StegVerse-SCW @ ${{ steps.prep.outputs.sha }}"
+          # Inputs & defaults
+          repos_csv = (os.getenv("INPUT_REPOS_CSV") or "").strip()
+          export_branch = (os.getenv("INPUT_EXPORT_BRANCH") or "main").strip() or "main"
+          push_strategy = (os.getenv("INPUT_PUSH_STRATEGY") or "pr").strip().lower()
+          pr_branch_in = (os.getenv("INPUT_PR_BRANCH") or "").strip()
+          pr_base = (os.getenv("INPUT_PR_BASE") or "main").strip() or "main"
+          pr_title = os.getenv("INPUT_PR_TITLE") or "chore(hcb): sync export from StegVerse-SCW"
+          pr_body  = os.getenv("INPUT_PR_BODY") or "Automated export of hybrid-collab-bridge/ from StegVerse-SCW."
+          force_with_lease = (os.getenv("INPUT_FORCE_WITH_LEASE") or "false").strip().lower() == "true"
 
-          url="https://x-access-token:${TOKEN}@github.com/${OWNER}/${REPO}.git"
-          git remote add origin "$url"
+          if not repos_csv:
+              repos_csv = "StegVerse/hybrid-collab-bridge"
+          repos = [r.strip() for r in repos_csv.split(",") if r.strip()]
+          if not repos:
+              print("❌ No valid repositories provided (owner/repo).", file=sys.stderr)
+              sys.exit(2)
 
-          if [ "${FORCE}" = "true" ]; then
-            git push -f origin main
-          else
-            git push origin main
-          fi
+          src = pathlib.Path("hybrid-collab-bridge")
+          if not src.exists():
+              print("❌ Source folder 'hybrid-collab-bridge/' not found in this repo.", file=sys.stderr)
+              sys.exit(3)
 
-      - name: Create tag and push (if requested)
-        if: ${{ inputs.tag_name != '' }}
-        env:
-          TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
-          OWNER: ${{ github.event.inputs.target_owner || 'StegVerse' }}
-          REPO:  ${{ github.event.inputs.target_repo  || 'hybrid-collab-bridge' }}
-          TAG:   ${{ github.event.inputs.tag_name }}
-        run: |
-          set -euo pipefail
-          cd /tmp/hcb-export
-          # Create an annotated tag at HEAD
-          git tag -a "${TAG}" -m "Release ${TAG}"
-          git push origin "${TAG}"
+          # ---- HTTP helpers ---------------------------------------------------
+          def api(method, url, body=None, ok=(200,201,202,204)):
+              headers = {
+                  "Authorization": f"token {token}",
+                  "Accept": "application/vnd.github+json",
+              }
+              data = None
+              if body is not None:
+                  data = json.dumps(body).encode()
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(url, data=data, method=method, headers=headers)
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      content = resp.read()
+                      if resp.status not in ok:
+                          raise RuntimeError(f"HTTP {resp.status}: {content.decode()}")
+                      return json.loads(content) if content else None
+              except urllib.error.HTTPError as e:
+                  msg = e.read().decode() if e.fp else ""
+                  raise RuntimeError(f"HTTPError {e.code} {url}: {msg}") from e
+              except urllib.error.URLError as e:
+                  raise RuntimeError(f"URLError {url}: {e}") from e
 
-      - name: Create GitHub Release (optional)
-        if: ${{ inputs.tag_name != '' && inputs.create_release == 'true' }}
-        env:
-          TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
-          OWNER: ${{ github.event.inputs.target_owner || 'StegVerse' }}
-          REPO:  ${{ github.event.inputs.target_repo  || 'hybrid-collab-bridge' }}
-          TAG:   ${{ github.event.inputs.tag_name }}
-          TITLE: ${{ github.event.inputs.release_title }}
-          NOTES: ${{ github.event.inputs.release_notes }}
-        run: |
-          set -euo pipefail
-          # If notes are blank, ask GitHub to auto-generate
-          if [ -z "${NOTES}" ]; then
-            body='{"tag_name":"'"${TAG}"'","name":"'"${TITLE}"'","generate_release_notes":true}'
-          else
-            # Escape quotes for JSON
-            esc_notes=$(printf '%s' "${NOTES}" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
-            body='{"tag_name":"'"${TAG}"'","name":"'"${TITLE}"'","body":'"${esc_notes}"'}'
-          fi
+          def me_login():
+              me = api("GET", "https://api.github.com/user")
+              return me.get("login", "")
 
-          curl -sSf -X POST \
-            -H "Authorization: token ${TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -d "${body}" \
-            "https://api.github.com/repos/${OWNER}/${REPO}/releases"
+          def is_org(owner):
+              try:
+                  api("GET", f"https://api.github.com/orgs/{owner}")
+                  return True
+              except Exception:
+                  return False
+
+          def ensure_repo_exists(full):
+              owner, name = full.split("/", 1)
+              # exists?
+              try:
+                  api("GET", f"https://api.github.com/repos/{owner}/{name}")
+                  print(f"✅ Repo exists: {full}")
+                  return False
+              except Exception as e:
+                  if "404" not in str(e):
+                      raise
+              # create
+              payload = {"name": name, "private": True, "description": "Auto-exported by export-hcb"}
+              if is_org(owner):
+                  api("POST", f"https://api.github.com/orgs/{owner}/repos", body=payload, ok=(201,))
+              elif owner.lower() == me_login().lower():
+                  api("POST", "https://api.github.com/user/repos", body=payload, ok=(201,))
+              else:
+                  raise RuntimeError(
+                      f"Cannot create repo under owner '{owner}' with this token. "
+                      "Use an org where the token can create repos, or your user."
+                  )
+              print(f"🆕 Created: {full}")
+              return True
+
+          def open_pr(full, head_branch, base_branch, title, body):
+              owner, name = full.split("/", 1)
+              payload = {"title": title, "head": head_branch, "base": base_branch, "body": body}
+              try:
+                  pr = api("POST", f"https://api.github.com/repos/{owner}/{name}/pulls", body=payload, ok=(201,))
+                  print(f"🟢 PR opened: {pr.get('html_url')}")
+              except Exception as e:
+                  print(f"⚠️  Failed to open PR for {full}: {e}", file=sys.stderr)
+
+          # ---- Export logic ---------------------------------------------------
+          def export_tree_to(path: pathlib.Path):
+              # Copy all children of src into path
+              for p in src.iterdir():
+                  dst = path / p.name
+                  if p.is_dir():
+                      shutil.copytree(p, dst)
+                  else:
+                      shutil.copy2(p, dst)
+              # Ensure top README
+              if not (path / "README.md").exists():
+                  (path / "README.md").write_text(
+                      "# hybrid-collab-bridge\n\nExported from StegVerse-SCW.\n",
+                      encoding="utf-8"
+                  )
+
+          def run_git(*args, cwd):
+              subprocess.run(["git", *args], cwd=str(cwd), check=True)
+
+          def push_repo(full):
+              created = ensure_repo_exists(full)
+              feature_branch = None
+
+              with tempfile.TemporaryDirectory() as tmpd:
+                  work = pathlib.Path(tmpd) / "export"
+                  work.mkdir(parents=True, exist_ok=True)
+                  export_tree_to(work)
+
+                  # init & commit
+                  branch_to_init = (feature_branch or export_branch)
+                  run_git("init", "-b", branch_to_init, cwd=work)
+                  run_git("config", "user.email", "bot@stegverse.org", cwd=work)
+                  run_git("config", "user.name", "StegVerse Bot", cwd=work)
+                  run_git("add", "-A", cwd=work)
+                  # commit only if there are staged changes
+                  rc = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(work)).returncode
+                  if rc != 0:
+                      run_git("commit", "-m", "export: snapshot from StegVerse-SCW", cwd=work)
+                  else:
+                      print("ℹ️ Nothing to commit in export worktree.")
+
+                  remote = f"https://x-access-token:{token}@github.com/{full}.git"
+                  run_git("remote", "add", "origin", remote, cwd=work)
+
+                  # choose push branch & PR logic
+                  if push_strategy == "pr":
+                      # build or use provided pr_branch
+                      fb = pr_branch_in or f"chore/hcb-export-{datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+                      feature_branch = fb
+                      run_git("checkout", "-B", feature_branch, cwd=work)
+                      push_args = ["push", "-u", "origin", feature_branch]
+                      if force_with_lease:
+                          push_args.insert(1, "--force-with-lease")
+                      try:
+                          run_git(*push_args, cwd=work)
+                          print(f"🚀 Pushed feature branch: https://github.com/{full}/tree/{feature_branch}")
+                          open_pr(full, feature_branch, pr_base, pr_title, pr_body)
+                      except subprocess.CalledProcessError as e:
+                          print(f"❌ Push failed for {full}: {e}", file=sys.stderr)
+                          raise
+                  else:
+                      # direct mode -> push to export_branch
+                      push_args = ["push", "-u", "origin", export_branch]
+                      if force_with_lease:
+                          push_args.insert(1, "--force-with-lease")
+                      try:
+                          run_git(*push_args, cwd=work)
+                          print(f"🚀 Pushed: https://github.com/{full}/tree/{export_branch}")
+                      except subprocess.CalledProcessError as e:
+                          print(f"❌ Push failed for {full}: {e}", file=sys.stderr)
+                          raise
+
+          # Run for all targets
+          for repo in repos:
+              print(f"\n=== Processing {repo} ===")
+              try:
+                  push_repo(repo)
+              except Exception as e:
+                  print(f"❌ Failed for {repo}: {e}", file=sys.stderr)
+                  sys.exit(4)
+
+          print("\n✅ All exports completed.")
+          PY
