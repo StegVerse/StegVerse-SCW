@@ -1,5 +1,2 @@
-# .github/autopatch/patches.yml
 version: 1
-patches:
-  - id: readme-hcb-autoupdate
-    path: .github/autopatch/readme-hcb-autoupdate.patch.yml
+patches: []
