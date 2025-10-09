@@ -1,0 +1,24 @@
+version: 1
+actions:
+  - run_shell:
+      name: Ensure TaskOps README-LOG.md exists
+      shell: bash
+      script: |
+        set -euo pipefail
+        mkdir -p .github/docs
+        LOG=".github/docs/README-LOG.md"
+        if [ ! -f "$LOG" ]; then
+          cat > "$LOG" <<'MD'
+# Project Activity Log
+
+This log is maintained automatically by CI (TaskOps channel).
+
+| Timestamp (UTC) | Event | Status | Workflow | Run | SHA |
+|---|---|---|---|---|---|
+MD
+          echo "[AutoPatch] Created .github/docs/README-LOG.md"
+        else
+          echo "[AutoPatch] .github/docs/README-LOG.md already present"
+        fi
+  - commit:
+      message: "chore(taskops): bootstrap README-LOG.md (autopatch)"
