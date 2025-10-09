@@ -2,3 +2,8 @@ version: 1
 patches: []
   - id: taskops-bootstrap
     path: .github/autopatch/taskops-bootstrap.patch.yml
+
+  - id: commit-template
+    path: .github/autopatch/commit-template.patch.yml
+  - id: commit-template-config
+    path: .github/autopatch/commit-template-config.patch.yml

@@ -1,7 +1,7 @@
 version: 1
 actions:
   - run_shell:
-      name: Configure Git to use commit template
+      name: Configure Git to use commit template (v1.1)
       script: |
         set -e
         if [ -f templates/commit_template.txt ]; then
