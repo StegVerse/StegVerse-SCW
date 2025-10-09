@@ -1,0 +1,213 @@
+name: validate-hcb
+
+on:
+  workflow_dispatch:
+    inputs:
+      src_dir:
+        description: "Path to HCB tree (default: hybrid-collab-bridge). If you ran export, you can point to /tmp/hcb-export via a caller workflow."
+        required: false
+        default: "hybrid-collab-bridge"
+      require_version_prefix:
+        description: "Require VERSION to start with this prefix (e.g., v1.). Leave blank to accept any vMAJOR.MINOR[.PATCH]."
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      src_dir:
+        description: "Path to HCB tree to validate (e.g., /tmp/hcb-export)"
+        required: false
+        type: string
+        default: "hybrid-collab-bridge"
+      require_version_prefix:
+        description: "Require VERSION to start with this prefix (e.g., v1.)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      SRC_DIR: ${{ inputs.src_dir || github.event.inputs.src_dir }}
+      REQ_PREFIX: ${{ inputs.require_version_prefix || github.event.inputs.require_version_prefix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Validate Hybrid Collab Bridge structure
+        id: validate
+        run: |
+          set -euo pipefail
+          python - << 'PY'
+          import os, re, json, sys, pathlib, yaml, textwrap
+
+          src_dir = pathlib.Path(os.environ.get("SRC_DIR") or "hybrid-collab-bridge")
+          req_prefix = os.environ.get("REQ_PREFIX","").strip()
+
+          report = {
+            "source": str(src_dir),
+            "checks": [],
+            "errors": [],
+            "warnings": [],
+            "version": None,
+          }
+
+          def ok(msg, **k):
+              report["checks"].append({"status":"OK","msg":msg, **k})
+          def warn(msg, **k):
+              report["warnings"].append({"msg":msg, **k})
+          def err(msg, **k):
+              report["errors"].append({"msg":msg, **k})
+
+          # Check 0: source presence
+          if not src_dir.exists():
+              err(f"Source folder not found: {src_dir}")
+              print(json.dumps(report, indent=2))
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "w") as s:
+                  s.write(f"### ❌ HCB validation failed\n\nSource folder not found: `{src_dir}`\n")
+              sys.exit(1)
+          ok(f"Source folder exists: {src_dir}")
+
+          # Required files/dirs
+          required = [
+            "README-HCB.md",
+            "VERSION",
+            "api/app/main.py",
+            "api/requirements.txt",
+            "providers.yaml",  # production config
+          ]
+          optional_anyof = [
+            [".github/workflows/ci.yml", ".github/workflows/hybrid_bridge_ci.yml", ".github/workflows/hybrid_bridge_functional.yml"]
+          ]
+
+          for rel in required:
+              p = src_dir / rel
+              if p.exists():
+                  ok(f"Found required path: {rel}")
+              else:
+                  err(f"Missing required path: {rel}")
+
+          for group in optional_anyof:
+              present = [rel for rel in group if (src_dir/rel).exists()]
+              if present:
+                  ok(f"Found CI workflow: {present[0]}")
+              else:
+                  warn(f"No CI workflow found among: {group}")
+
+          # VERSION file
+          vf = src_dir / "VERSION"
+          ver = None
+          if vf.exists():
+              ver = vf.read_text(encoding="utf-8").strip()
+              report["version"] = ver
+              if not re.match(r"^v\d+\.\d+(?:\.\d+)?$", ver):
+                  err(f"VERSION malformed: '{ver}' (expected vMAJOR.MINOR[.PATCH])")
+              else:
+                  ok(f"VERSION format OK: {ver}")
+              if req_prefix:
+                  if not ver.startswith(req_prefix):
+                      err(f"VERSION '{ver}' does not start with required prefix '{req_prefix}'")
+                  else:
+                      ok(f"VERSION prefix OK: starts with '{req_prefix}'")
+          else:
+              err("VERSION file missing")
+
+          # README must include key sections
+          r = src_dir / "README-HCB.md"
+          if r.exists():
+              txt = r.read_text(encoding="utf-8").lower()
+              need = ["migration", "future enhancements"]
+              for key in need:
+                  if key in txt:
+                      ok(f"README includes section: {key}")
+                  else:
+                      warn(f"README seems to be missing section: {key}")
+          else:
+              err("README-HCB.md missing")
+
+          # providers.yaml must parse
+          py = src_dir / "providers.yaml"
+          if py.exists():
+              try:
+                  with open(py, "r", encoding="utf-8") as f:
+                      data = yaml.safe_load(f) or {}
+                  if not isinstance(data, dict):
+                      err("providers.yaml parsed but is not a mapping")
+                  else:
+                      ok("providers.yaml parses as YAML mapping")
+                      # sanity keys (soft)
+                      for k in ("providers","default"):
+                          if k not in data:
+                              warn(f"providers.yaml: missing soft key '{k}'")
+              except Exception as e:
+                  err(f"providers.yaml failed to parse: {e}")
+          else:
+              err("providers.yaml missing")
+
+          # no stray markers / caches
+          bad_globs = ["**/.pytest_cache/**", "**/__pycache__/**"]
+          found_bad = []
+          for pattern in bad_globs:
+              for p in src_dir.glob(pattern):
+                  found_bad.append(str(p.relative_to(src_dir)))
+          if found_bad:
+              warn(f"Found cache artifacts: {found_bad}")
+          else:
+              ok("No cache artifacts found")
+
+          # fail if any errors
+          ok_count = sum(1 for c in report["checks"] if c["status"]=="OK")
+          summary = f"OK: {ok_count}  |  warnings: {len(report['warnings'])}  |  errors: {len(report['errors'])}"
+          report["summary"] = summary
+
+          # Write JSON report
+          out_json = "/tmp/hcb-validate-report.json"
+          with open(out_json, "w", encoding="utf-8") as f:
+              json.dump(report, f, indent=2)
+
+          # Write step summary (Markdown)
+          md = []
+          md.append(f"### HCB validation report")
+          md.append("")
+          md.append(f"- **Source**: `{src_dir}`")
+          md.append(f"- **Version**: `{ver or 'N/A'}`")
+          md.append(f"- **Result**: {summary}")
+          md.append("")
+          if report["errors"]:
+              md.append("#### ❌ Errors")
+              for e in report["errors"]:
+                  md.append(f"- {e['msg']}")
+              md.append("")
+          if report["warnings"]:
+              md.append("#### ⚠️ Warnings")
+              for w in report["warnings"]:
+                  md.append(f"- {w['msg']}")
+              md.append("")
+          if report["checks"]:
+              md.append("#### ✅ Checks")
+              for c in report["checks"]:
+                  md.append(f"- {c['msg']}")
+              md.append("")
+          pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(md), encoding="utf-8")
+
+          # Exit code
+          if report["errors"]:
+              print(json.dumps(report, indent=2))
+              sys.exit(1)
+          PY
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hcb-validate-report-${{ github.run_id }}
+          path: /tmp/hcb-validate-report.json
+          if-no-files-found: warn
