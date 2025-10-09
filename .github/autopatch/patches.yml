@@ -4,3 +4,5 @@ patches:
   path: .github/autopatch/hcb-first-run-checklist.patch.yml
   - id: patch-only-guard
   path: .github/autopatch/patch-only-guard.patch.yml
+  - id: taskops-tasks-bootstrap
+  path: .github/autopatch/taskops-tasks-bootstrap.patch.yml
