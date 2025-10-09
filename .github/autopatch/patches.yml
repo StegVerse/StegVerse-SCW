@@ -1,10 +1,2 @@
 version: 1
-patches:
-  - id: taskops-bootstrap
-    path: .github/autopatch/taskops-bootstrap.patch.yml
-  - id: readme-hcb-autoupdate
-    path: .github/autopatch/readme-hcb-autoupdate.patch.yml
-  - id: commit-template
-    path: .github/autopatch/commit-template.patch.yml
-  - id: commit-template-config
-    path: .github/autopatch/commit-template-config.patch.yml
+patches: []
