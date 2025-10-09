@@ -1,0 +1,58 @@
+version: 1
+actions:
+  - write_files:
+      - path: "CHECKLIST-HCB-FIRST-RUN.md"
+        mode: "100644"
+        contents: |
+          # ✅ Hybrid Collab Bridge — First-Run Checklist
+
+          This page tracks the **initial bring-up** of the Hybrid Collab Bridge (HCB) pipeline.
+          Items auto-check as CI succeeds. You can run workflows from the **Actions** tab.
+
+          ---  
+
+          ## Status Badges
+          <!-- These will render if the workflows exist -->
+          [![Export HCB](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/export-hcb.yml/badge.svg)](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/export-hcb.yml)
+          [![Weekly Export](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/export-hcb-weekly.yml/badge.svg)](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/export-hcb-weekly.yml)
+          [![AutoPatch Apply](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/autopatch-apply.yml/badge.svg)](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/autopatch-apply.yml)
+          [![Validate HCB](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/validate-hcb.yml/badge.svg)](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/validate-hcb.yml)
+
+          ---  
+
+          ## Bring-up Tasks (auto-checked by CI)
+          - [ ] (APPLY_AP) AutoPatch runner present & applied at least once
+          - [ ] (APPLY_SECTIONS) README-HCB sections ensured (Migration, Future Enhancements)
+          - [ ] (APPLY_BADGE) README-HCB export badge ensured
+          - [ ] (VALIDATE_OK) `validate-hcb` workflow succeeded once
+          - [ ] (EXPORT_DRYRUN) Export ran in **dry-run** and produced artifact
+          - [ ] (EXPORT_LIVE) Export **pushed** or opened **PR** to target repo
+          - [ ] (WEEKLY_READY) Weekly strict export workflow exists
+          - [ ] (TASKOPS_WATCH) TaskOps watcher logging enabled (README-LOG updated)
+          - [ ] (TOKEN_OK) `STEGVERSE_BOT_TOKEN` configured and working
+
+          ---  
+
+          ## How to Complete
+          1) Run **AutoPatch Apply** to seed docs and badge  
+             → Actions → *autopatch-apply* → **Run workflow**
+          2) Run **Export HCB** in dry-run (default)  
+             → Actions → *export-hcb* → **Run workflow**
+          3) Run **Validate HCB** (if available)  
+             → Actions → *validate-hcb* → **Run workflow**
+          4) Run **Export HCB** live (set `dry_run=false`)  
+          5) (Optional) Trigger **Weekly Export** once to test strict path  
+          6) Confirm **TaskOps watcher** created/updated `.github/docs/README-LOG.md`
+
+          ---  
+
+          ### Notes
+          - This file is **auto-edited** by CI. Manual edits are fine; auto-checks only toggle the
+            `(TOKEN_OK …)` markers above from `[ ]` to `[x]`.
+          - Timestamp of last auto-update is appended below.
+
+          ---
+          
+          **Last auto-update:** _none yet_
+  - commit:
+      message: "docs(hcb): add first-run checklist (autopatch)"
