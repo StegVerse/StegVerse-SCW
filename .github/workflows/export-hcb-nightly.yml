@@ -1,0 +1,25 @@
+name: export-hcb-nightly
+
+on:
+  schedule:
+    - cron: "15 3 * * *"   # daily at 03:15 UTC
+  workflow_dispatch: {}    # allow manual run of the nightly profile
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  nightly:
+    uses: ./.github/workflows/export-hcb.yml
+    secrets: inherit
+    with:
+      repos_csv: "StegVerse/hybrid-collab-bridge"
+      export_branch: "main"
+      sync_mode: "mirror"
+      push_strategy: "direct"
+      version_tag: "v1.2-nightly"
+      dry_run: "true"      # validate only
+      tag_repo: "false"
+      release_create: "false"
