@@ -1,0 +1,49 @@
+id: export-hcb-defaults-v1
+summary: Ensure export-hcb.yml has workflow_dispatch and friendly defaults
+confirm: auto
+auto_archive: true
+
+patch_lines:
+  # If file exists, make sure the on.workflow_dispatch block is present.
+  - path: ".github/workflows/export-hcb.yml"
+    anchor: "^on:\\s*$"
+    position: after
+    text: |
+      workflow_dispatch:
+        inputs:
+          target_owner:
+            description: "Destination owner/org (e.g., StegVerse)"
+            required: true
+            default: "StegVerse"
+          target_repo:
+            description: "Destination repo name"
+            required: true
+            default: "hybrid-collab-bridge"
+          tag_name:
+            description: "Tag to create (e.g., v0.1.0). Leave blank to skip tagging."
+            required: false
+            default: "v0.1.0"
+          release_title:
+            description: "Release title (optional)"
+            required: false
+            default: "Hybrid Collab Bridge"
+          release_notes:
+            description: "Release notes (optional; blank = auto-generate)"
+            required: false
+            default: ""
+          force_push:
+            description: "Force-push snapshot (overwrites remote)"
+            required: false
+            default: "true"
+          create_release:
+            description: "Create a GitHub Release when tag_name is provided"
+            required: false
+            default: "true"
+
+  # Ensure permissions exist and allow contents write (PR; won’t duplicate)
+  - path: ".github/workflows/export-hcb.yml"
+    anchor: "^permissions:\\s*$"
+    position: replace
+    text: |
+      permissions:
+        contents: write
