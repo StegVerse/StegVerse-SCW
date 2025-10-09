@@ -1,0 +1,145 @@
+name: taskops-first-run-regression
+
+on:
+  workflow_run:
+    workflows: ["export-hcb-weekly"]
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update failure counter
+        id: state
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .github/taskops/state
+          STATE=".github/taskops/state/export-weekly.json"
+          if [ ! -f "$STATE" ]; then
+            echo '{"consecutive_failures":0,"last_run_id":0}' > "$STATE"
+          fi
+
+          # Read current state
+          CONS=$(jq -r '.consecutive_failures' "$STATE")
+          LAST=$(jq -r '.last_run_id' "$STATE")
+
+          if [ "${CONCLUSION:-success}" = "success" ]; then
+            CONS=0
+          else
+            CONS=$((CONS + 1))
+          fi
+
+          # Write back
+          tmp="$(mktemp)"
+          jq --argjson c "$CONS" --argjson r "${RUN_ID:-0}" \
+             '.consecutive_failures=$c | .last_run_id=$r' "$STATE" > "$tmp"
+          mv "$tmp" "$STATE"
+
+          echo "consecutive_failures=$CONS" >> "$GITHUB_OUTPUT"
+          echo "run_url=${RUN_URL:-}" >> "$GITHUB_OUTPUT"
+
+          # Commit state (best-effort)
+          if ! git diff --quiet -- "$STATE"; then
+            git config user.name "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git add "$STATE"
+            git commit -m "chore(taskops): update export-weekly failure counter -> $CONS"
+            git push || true
+          fi
+
+      - name: Unlock checklist on 2+ consecutive failures
+        if: ${{ steps.state.outputs.consecutive_failures >= 2 }}
+        id: unlock
+        run: |
+          set -euo pipefail
+          FILE="CHECKLIST-HCB-FIRST-RUN.md"
+          if [ ! -f "$FILE" ]; then
+            echo "Checklist not found; skipping unlock."
+            exit 0
+          fi
+
+          # Remove existing LOCKED banner (first matching line)
+          # Keep file intact otherwise.
+          if grep -q '^> 🚦 This checklist is LOCKED' "$FILE"; then
+            sed -i '1{/^> 🚦 This checklist is LOCKED/d;}' "$FILE"
+          fi
+
+          # Add UNLOCKED banner if not present
+          if ! grep -q '^> 🚨 This checklist is UNLOCKED by CI' "$FILE"; then
+            tmp="$(mktemp)"
+            {
+              echo "> 🚨 This checklist is UNLOCKED by CI (TaskOps) due to consecutive weekly export failures."
+              echo "> Investigate and re-run the weekly export; re-lock happens automatically when all items are green."
+              echo
+              cat "$FILE"
+            } > "$tmp"
+            mv "$tmp" "$FILE"
+          fi
+
+          # Commit changes
+          if ! git diff --quiet -- "$FILE"; then
+            git config user.name "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git add "$FILE"
+            git commit -m "chore(taskops): UNLOCK checklist (weekly export regression)"
+            git push || true
+          fi
+
+      - name: Open/Update regression issue (2+ consecutive failures)
+        if: ${{ steps.state.outputs.consecutive_failures >= 2 }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const failures = parseInt(process.env.FAILS || "2", 10);
+            const runUrl = `${{ toJson(steps.state.outputs.run_url) }}`.replace(/^"|"$/g, '');
+            const title = "🚨 Regression detected: export-hcb-weekly failing";
+            const body = `**TaskOps regression guard**
+
+- Consecutive failures: **${{ steps.state.outputs.consecutive_failures }}**
+- Latest run: ${runUrl}
+
+Actions:
+1. Inspect logs and remediate.
+2. Re-run **export-hcb-weekly** manually to confirm fix.
+3. Once green, the checklist will re-lock automatically when all items are checked.`;
+
+            // Reuse an existing regression issue if open, else create one
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'taskops,export,regression'
+            });
+
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['taskops','export','regression']
+              });
+            }
+        env:
+          FAILS: ${{ steps.state.outputs.consecutive_failures }}
