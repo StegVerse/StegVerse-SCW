@@ -1,0 +1,29 @@
+version: 1
+actions:
+  - run_shell:
+      name: Ensure export badge at top of README-HCB.md
+      shell: bash
+      script: |
+        set -euo pipefail
+        README="hybrid-collab-bridge/README-HCB.md"
+        mkdir -p "$(dirname "$README")"
+        [ -f "$README" ] || echo "# Hybrid Collab Bridge (HCB)" > "$README"
+
+        OWNER_REPO="${GITHUB_REPOSITORY:-StegVerse-SCW/StegVerse-SCW}"
+        BADGE_MD="[![Export HCB](https://github.com/${OWNER_REPO}/actions/workflows/export-hcb.yml/badge.svg)](https://github.com/${OWNER_REPO}/actions/workflows/export-hcb.yml)"
+
+        # If badge not present, insert as first non-empty line
+        if ! grep -qF "$BADGE_MD" "$README"; then
+          TMP="$(mktemp)"
+          {
+            echo "$BADGE_MD"
+            echo
+            cat "$README"
+          } > "$TMP"
+          mv "$TMP" "$README"
+          echo "[AutoPatch] README badge inserted."
+        else
+          echo "[AutoPatch] README badge already present."
+        fi
+  - commit:
+      message: "docs(hcb): add/ensure Export HCB workflow badge (autopatch)"
