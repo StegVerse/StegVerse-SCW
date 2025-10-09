@@ -1,0 +1,44 @@
+version: 1
+actions:
+  - run_shell:
+      name: Enable workflow_call on export-hcb.yml (idempotent)
+      shell: bash
+      script: |
+        set -euo pipefail
+        WF=".github/workflows/export-hcb.yml"
+        if [ ! -f "$WF" ]; then
+          echo "::error title=Missing::${WF} not found"
+          exit 1
+        fi
+
+        # If already contains 'workflow_call:' keep it as-is
+        if grep -qE '^[[:space:]]*workflow_call:' "$WF"; then
+          echo "[AutoPatch] export-hcb.yml already exposes workflow_call."
+          exit 0
+        fi
+
+        # Insert a minimal workflow_call block right after 'on:' (safe merge)
+        TMP="$(mktemp)"
+        awk '
+          BEGIN { inserted=0 }
+          /^on:[[:space:]]*$/ && inserted==0 {
+            print $0
+            print "  workflow_call:"
+            print "    inputs:"
+            print "      repos_csv:       { type: string, required: false, default: \"StegVerse/hybrid-collab-bridge\" }"
+            print "      export_branch:   { type: string, required: false, default: \"main\" }"
+            print "      sync_mode:       { type: string, required: false, default: \"mirror\" }"
+            print "      push_strategy:   { type: string, required: false, default: \"direct\" }"
+            print "      version_tag:     { type: string, required: false, default: \"v1.2\" }"
+            print "      dry_run:         { type: string, required: false, default: \"true\" }"
+            print "      tag_repo:        { type: string, required: false, default: \"true\" }"
+            print "      release_create:  { type: string, required: false, default: \"true\" }"
+            inserted=1
+            next
+          }
+          { print $0 }
+        ' "$WF" > "$TMP"
+        mv "$TMP" "$WF"
+        echo "[AutoPatch] Added workflow_call to export-hcb.yml."
+  - commit:
+      message: "ci(hcb): expose export-hcb.yml via workflow_call (autopatch)"
