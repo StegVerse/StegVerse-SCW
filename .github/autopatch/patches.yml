@@ -1,2 +1,4 @@
 version: 1
-patches: []
+patches:
+  - id: hcb-first-run-checklist
+  path: .github/autopatch/hcb-first-run-checklist.patch.yml
