@@ -1,0 +1,23 @@
+version: 1
+actions:
+  - run_shell:
+      name: Ensure regression guard badge in README-HCB.md
+      shell: bash
+      script: |
+        set -euo pipefail
+        FILE="README-HCB.md"
+        [ -f "$FILE" ] || FILE="README.md"
+        [ -f "$FILE" ] || { echo "::warning::No README-HCB.md/README.md found"; exit 0; }
+
+        BADGE='[![TaskOps Regression Guard](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/taskops-first-run-regression.yml/badge.svg)](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/taskops-first-run-regression.yml)'
+
+        if ! grep -q 'TaskOps Regression Guard' "$FILE"; then
+          tmp="$(mktemp)"
+          awk 'NR==1{print; print ""; print "'"$BADGE"'"; print "" ; next}1' "$FILE" > "$tmp"
+          mv "$tmp" "$FILE"
+          echo "[AutoPatch] Injected regression guard badge into $FILE"
+        else
+          echo "[AutoPatch] Regression guard badge already present"
+        fi
+  - commit:
+      message: "docs(hcb): add TaskOps regression guard badge (autopatch)"
