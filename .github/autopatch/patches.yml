@@ -1,2 +1,4 @@
 version: 1
-patches: []
+patches:
+  - id: readme-hcb-ensure-sections
+  path: .github/autopatch/readme-hcb-ensure-sections.patch.yml
