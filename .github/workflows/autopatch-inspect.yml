@@ -1,0 +1,96 @@
+name: autopatch-inspect
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Inspect runners & manifest
+        run: |
+          set -euo pipefail
+
+          echo "## 🔎 AutoPatch Inspector" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # 1) Which likely runners exist?
+          echo "### Runners present" >> "$GITHUB_STEP_SUMMARY"
+          for f in \
+            ".github/workflows/autopatch-apply.yml" \
+            ".github/workflows/AutoPatch.yml" \
+            ".github/workflows/auto_patch.yml" \
+            ".github/workflows/self_repair_autopatch.yml" \
+            "scripts/autopatch_runner.py" \
+            "scripts/auto_patch.py" \
+            "patches/manifest.json"
+          do
+            if [ -e "$f" ]; then
+              echo "- ✅ $f" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- ❌ $f" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # 2) Try to detect which manifest each runner uses (best-effort grep)
+          echo "### Manifest references (best-effort)" >> "$GITHUB_STEP_SUMMARY"
+          # Look for .github/autopatch/patches.yml
+          REF=$(grep -RIn --line-number --fixed-strings ".github/autopatch/patches.yml" . || true)
+          if [ -n "$REF" ]; then
+            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "$REF" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No explicit references found to .github/autopatch/patches.yml (that may be OK if runners compute paths at runtime)_" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # 3) Validate manifest & entries
+          echo "### Manifest validation" >> "$GITHUB_STEP_SUMMARY"
+          MAN=".github/autopatch/patches.yml"
+          if [ ! -f "$MAN" ]; then
+            echo "- ❌ Manifest missing: $MAN" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          python - <<'PY'
+          import yaml, sys, os, json, pathlib
+
+          man_path = ".github/autopatch/patches.yml"
+          with open(man_path, "r", encoding="utf-8") as f:
+              data = yaml.safe_load(f) or {}
+          patches = data.get("patches", [])
+          out = {"manifest": man_path, "patch_count": len(patches), "missing": [], "ok": []}
+          for p in patches:
+              pid = p.get("id", "<no-id>")
+              path = p.get("path")
+              if not path or not os.path.exists(path):
+                  out["missing"].append({"id": pid, "path": path})
+              else:
+                  out["ok"].append({"id": pid, "path": path})
+          print(json.dumps(out, indent=2))
+
+          # write a small summary to STDOUT for the step, the job summary was handled above
+          PY
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Next steps" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Run **autopatch-apply** (or your older **AutoPatch** workflow) to apply the manifest." >> "$GITHUB_STEP_SUMMARY"
+          echo "- If patch files show as missing, check \`path:\` entries in \`.github/autopatch/patches.yml\`." >> "$GITHUB_STEP_SUMMARY"
