@@ -39,7 +39,7 @@ jobs:
           RESET_IF_CONFLICT: ${{ inputs.reset_if_conflict }}
         run: |
           python - <<'PY'
-          import os, json, subprocess, sys, textwrap, pathlib, shlex, urllib.request, urllib.error
+          import os, json, subprocess, sys, textwrap, pathlib, urllib.request, urllib.error
 
           token = os.getenv("STEGVERSE_BOT_TOKEN")
           if not token:
@@ -57,16 +57,36 @@ jobs:
 
           reset_on_conflict = (os.getenv("RESET_IF_CONFLICT") or "true").lower() in ("1","true","yes","y")
 
-          # --- v1.1 content (template + autopatch) ---
+          # --- Tailored v1.1 template content ---
           commit_template_v11 = textwrap.dedent("""\
+          # 🧭 StegVerse Commit Template (v1.1)
+          #
+          # Format (Conventional Commits):
+          # <type>(<scope>): <summary>
+          # Example:
+          #   feat(api): add provider registry for hybrid bridge
+          #
+          # Types: feat | fix | chore | docs | refactor | test | perf | ci | build
+          # Scope: optional (e.g., api, hcb, infra)
+          #
+          # Body (optional):
+          # - What changed and why
+          # - Risks and mitigations
+          # - Follow-ups or TODOs
+          #
+          # Footer (optional):
+          # - BREAKING CHANGE: <description>
+          # - Refs: #123
+          # - Co-authored-by: Name <email@example.com>
+          #
+          # --- Write below this line ---
           <type>(<scope>): <summary>
-          # feat(api): add provider registry for hybrid bridge
 
-          # Body (optional): details on what changed and why
+          # Body (optional): what/why, key details, risks, follow-ups
 
-          # Footer (optional): references, automation tags, etc.
-          # Refs: #42
-          # Signed-off-by: Name <email@example.com>
+          # Footer (optional): references, automation tags, metadata
+          # Refs: #
+          # Signed-off-by:  <>
           # Version: v1.1
           """)
 
@@ -97,17 +117,13 @@ actions:
       message: "chore(autopatch): auto-configure commit template v1.1"
 """
 
-          def api(method, url, data=None, headers=None):
+          def api(method, url, data=None):
             req = urllib.request.Request(url, method=method)
             req.add_header("Authorization", f"token {token}")
             req.add_header("Accept", "application/vnd.github+json")
-            if headers:
-              for k,v in headers.items():
-                req.add_header(k,v)
-            if data is not None:
-              data = json.dumps(data).encode()
+            payload = json.dumps(data).encode() if data is not None else None
             try:
-              with urllib.request.urlopen(req, data=data) as resp:
+              with urllib.request.urlopen(req, data=payload) as resp:
                 return json.loads(resp.read() or b"{}")
             except urllib.error.HTTPError as e:
               err = e.read().decode()
@@ -120,7 +136,7 @@ actions:
                 "title": "chore(templates): commit template v1.1 + autopatch config",
                 "head": branch,
                 "base": "main",
-                "body": "Rollout of commit template v1.1 (autopatch)."
+                "body": "Rollout of commit template v1.1 with standardized guidance and autopatch configuration."
               })
               print(f"✅ PR opened for {repo}: {j.get('html_url')}")
             except Exception as e:
@@ -134,7 +150,6 @@ actions:
           def ensure_branch(repo_dir, branch):
             subprocess.run(["git","-C",str(repo_dir),"fetch","origin","--prune"], check=True)
             if branch_exists_remote(repo_dir, branch):
-              # create local branch tracking the remote if missing
               local = subprocess.run(["git","-C",str(repo_dir),"rev-parse","--verify",branch])
               if local.returncode != 0:
                 subprocess.run(["git","-C",str(repo_dir),"checkout","-b",branch,f"origin/{branch}"], check=True)
@@ -153,7 +168,6 @@ actions:
 
           def delete_remote_branch(repo, branch):
             owner, name = repo.split("/",1)
-            # Use GitHub API to delete ref
             try:
               api("DELETE", f"https://api.github.com/repos/{owner}/{name}/git/refs/heads/{branch}")
               print(f"🧹 Deleted remote branch {repo}:{branch}")
@@ -165,13 +179,11 @@ actions:
             repo_dir = pathlib.Path(repo.replace("/", "__"))
             subprocess.run(["git","clone",f"https://x-access-token:{token}@github.com/{repo}.git",str(repo_dir)], check=True)
 
-            # Set bot identity
             subprocess.run(["git","-C",str(repo_dir),"config","user.name","StegVerse Bot"], check=True)
             subprocess.run(["git","-C",str(repo_dir),"config","user.email","bot@stegverse.org"], check=True)
 
             ensure_branch(repo_dir, pr_branch)
 
-            # Rebase on origin/main; if conflicts and allowed, purge branch and recreate
             if not try_rebase(repo_dir, pr_branch):
               if reset_on_conflict:
                 print("🔁 Rebase failed — resetting branch as requested.")
@@ -200,10 +212,8 @@ actions:
             patches_file.write_text(txt, encoding="utf-8")
 
             subprocess.run(["git","-C",str(repo_dir),"add","-A"], check=True)
-            # Only commit if there are staged changes
             if subprocess.run(["git","-C",str(repo_dir),"diff","--cached","--quiet"]).returncode != 0:
               subprocess.run(["git","-C",str(repo_dir),"commit","-m","chore(templates): commit template v1.1 + autopatch config"], check=True)
-              # Try a normal push; if rejected (out-of-date), use --force-with-lease
               p = subprocess.run(["git","-C",str(repo_dir),"push","-u","origin",pr_branch])
               if p.returncode != 0:
                 subprocess.run(["git","-C",str(repo_dir),"push","--force-with-lease","-u","origin",pr_branch], check=True)
