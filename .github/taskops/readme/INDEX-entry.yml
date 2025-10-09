@@ -1,0 +1,11 @@
+id: docs-index-hcb
+summary: Add HCB entry into docs/INDEX.md (if file exists)
+confirm: auto
+auto_archive: true
+
+patch_lines:
+  - path: "docs/INDEX.md"
+    anchor: "^#\\s+"
+    position: after
+    text: |
+      - [Hybrid Collab Bridge](https://github.com/StegVerse/hybrid-collab-bridge) — API orchestration + human-coordination traces
