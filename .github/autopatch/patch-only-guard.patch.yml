@@ -1,0 +1,251 @@
+version: 1
+actions:
+  # ------------------------------------------------------------------
+  # A) Patch-only enforcement: block accidental edits outside autopatch/
+  # ------------------------------------------------------------------
+  - write_files:
+      - path: ".github/workflows/enforce-patch-only.yml"
+        mode: "100644"
+        contents: |
+          name: enforce-patch-only
+
+          on:
+            push:
+              branches: [ "main" ]
+            pull_request:
+
+          permissions:
+            contents: read
+
+          jobs:
+            guard:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+
+                - name: Compute changed files
+                  id: diff
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    # Determine changed files
+                    if [ "${{ github.event_name }}" = "pull_request" ]; then
+                      git fetch origin "${{ github.base_ref }}":"base"
+                      CHANGED=$(git diff --name-only --diff-filter=ACMRTUX "base...HEAD")
+                    else
+                      # push
+                      if git rev-parse HEAD^ >/dev/null 2>&1; then
+                        CHANGED=$(git diff --name-only --diff-filter=ACMRTUX HEAD^..HEAD)
+                      else
+                        CHANGED=$(git ls-files)
+                      fi
+                    fi
+
+                    echo "CHANGED<<EOF" >> "$GITHUB_OUTPUT"
+                    echo "${CHANGED}" >> "$GITHUB_OUTPUT"
+                    echo "EOF" >> "$GITHUB_OUTPUT"
+
+                - name: Enforce patch-only rule
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    echo "Changed files:"
+                    echo "${{ steps.diff.outputs.CHANGED }}" | sed 's/^/  - /'
+
+                    # Allow if automation is pushing (autopatch/export/etc)
+                    if [ "${GITHUB_ACTOR}" = "github-actions" ]; then
+                      echo "Automation actor detected; allow."
+                      exit 0
+                    fi
+
+                    # Allow explicit commit tags (handy for emergency unblock)
+                    MSG="$(git log -1 --pretty=%B || true)"
+                    if echo "$MSG" | grep -qiE '\[autopatch\]|\(autopatch\)|\[export\]|\(export\)'; then
+                      echo "Commit message contains autopatch/export tag; allow."
+                      exit 0
+                    fi
+
+                    # Allowed paths the human can touch directly
+                    # (everything else must be written by patches/workflows)
+                    allow_regex='^(\.github/autopatch/|\.github/workflows/autopatch-apply\.yml$|\.github/workflows/autopatch-inspect\.yml$|\.github/docs/|\.github/taskops/|CHECKLIST-HCB-FIRST-RUN\.md$|README-HCB\.md$)'
+
+                    BAD=0
+                    while IFS= read -r f; do
+                      [ -z "$f" ] && continue
+                      if ! echo "$f" | grep -qE "$allow_regex"; then
+                        echo "::error title=Patch-only violation::'$f' was changed outside the allowed patch lanes."
+                        BAD=1
+                      fi
+                    done <<< "${{ steps.diff.outputs.CHANGED }}"
+
+                    if [ "$BAD" -ne 0 ]; then
+                      echo ""
+                      echo "To change repo files, add/modify a patch under '.github/autopatch/**'"
+                      echo "and run the 'autopatch-apply' workflow (or let CI do it)."
+                      exit 1
+                    fi
+
+  # -----------------------------------------------
+  # B) Attic Sweeper (manual/scheduled + config file)
+  # -----------------------------------------------
+  - write_files:
+      - path: ".github/attic/config.yml"
+        mode: "100644"
+        contents: |
+          # Rules for moving files to ATTIC/ (kept for reference, re-openable)
+          # Each rule has:
+          # - glob: path pattern
+          # - reason: text shown in the attic index
+          # - since: optional date string (YYYY-MM-DD)
+          # - keep_git_history: true|false (default true)
+          rules:
+            # examples (customize later)
+            # - glob: "docs/OLD_*"
+            #   reason: "Replaced by README-HCB autogeneration"
+            #   since: "2025-10-01"
+            #   keep_git_history: true
+
+      - path: ".github/workflows/attic-sweeper.yml"
+        mode: "100644"
+        contents: |
+          name: attic-sweeper
+
+          on:
+            workflow_dispatch: {}
+            schedule:
+              - cron: "22 7 * * 0"  # weekly Sunday 07:22 UTC
+
+          permissions:
+            contents: write
+
+          jobs:
+            sweep:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - name: Install deps
+                  run: |
+                    python -m pip install --upgrade pip
+                    pip install pyyaml
+
+                - name: Sweep to ATTIC/ (per config)
+                  env:
+                    CFG: .github/attic/config.yml
+                  run: |
+                    set -euo pipefail
+                    [ -f "$CFG" ] || { echo "::notice::No $CFG found; nothing to sweep."; exit 0; }
+
+                    python - <<'PY'
+                    import yaml, sys, os, shutil, pathlib, datetime, fnmatch, subprocess
+
+                    cfg_path = os.environ.get("CFG", ".github/attic/config.yml")
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f) or {}
+                    rules = cfg.get("rules", [])
+
+                    root = pathlib.Path(".").resolve()
+                    today = datetime.date.today().isoformat()
+                    attic_root = root / "ATTIC" / today
+                    attic_root.mkdir(parents=True, exist_ok=True)
+
+                    moved = []
+                    for rule in rules:
+                        glob = rule.get("glob")
+                        reason = rule.get("reason","(no reason)")
+                        if not glob:
+                            continue
+                        for path in root.rglob("*"):
+                            if path.is_dir() or str(path).startswith(("ATTIC/", "./ATTIC/")):
+                                continue
+                            rel = path.relative_to(root)
+                            if fnmatch.fnmatch(str(rel), glob):
+                                dest = attic_root / rel
+                                dest.parent.mkdir(parents=True, exist_ok=True)
+                                # move file
+                                shutil.move(str(path), str(dest))
+                                moved.append((str(rel), reason))
+
+                    # write/update index
+                    if moved:
+                        index = attic_root / "INDEX.md"
+                        with index.open("a", encoding="utf-8") as w:
+                            w.write(f"# Attic Index — {today}\n\n")
+                            for rel, reason in moved:
+                                w.write(f"- `{rel}` — {reason}\n")
+                        # git commit
+                        subprocess.run(["git","config","user.name","StegVerse Bot"], check=False)
+                        subprocess.run(["git","config","user.email","bot@stegverse.org"], check=False)
+                        subprocess.run(["git","add","-A"], check=False)
+                        subprocess.run(["git","commit","-m",f"chore(attic): move {len(moved)} file(s) to ATTIC/{today}"], check=False)
+                        subprocess.run(["git","push"], check=False)
+                    else:
+                        print("No files matched attic rules; nothing moved.")
+                    PY
+
+  # -----------------------------------------------------------
+  # C) Patch template to keep new edits surgical and consistent
+  # -----------------------------------------------------------
+  - write_files:
+      - path: ".github/autopatch/_TEMPLATE.patch.yml"
+        mode: "100644"
+        contents: |
+          # Copy this file to a new name and add it to patches.yml
+          version: 1
+          actions:
+            - write_files:
+                - path: "path/to/new/or/updated/file.ext"
+                  mode: "100644"
+                  contents: |
+                    # your content here
+            - run_shell:
+                name: Optional validation
+                shell: bash
+                script: |
+                  set -euo pipefail
+                  echo "Validate here (e.g., yq, jq, yamllint, etc.)"
+            - commit:
+                message: "chore(autopatch): apply <short purpose>"
+
+  # -----------------------------------------------------------
+  # D) Seed TaskOps index (append regression section if missing)
+  # -----------------------------------------------------------
+  - run_shell:
+      name: Ensure TASKOPS-INDEX has Regression section
+      shell: bash
+      script: |
+        set -euo pipefail
+        mkdir -p .github/docs
+        FILE=".github/docs/TASKOPS-INDEX.md"
+        if [ ! -f "$FILE" ]; then
+          cat > "$FILE" <<'MD'
+# 🧭 TaskOps Index
+
+Central index for TaskOps-managed flows in this repo.
+
+## First-Run / Bring-up
+- **Checklist**: `CHECKLIST-HCB-FIRST-RUN.md`
+- **Watcher/Updater**: `.github/workflows/taskops-first-run-update.yml`
+- **Completion Gate**: `.github/workflows/taskops-first-run-complete.yml`
+
+## HCB Export
+- **Export**: `.github/workflows/export-hcb.yml`, `.github/workflows/export-hcb-weekly.yml`
+- **Docs AutoPatch**: `.github/autopatch/readme-hcb-badge.patch.yml`, `.github/autopatch/readme-hcb-ensure-sections.patch.yml`
+MD
+        fi
+
+        if ! grep -q '## Regression & Reliability' "$FILE"; then
+          cat >> "$FILE" <<'MD'
+
+## Regression & Reliability
+- **Regression Guard**: `.github/workflows/taskops-first-run-regression.yml`
+- **Activity Log**: `.github/docs/README-LOG.md`
+- **Patch-only Guard**: `.github/workflows/enforce-patch-only.yml`
+- **Attic Sweeper**: `.github/workflows/attic-sweeper.yml` / `.github/attic/config.yml`
+MD
+          echo "[AutoPatch] Appended Regression & Reliability section."
+        else
+          echo "[AutoPatch] TASKOPS-INDEX already contains Regression & Reliability."
+        fi
+
+  - commit:
+      message: "chore(guardrails): add patch-only guard, attic sweeper, template, taskops index"
