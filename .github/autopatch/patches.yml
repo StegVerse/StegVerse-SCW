@@ -4,3 +4,5 @@ patches:
   path: .github/autopatch/readme-hcb-ensure-sections.patch.yml
   - id: readme-hcb-badge
   path: .github/autopatch/readme-hcb-badge.patch.yml
+- id: taskops-readme-log
+  path: .github/autopatch/taskops-readme-log.patch.yml
