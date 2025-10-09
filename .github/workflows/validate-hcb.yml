@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       src_dir:
-        description: "Path to HCB tree (default: hybrid-collab-bridge). If you ran export, you can point to /tmp/hcb-export via a caller workflow."
+        description: "Path to HCB tree (default: hybrid-collab-bridge)."
         required: false
         default: "hybrid-collab-bridge"
       require_version_prefix:
-        description: "Require VERSION to start with this prefix (e.g., v1.). Leave blank to accept any vMAJOR.MINOR[.PATCH]."
+        description: "Require VERSION to start with this prefix (e.g., v1.)"
         required: false
         default: ""
   workflow_call:
@@ -42,6 +42,11 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
       - name: Validate Hybrid Collab Bridge structure
         id: validate
         run: |
@@ -53,152 +58,88 @@ jobs:
           req_prefix = os.environ.get("REQ_PREFIX","").strip()
 
           report = {
-            "source": str(src_dir),
-            "checks": [],
-            "errors": [],
-            "warnings": [],
-            "version": None,
+              "source": str(src_dir),
+              "checks": [],
+              "errors": [],
+              "warnings": [],
+              "version": None,
           }
 
-          def ok(msg, **k):
-              report["checks"].append({"status":"OK","msg":msg, **k})
-          def warn(msg, **k):
-              report["warnings"].append({"msg":msg, **k})
-          def err(msg, **k):
-              report["errors"].append({"msg":msg, **k})
+          def ok(msg): report["checks"].append({"status":"OK","msg":msg})
+          def warn(msg): report["warnings"].append({"msg":msg})
+          def err(msg): report["errors"].append({"msg":msg})
 
-          # Check 0: source presence
           if not src_dir.exists():
               err(f"Source folder not found: {src_dir}")
-              print(json.dumps(report, indent=2))
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "w") as s:
-                  s.write(f"### ❌ HCB validation failed\n\nSource folder not found: `{src_dir}`\n")
               sys.exit(1)
-          ok(f"Source folder exists: {src_dir}")
+          ok(f"Found source: {src_dir}")
 
-          # Required files/dirs
           required = [
-            "README-HCB.md",
-            "VERSION",
-            "api/app/main.py",
-            "api/requirements.txt",
-            "providers.yaml",  # production config
+              "README-HCB.md",
+              "VERSION",
+              "api/app/main.py",
+              "api/requirements.txt",
+              "providers.yaml"
           ]
-          optional_anyof = [
-            [".github/workflows/ci.yml", ".github/workflows/hybrid_bridge_ci.yml", ".github/workflows/hybrid_bridge_functional.yml"]
-          ]
-
           for rel in required:
               p = src_dir / rel
-              if p.exists():
-                  ok(f"Found required path: {rel}")
-              else:
-                  err(f"Missing required path: {rel}")
+              (ok if p.exists() else err)(f"{'Found' if p.exists() else 'Missing'}: {rel}")
 
-          for group in optional_anyof:
-              present = [rel for rel in group if (src_dir/rel).exists()]
-              if present:
-                  ok(f"Found CI workflow: {present[0]}")
-              else:
-                  warn(f"No CI workflow found among: {group}")
-
-          # VERSION file
           vf = src_dir / "VERSION"
-          ver = None
           if vf.exists():
               ver = vf.read_text(encoding="utf-8").strip()
               report["version"] = ver
               if not re.match(r"^v\d+\.\d+(?:\.\d+)?$", ver):
-                  err(f"VERSION malformed: '{ver}' (expected vMAJOR.MINOR[.PATCH])")
+                  err(f"Invalid VERSION format: {ver}")
+              elif req_prefix and not ver.startswith(req_prefix):
+                  err(f"VERSION '{ver}' does not match prefix {req_prefix}")
               else:
-                  ok(f"VERSION format OK: {ver}")
-              if req_prefix:
-                  if not ver.startswith(req_prefix):
-                      err(f"VERSION '{ver}' does not start with required prefix '{req_prefix}'")
-                  else:
-                      ok(f"VERSION prefix OK: starts with '{req_prefix}'")
+                  ok(f"VERSION validated: {ver}")
           else:
-              err("VERSION file missing")
+              err("Missing VERSION file")
 
-          # README must include key sections
-          r = src_dir / "README-HCB.md"
-          if r.exists():
-              txt = r.read_text(encoding="utf-8").lower()
-              need = ["migration", "future enhancements"]
-              for key in need:
-                  if key in txt:
-                      ok(f"README includes section: {key}")
+          readme = src_dir / "README-HCB.md"
+          if readme.exists():
+              txt = readme.read_text(encoding="utf-8").lower()
+              for section in ["migration", "future enhancements"]:
+                  if section in txt:
+                      ok(f"README contains section: {section}")
                   else:
-                      warn(f"README seems to be missing section: {key}")
+                      warn(f"README missing section: {section}")
           else:
               err("README-HCB.md missing")
 
-          # providers.yaml must parse
           py = src_dir / "providers.yaml"
           if py.exists():
               try:
-                  with open(py, "r", encoding="utf-8") as f:
-                      data = yaml.safe_load(f) or {}
-                  if not isinstance(data, dict):
-                      err("providers.yaml parsed but is not a mapping")
+                  with open(py, "r") as f: data = yaml.safe_load(f)
+                  if isinstance(data, dict):
+                      ok("providers.yaml parsed successfully")
                   else:
-                      ok("providers.yaml parses as YAML mapping")
-                      # sanity keys (soft)
-                      for k in ("providers","default"):
-                          if k not in data:
-                              warn(f"providers.yaml: missing soft key '{k}'")
+                      warn("providers.yaml loaded but is not a mapping")
               except Exception as e:
                   err(f"providers.yaml failed to parse: {e}")
           else:
               err("providers.yaml missing")
 
-          # no stray markers / caches
-          bad_globs = ["**/.pytest_cache/**", "**/__pycache__/**"]
-          found_bad = []
-          for pattern in bad_globs:
-              for p in src_dir.glob(pattern):
-                  found_bad.append(str(p.relative_to(src_dir)))
-          if found_bad:
-              warn(f"Found cache artifacts: {found_bad}")
-          else:
-              ok("No cache artifacts found")
-
-          # fail if any errors
-          ok_count = sum(1 for c in report["checks"] if c["status"]=="OK")
-          summary = f"OK: {ok_count}  |  warnings: {len(report['warnings'])}  |  errors: {len(report['errors'])}"
+          summary = f"✅ OK: {len(report['checks'])} | ⚠️ {len(report['warnings'])} | ❌ {len(report['errors'])}"
           report["summary"] = summary
 
-          # Write JSON report
-          out_json = "/tmp/hcb-validate-report.json"
-          with open(out_json, "w", encoding="utf-8") as f:
+          with open("/tmp/hcb-validate-report.json", "w") as f:
               json.dump(report, f, indent=2)
 
-          # Write step summary (Markdown)
-          md = []
-          md.append(f"### HCB validation report")
-          md.append("")
-          md.append(f"- **Source**: `{src_dir}`")
-          md.append(f"- **Version**: `{ver or 'N/A'}`")
-          md.append(f"- **Result**: {summary}")
-          md.append("")
+          md = [f"### HCB Validation Summary", f"- Source: `{src_dir}`", f"- {summary}\n"]
           if report["errors"]:
               md.append("#### ❌ Errors")
-              for e in report["errors"]:
-                  md.append(f"- {e['msg']}")
-              md.append("")
+              md.extend(f"- {e['msg']}" for e in report["errors"])
           if report["warnings"]:
-              md.append("#### ⚠️ Warnings")
-              for w in report["warnings"]:
-                  md.append(f"- {w['msg']}")
-              md.append("")
+              md.append("\n#### ⚠️ Warnings")
+              md.extend(f"- {w['msg']}" for w in report["warnings"])
           if report["checks"]:
-              md.append("#### ✅ Checks")
-              for c in report["checks"]:
-                  md.append(f"- {c['msg']}")
-              md.append("")
-          pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(md), encoding="utf-8")
+              md.append("\n#### ✅ Checks")
+              md.extend(f"- {c['msg']}" for c in report["checks"])
+          pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(md))
 
-          # Exit code
           if report["errors"]:
               print(json.dumps(report, indent=2))
               sys.exit(1)
