@@ -7,41 +7,99 @@ on:
         description: "Comma-separated targets (owner/repo). Blank -> StegVerse/hybrid-collab-bridge"
         required: false
         default: ""
-      export_branch:
-        description: "Branch to create/overwrite in a NEW repo (default: main)"
-        required: false
-        default: "main"
       push_strategy:
         description: |
           Push mode:
-          - direct  : push to export_branch (no PR)
-          - pr      : push to pr_branch and open a PR into pr_base
+          - direct : push to export_branch (no PR)
+          - pr     : push to pr_branch and open a PR into pr_base
         required: false
         default: "pr"
+      export_branch:
+        description: "Direct mode: branch to push (default: main)"
+        required: false
+        default: "main"
       pr_branch:
-        description: "Feature branch name for PR mode (e.g., chore/hcb-export-YYYYMMDD-HHMM)"
+        description: "PR mode: feature branch (default auto: chore/hcb-export-<version>)"
         required: false
         default: ""
       pr_base:
-        description: "PR base branch (target). Usually main."
+        description: "PR mode: base branch (default: main)"
         required: false
         default: "main"
-      pr_title:
-        description: "PR title (only used in pr mode)"
+      version_tag:
+        description: "Version tag (e.g., v1.2). Blank -> vYYYYMMDD.HHMM"
         required: false
-        default: "chore(hcb): sync export from StegVerse-SCW"
-      pr_body:
-        description: "PR body (only used in pr mode)"
+        default: ""
+      readme_note:
+        description: "Extra text appended under README version banner"
         required: false
-        default: "Automated export of hybrid-collab-bridge/ from StegVerse-SCW."
+        default: ""
+      tag_repo:
+        description: "Create/push a git tag named <version_tag> (true/false)"
+        required: false
+        default: "false"
+      release_create:
+        description: "Create a GitHub Release when tagging (true/false)"
+        required: false
+        default: "true"
+      release_draft:
+        description: "Release as draft (true/false)"
+        required: false
+        default: "false"
+      release_prerelease:
+        description: "Mark Release as prerelease (true/false)"
+        required: false
+        default: "false"
+      release_generate_notes:
+        description: "Let GitHub auto-generate release notes (true/false)"
+        required: false
+        default: "true"
+      release_name_template:
+        description: "Release name template (use {version})"
+        required: false
+        default: "Hybrid Collab Bridge {version}"
+      release_assets_csv:
+        description: "Comma-separated file paths to upload as release assets (in addition to export tarball). Optional."
+        required: false
+        default: ""
+      changelog_update:
+        description: "Insert a new entry at top of CHANGELOG.md (true/false)"
+        required: false
+        default: "true"
+      changelog_path:
+        description: "Path to CHANGELOG file"
+        required: false
+        default: "CHANGELOG.md"
+      changelog_entry:
+        description: "Markdown bullets for this version"
+        required: false
+        default: "- Exported hybrid-collab-bridge from StegVerse-SCW"
+      files_exclude_glob:
+        description: "Comma-separated glob patterns to exclude from export (e.g., .github/**,**/*.png)"
+        required: false
+        default: ""
+      sync_mode:
+        description: |
+          overlay : copy over (add/update only)
+          mirror  : clone remote branch, delete missing files, then sync (preserve history)
+        required: false
+        default: "overlay"
       force_with_lease:
         description: "Use --force-with-lease for pushes (true/false)"
+        required: false
+        default: "false"
+      dry_run:
+        description: "Build archives & show summary, but DO NOT push or create anything (true/false)"
         required: false
         default: "false"
 
 permissions:
   contents: write
   pull-requests: write
+
+concurrency:
+  group: export-hcb-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   export:
@@ -55,35 +113,73 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Export hybrid-collab-bridge and push
+      - name: Export, sync, and (optionally) release
         env:
           GITHUB_TOKEN_BOT: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+          TASKOPS_WEBHOOK_URL: ${{ secrets.TASKOPS_WEBHOOK_URL }}
           INPUT_REPOS_CSV: ${{ inputs.repos_csv }}
-          INPUT_EXPORT_BRANCH: ${{ inputs.export_branch }}
           INPUT_PUSH_STRATEGY: ${{ inputs.push_strategy }}
+          INPUT_EXPORT_BRANCH: ${{ inputs.export_branch }}
           INPUT_PR_BRANCH: ${{ inputs.pr_branch }}
           INPUT_PR_BASE: ${{ inputs.pr_base }}
-          INPUT_PR_TITLE: ${{ inputs.pr_title }}
-          INPUT_PR_BODY: ${{ inputs.pr_body }}
+          INPUT_VERSION_TAG: ${{ inputs.version_tag }}
+          INPUT_README_NOTE: ${{ inputs.readme_note }}
+          INPUT_TAG_REPO: ${{ inputs.tag_repo }}
+          INPUT_RELEASE_CREATE: ${{ inputs.release_create }}
+          INPUT_RELEASE_DRAFT: ${{ inputs.release_draft }}
+          INPUT_RELEASE_PRERELEASE: ${{ inputs.release_prerelease }}
+          INPUT_RELEASE_GENERATE_NOTES: ${{ inputs.release_generate_notes }}
+          INPUT_RELEASE_NAME_TEMPLATE: ${{ inputs.release_name_template }}
+          INPUT_RELEASE_ASSETS_CSV: ${{ inputs.release_assets_csv }}
+          INPUT_CHANGELOG_UPDATE: ${{ inputs.changelog_update }}
+          INPUT_CHANGELOG_PATH: ${{ inputs.changelog_path }}
+          INPUT_CHANGELOG_ENTRY: ${{ inputs.changelog_entry }}
+          INPUT_FILES_EXCLUDE_GLOB: ${{ inputs.files_exclude_glob }}
+          INPUT_SYNC_MODE: ${{ inputs.sync_mode }}
           INPUT_FORCE_WITH_LEASE: ${{ inputs.force_with_lease }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           python - <<'PY'
-          import os, sys, json, shutil, pathlib, subprocess, urllib.request, urllib.error, tempfile, datetime
+          import os, sys, json, shutil, pathlib, subprocess, urllib.request, urllib.error, tempfile, datetime, textwrap, re, fnmatch
+
+          # --- Helpers (env/flags) ---
+          def flag(name, default="false"):
+              return (os.getenv(name) or default).strip().lower() in ("true","1","yes","y")
 
           token = os.getenv("GITHUB_TOKEN_BOT")
           if not token:
               print("❌ Missing secret STEGVERSE_BOT_TOKEN", file=sys.stderr)
               sys.exit(1)
 
-          # Inputs & defaults
+          webhook = os.getenv("TASKOPS_WEBHOOK_URL") or None
+
           repos_csv = (os.getenv("INPUT_REPOS_CSV") or "").strip()
-          export_branch = (os.getenv("INPUT_EXPORT_BRANCH") or "main").strip() or "main"
           push_strategy = (os.getenv("INPUT_PUSH_STRATEGY") or "pr").strip().lower()
+          export_branch = (os.getenv("INPUT_EXPORT_BRANCH") or "main").strip() or "main"
           pr_branch_in = (os.getenv("INPUT_PR_BRANCH") or "").strip()
           pr_base = (os.getenv("INPUT_PR_BASE") or "main").strip() or "main"
-          pr_title = os.getenv("INPUT_PR_TITLE") or "chore(hcb): sync export from StegVerse-SCW"
-          pr_body  = os.getenv("INPUT_PR_BODY") or "Automated export of hybrid-collab-bridge/ from StegVerse-SCW."
-          force_with_lease = (os.getenv("INPUT_FORCE_WITH_LEASE") or "false").strip().lower() == "true"
+
+          version_tag = (os.getenv("INPUT_VERSION_TAG") or "").strip()
+          if not version_tag:
+              version_tag = "v" + datetime.datetime.utcnow().strftime("%Y%m%d.%H%M")
+          readme_note = os.getenv("INPUT_README_NOTE") or ""
+
+          tag_repo = flag("INPUT_TAG_REPO")
+          release_create = flag("INPUT_RELEASE_CREATE", "true")
+          release_draft = flag("INPUT_RELEASE_DRAFT")
+          release_prerelease = flag("INPUT_RELEASE_PRERELEASE")
+          release_generate_notes = flag("INPUT_RELEASE_GENERATE_NOTES", "true")
+          release_name_template = os.getenv("INPUT_RELEASE_NAME_TEMPLATE") or "Hybrid Collab Bridge {version}"
+          release_assets_csv = (os.getenv("INPUT_RELEASE_ASSETS_CSV") or "").strip()
+
+          changelog_update = flag("INPUT_CHANGELOG_UPDATE", "true")
+          changelog_path = (os.getenv("INPUT_CHANGELOG_PATH") or "CHANGELOG.md").strip()
+          changelog_entry = os.getenv("INPUT_CHANGELOG_ENTRY") or "- Exported hybrid-collab-bridge from StegVerse-SCW"
+
+          files_exclude_glob = [g.strip() for g in (os.getenv("INPUT_FILES_EXCLUDE_GLOB") or "").split(",") if g.strip()]
+          sync_mode = (os.getenv("INPUT_SYNC_MODE") or "overlay").strip().lower()
+          force_with_lease = flag("INPUT_FORCE_WITH_LEASE")
+          dry_run = flag("INPUT_DRY_RUN")
 
           if not repos_csv:
               repos_csv = "StegVerse/hybrid-collab-bridge"
@@ -97,12 +193,14 @@ jobs:
               print("❌ Source folder 'hybrid-collab-bridge/' not found in this repo.", file=sys.stderr)
               sys.exit(3)
 
-          # ---- HTTP helpers ---------------------------------------------------
-          def api(method, url, body=None, ok=(200,201,202,204)):
+          # --- HTTP helpers ---
+          def api(method, url, body=None, ok=(200,201,202,204), extra_headers=None):
               headers = {
                   "Authorization": f"token {token}",
                   "Accept": "application/vnd.github+json",
               }
+              if extra_headers:
+                  headers.update(extra_headers)
               data = None
               if body is not None:
                   data = json.dumps(body).encode()
@@ -120,9 +218,22 @@ jobs:
               except urllib.error.URLError as e:
                   raise RuntimeError(f"URLError {url}: {e}") from e
 
+          def upload_asset(owner, repo, rel_id, file_path):
+              # Use uploads.github.com
+              filename = pathlib.Path(file_path).name
+              url = f"https://uploads.github.com/repos/{owner}/{repo}/releases/{rel_id}/assets?name={urllib.parse.quote(filename)}"
+              headers = {"Authorization": f"token {token}", "Content-Type": "application/octet-stream"}
+              with open(file_path, "rb") as f:
+                  data = f.read()
+              req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+              with urllib.request.urlopen(req) as resp:
+                  if resp.status not in (200,201):
+                      raise RuntimeError(f"Asset upload failed {resp.status}")
+                  print(f"📎 Uploaded asset: {filename}")
+
           def me_login():
               me = api("GET", "https://api.github.com/user")
-              return me.get("login", "")
+              return me.get("login","")
 
           def is_org(owner):
               try:
@@ -133,7 +244,6 @@ jobs:
 
           def ensure_repo_exists(full):
               owner, name = full.split("/", 1)
-              # exists?
               try:
                   api("GET", f"https://api.github.com/repos/{owner}/{name}")
                   print(f"✅ Repo exists: {full}")
@@ -141,7 +251,9 @@ jobs:
               except Exception as e:
                   if "404" not in str(e):
                       raise
-              # create
+              if dry_run:
+                  print(f"🆕 (dry-run) Would create repo: {full}")
+                  return True
               payload = {"name": name, "private": True, "description": "Auto-exported by export-hcb"}
               if is_org(owner):
                   api("POST", f"https://api.github.com/orgs/{owner}/repos", body=payload, ok=(201,))
@@ -156,94 +268,259 @@ jobs:
               return True
 
           def open_pr(full, head_branch, base_branch, title, body):
+              if dry_run:
+                  print(f"🟢 (dry-run) Would open PR: {full} {head_branch} -> {base_branch}")
+                  return
               owner, name = full.split("/", 1)
               payload = {"title": title, "head": head_branch, "base": base_branch, "body": body}
-              try:
-                  pr = api("POST", f"https://api.github.com/repos/{owner}/{name}/pulls", body=payload, ok=(201,))
-                  print(f"🟢 PR opened: {pr.get('html_url')}")
-              except Exception as e:
-                  print(f"⚠️  Failed to open PR for {full}: {e}", file=sys.stderr)
+              pr = api("POST", f"https://api.github.com/repos/{owner}/{name}/pulls", body=payload, ok=(201,))
+              print(f"🟢 PR opened: {pr.get('html_url')}")
 
-          # ---- Export logic ---------------------------------------------------
+          def create_release(full, tag, name, body, draft, prerelease, generate_notes, assets_to_upload, default_archive):
+              if dry_run:
+                  print(f"🏷️ (dry-run) Would create release {tag} on {full}")
+                  return
+              owner, repo = full.split("/", 1)
+              payload = {
+                  "tag_name": tag,
+                  "name": name,
+                  "body": body,
+                  "draft": draft,
+                  "prerelease": prerelease,
+                  "generate_release_notes": generate_notes,
+              }
+              rel = api("POST", f"https://api.github.com/repos/{owner}/{repo}/releases", body=payload, ok=(201,))
+              print(f"🏷️  Release created: {rel.get('html_url')}")
+              rel_id = rel.get("id")
+              # Upload assets
+              for path in [default_archive, *assets_to_upload]:
+                  if path and pathlib.Path(path).exists():
+                      try:
+                          upload_asset(owner, repo, rel_id, path)
+                      except Exception as e:
+                          print(f"⚠️  Asset upload failed for {path}: {e}", file=sys.stderr)
+
+          # --- Export content helpers ---
+          def should_exclude(rel_path: str) -> bool:
+              if not files_exclude_glob:
+                  return False
+              return any(fnmatch.fnmatch(rel_path, pat) for pat in files_exclude_glob)
+
           def export_tree_to(path: pathlib.Path):
-              # Copy all children of src into path
-              for p in src.iterdir():
-                  dst = path / p.name
+              src_root = pathlib.Path("hybrid-collab-bridge").resolve()
+              for p in src_root.rglob("*"):
+                  rel = str(p.relative_to(src_root)).replace("\\","/")
+                  if rel == "" or rel.startswith(".git"):
+                      continue
+                  if should_exclude(rel):
+                      continue
+                  dst = path / rel
                   if p.is_dir():
-                      shutil.copytree(p, dst)
+                      dst.mkdir(parents=True, exist_ok=True)
                   else:
+                      dst.parent.mkdir(parents=True, exist_ok=True)
                       shutil.copy2(p, dst)
-              # Ensure top README
-              if not (path / "README.md").exists():
-                  (path / "README.md").write_text(
-                      "# hybrid-collab-bridge\n\nExported from StegVerse-SCW.\n",
+
+              # VERSION
+              (path / "VERSION").write_text(version_tag + "\n", encoding="utf-8")
+
+              # README banner (managed)
+              readme_path = path / "README.md"
+              banner = f"<!-- managed:export-hcb -->\n> **Hybrid Collab Bridge – {version_tag}**\n\n"
+              if readme_note.strip():
+                  banner += readme_note.strip() + "\n\n"
+              if readme_path.exists():
+                  existing = readme_path.read_text(encoding="utf-8")
+                  if "<!-- managed:export-hcb -->" in existing:
+                      new_content = re.sub(
+                          r"<!-- managed:export-hcb -->.*?(?:\r?\n){2,}",
+                          banner,
+                          existing,
+                          count=1,
+                          flags=re.S
+                      )
+                  else:
+                      new_content = banner + existing
+                  readme_path.write_text(new_content, encoding="utf-8")
+              else:
+                  readme_path.write_text(
+                      banner + "# hybrid-collab-bridge\n\nExported from StegVerse-SCW.\n",
                       encoding="utf-8"
                   )
+
+              # CHANGELOG
+              if changelog_update:
+                  cp = path / changelog_path
+                  today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+                  header = f"## {version_tag} - {today}\n\n"
+                  body = changelog_entry.strip() + "\n"
+                  if cp.exists():
+                      existing = cp.read_text(encoding="utf-8")
+                      new = header + body + "\n" + existing
+                  else:
+                      new = f"# Changelog\n\n{header}{body}\n"
+                  cp.write_text(new, encoding="utf-8")
 
           def run_git(*args, cwd):
               subprocess.run(["git", *args], cwd=str(cwd), check=True)
 
-          def push_repo(full):
-              created = ensure_repo_exists(full)
-              feature_branch = None
+          def summarize_to_step(markdown: str):
+              path = os.getenv("GITHUB_STEP_SUMMARY")
+              if path:
+                  with open(path, "a", encoding="utf-8") as f:
+                      f.write(markdown + "\n")
 
-              with tempfile.TemporaryDirectory() as tmpd:
-                  work = pathlib.Path(tmpd) / "export"
-                  work.mkdir(parents=True, exist_ok=True)
-                  export_tree_to(work)
-
-                  # init & commit
-                  branch_to_init = (feature_branch or export_branch)
-                  run_git("init", "-b", branch_to_init, cwd=work)
-                  run_git("config", "user.email", "bot@stegverse.org", cwd=work)
-                  run_git("config", "user.name", "StegVerse Bot", cwd=work)
-                  run_git("add", "-A", cwd=work)
-                  # commit only if there are staged changes
-                  rc = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(work)).returncode
-                  if rc != 0:
-                      run_git("commit", "-m", "export: snapshot from StegVerse-SCW", cwd=work)
-                  else:
-                      print("ℹ️ Nothing to commit in export worktree.")
-
-                  remote = f"https://x-access-token:{token}@github.com/{full}.git"
-                  run_git("remote", "add", "origin", remote, cwd=work)
-
-                  # choose push branch & PR logic
-                  if push_strategy == "pr":
-                      # build or use provided pr_branch
-                      fb = pr_branch_in or f"chore/hcb-export-{datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
-                      feature_branch = fb
-                      run_git("checkout", "-B", feature_branch, cwd=work)
-                      push_args = ["push", "-u", "origin", feature_branch]
-                      if force_with_lease:
-                          push_args.insert(1, "--force-with-lease")
-                      try:
-                          run_git(*push_args, cwd=work)
-                          print(f"🚀 Pushed feature branch: https://github.com/{full}/tree/{feature_branch}")
-                          open_pr(full, feature_branch, pr_base, pr_title, pr_body)
-                      except subprocess.CalledProcessError as e:
-                          print(f"❌ Push failed for {full}: {e}", file=sys.stderr)
-                          raise
-                  else:
-                      # direct mode -> push to export_branch
-                      push_args = ["push", "-u", "origin", export_branch]
-                      if force_with_lease:
-                          push_args.insert(1, "--force-with-lease")
-                      try:
-                          run_git(*push_args, cwd=work)
-                          print(f"🚀 Pushed: https://github.com/{full}/tree/{export_branch}")
-                      except subprocess.CalledProcessError as e:
-                          print(f"❌ Push failed for {full}: {e}", file=sys.stderr)
-                          raise
-
-          # Run for all targets
-          for repo in repos:
-              print(f"\n=== Processing {repo} ===")
+          def notify_webhook(payload: dict):
+              if not webhook:
+                  return
               try:
-                  push_repo(repo)
+                  body = json.dumps(payload).encode()
+                  req = urllib.request.Request(webhook, data=body, method="POST", headers={"Content-Type":"application/json"})
+                  urllib.request.urlopen(req).read()
               except Exception as e:
-                  print(f"❌ Failed for {repo}: {e}", file=sys.stderr)
-                  sys.exit(4)
+                  print(f"⚠️  Webhook notify failed: {e}", file=sys.stderr)
 
-          print("\n✅ All exports completed.")
+          # --- Core flow per repo ---
+          artifacts = []
+          summary_lines = [f"### Export HCB {version_tag}", ""]
+          for full in repos:
+              safe = full.replace("/", "__")
+              summary_lines.append(f"- Target: **{full}**")
+              try:
+                  created = ensure_repo_exists(full)
+
+                  # Work area & archive
+                  with tempfile.TemporaryDirectory() as tmpd:
+                      work = pathlib.Path(tmpd) / "export"
+                      work.mkdir(parents=True, exist_ok=True)
+
+                      if sync_mode == "mirror" and not dry_run:
+                          # Clone branch then wipe (preserve history)
+                          remote = f"https://x-access-token:{token}@github.com/{full}.git"
+                          # choose base branch based on strategy
+                          base_branch = export_branch if push_strategy == "direct" else (pr_branch_in or f"chore/hcb-export-{version_tag}")
+                          # If it doesn't exist, init repo after clone
+                          subprocess.run(["git","clone","--branch", base_branch, "--single-branch", remote, str(work)], check=False)
+                          if not (work / ".git").exists():
+                              # fallback: clone default and create branch
+                              subprocess.run(["git","clone",remote,str(work)], check=True)
+                              run_git("checkout","-B", base_branch, cwd=work)
+                          # Remove everything except .git
+                          for p in list(work.iterdir()):
+                              if p.name == ".git":
+                                  continue
+                              if p.is_dir():
+                                  shutil.rmtree(p)
+                              else:
+                                  p.unlink()
+                      # Now export contents into work
+                      export_tree_to(work)
+
+                      # Build tar.gz artifact
+                      archive = pathlib.Path(".").resolve() / f"export-hcb-{safe}.tar.gz"
+                      if archive.exists():
+                          archive.unlink()
+                      shutil.make_archive(str(archive.with_suffix("")), "gztar", root_dir=str(work))
+                      artifacts.append(str(archive))
+                      summary_lines.append(f"  - Archive: `{archive.name}`")
+
+                      if dry_run:
+                          summary_lines.append(f"  - Mode: **dry-run** (no push, no PR, no release)")
+                          continue
+
+                      # Init/commit and push
+                      # For mirror, repo already has .git; for overlay, start fresh
+                      if not (work / ".git").exists():
+                          run_git("init", "-b", "temp-init", cwd=work)
+                      run_git("config", "user.email", "bot@stegverse.org", cwd=work)
+                      run_git("config", "user.name", "StegVerse Bot", cwd=work)
+                      run_git("add", "-A", cwd=work)
+                      rc = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(work)).returncode
+                      if rc != 0:
+                          run_git("commit", "-m", f"export({version_tag}): snapshot from StegVerse-SCW", cwd=work)
+                      else:
+                          print("ℹ️ Nothing to commit in export worktree.")
+
+                      remote = f"https://x-access-token:{token}@github.com/{full}.git"
+                      if push_strategy == "pr":
+                          feature_branch = pr_branch_in or f"chore/hcb-export-{version_tag}"
+                          run_git("checkout", "-B", feature_branch, cwd=work)
+                          run_git("remote", "remove", "origin", cwd=work) if subprocess.run(["git","remote"], cwd=str(work), capture_output=True, text=True).stdout.strip() else None
+                          run_git("remote", "add", "origin", remote, cwd=work)
+                          if tag_repo and version_tag:
+                              subprocess.run(["git","tag","-f",version_tag], cwd=str(work), check=False)
+                          args = ["push", "-u", "origin", feature_branch]
+                          if force_with_lease:
+                              args.insert(1, "--force-with-lease")
+                          run_git(*args, cwd=work)
+                          if tag_repo and version_tag:
+                              subprocess.run(["git","push","origin","--tags"], cwd=str(work), check=False)
+                          summary_lines.append(f"  - Pushed branch: `{feature_branch}` → base `{pr_base}`")
+                          pr_title = f"chore(hcb): export {version_tag} from StegVerse-SCW"
+                          pr_body = textwrap.dedent(f"""
+                          Automated export of `hybrid-collab-bridge/` from **StegVerse-SCW**.
+
+                          - Version: **{version_tag}**
+                          - Branch: `{feature_branch}` → base `{pr_base}`
+
+                          Includes:
+                          - `VERSION` stamped with `{version_tag}`
+                          - README banner updated (managed block)
+                          - CHANGELOG entry inserted (if enabled)
+                          """).strip()
+                          open_pr(full, feature_branch, pr_base, pr_title, pr_body)
+                      else:
+                          run_git("checkout", "-B", export_branch, cwd=work)
+                          run_git("remote", "remove", "origin", cwd=work) if subprocess.run(["git","remote"], cwd=str(work), capture_output=True, text=True).stdout.strip() else None
+                          run_git("remote", "add", "origin", remote, cwd=work)
+                          if tag_repo and version_tag:
+                              subprocess.run(["git","tag","-f",version_tag], cwd=str(work), check=False)
+                          args = ["push", "-u", "origin", export_branch]
+                          if force_with_lease:
+                              args.insert(1, "--force-with-lease")
+                          run_git(*args, cwd=work)
+                          if tag_repo and version_tag:
+                              subprocess.run(["git","push","origin","--tags"], cwd=str(work), check=False)
+                          summary_lines.append(f"  - Pushed direct to: `{export_branch}`")
+
+                      # Release handling (only meaningful when tagging)
+                      if tag_repo and version_tag and release_create:
+                          name = release_name_template.replace("{version}", version_tag)
+                          rel_body = textwrap.dedent(f"""
+                          Exported hybrid-collab-bridge **{version_tag}** from StegVerse-SCW.
+
+                          Highlights:
+                          {changelog_entry}
+                          """).strip()
+                          extra_assets = [a.strip() for a in release_assets_csv.split(",") if a.strip()]
+                          create_release(
+                              full,
+                              version_tag,
+                              name,
+                              rel_body,
+                              release_draft,
+                              release_prerelease,
+                              release_generate_notes,
+                              extra_assets,
+                              str(archive)
+                          )
+
+                  summary_lines.append("  - ✅ Done")
+              except Exception as e:
+                  summary_lines.append(f"  - ❌ Error: {e}")
+                  summarize_to_step("\n".join(summary_lines))
+                  notify_webhook({"status":"failure","repo":full,"version":version_tag,"error":str(e)})
+                  raise
+
+          # Write step summary & notify
+          summarize_to_step("\n".join(summary_lines))
+          notify_webhook({"status":"success","targets":repos,"version":version_tag,"dry_run":dry_run})
           PY
+
+      - name: Upload export archives
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-hcb-archives
+          path: export-hcb-*.tar.gz
+          if-no-files-found: ignore
