@@ -1,0 +1,291 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/taskops/tasks.yml"
+        mode: "100644"
+        contents: |
+          # TaskOps tasks registry (version-aware)
+          # status: open | done | obsolete
+          # Optional keys: min_version, max_version, superseded_by, issue
+          #
+          # current_version is a fallback; workflow prefers hybrid-collab-bridge/VERSION if present.
+          version: 1
+          current_version: "v1.2"
+
+          tasks:
+            - id: hcb-export-initial-live
+              group: first_run
+              title: "Run first live export to StegVerse/hybrid-collab-bridge"
+              status: open
+              notes: "Switch export-hcb to dry_run=false and push/PR"
+              min_version: "v1.0"
+
+            - id: readme-auto-docs-rollup
+              group: first_run
+              title: "Confirm README-HCB autoupdate and sections"
+              status: open
+              notes: "Confirm badges + sections injected by AutoPatch"
+              min_version: "v1.0"
+
+            - id: migrate-to-v1-2
+              group: upgrade
+              title: "Adopt v1.2 exporter (mirror/overlay)"
+              status: open
+              notes: "When v1.2 active, older preparatory tasks become obsolete"
+              min_version: "v1.2"
+
+            - id: pre-v1-2-patch-cleanups
+              group: upgrade
+              title: "Pre v1.2 cleanup chores"
+              status: obsolete
+              superseded_by: "migrate-to-v1-2"
+              notes: "Auto-archived when v1.2 is the current version"
+
+      - path: "TASKS/README.md"
+        mode: "100644"
+        contents: |
+          # 🧩 TaskOps — Tasks Registry
+
+          A single source of truth for project tasks that CI can act on:
+          - **Version-aware**: tasks can be gated by `min_version`/`max_version`.
+          - **Lifecycle**: CI opens/closes issues, marks tasks obsolete, and logs activity.
+          - **Re-openable archives**: tasks marked obsolete are not deleted — they remain for future reuse.
+
+          ## Files
+          - `.github/taskops/tasks.yml` — registry (edit via PR; CI updates `issue`, `archived_at`, etc)
+          - `.github/workflows/taskops-tasks-lifecycle.yml` — manages issues + status
+          - `.github/docs/README-LOG.md` — append-only activity log
+
+          ## Task fields
+          ```yaml
+          - id: unique-snake_case
+            group: first_run|upgrade|ops|docs|custom
+            title: "Human-readable title"
+            status: open|done|obsolete
+            notes: "Any context"
+            min_version: "v1.2"   # optional
+            max_version: "v2.0"   # optional
+            superseded_by: "other_task_id"  # optional
+            issue:
+              number: 123
+              url: https://github.com/owner/repo/issues/123
+            archived_at: "2025-10-09T12:34:56Z"   # set by CI
+            archive_reason: "superseded or version window passed"  # set by CI
+          ```
+
+          ## Version source
+          - Primary: `hybrid-collab-bridge/VERSION` (if present)
+          - Fallback: `.github/taskops/tasks.yml: current_version`
+
+          ## Workflows interaction
+          - When a task is **open** and has no GitHub issue, CI opens one and stores its number.
+          - When a task becomes **done** or **obsolete**, CI closes the issue with a comment.
+          - CI appends a one-line entry to `.github/docs/README-LOG.md` for every change.
+
+      - path: ".github/workflows/taskops-tasks-lifecycle.yml"
+        mode: "100644"
+        contents: |
+          name: taskops-tasks-lifecycle
+
+          on:
+            workflow_dispatch: {}
+            push:
+              paths:
+                - ".github/taskops/tasks.yml"
+                - "hybrid-collab-bridge/VERSION"
+            schedule:
+              - cron: "17 5 * * *"   # daily
+
+          permissions:
+            contents: write
+            issues: write
+
+          jobs:
+            lifecycle:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.x"
+
+                - name: Install deps
+                  run: |
+                    python -m pip install --upgrade pip
+                    pip install pyyaml
+
+                - name: Process tasks
+                  env:
+                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                    REPO: ${{ github.repository }}
+                    SHA: ${{ github.sha }}
+                  run: |
+                    set -euo pipefail
+
+                    python - <<'PY'
+                    import os, sys, yaml, json, pathlib, datetime, urllib.request, urllib.error
+
+                    REPO = os.environ["REPO"]
+                    TOKEN = os.environ["GITHUB_TOKEN"]
+
+                    def vtuple(v):
+                      v = (v or "v0.0").lstrip("vV").strip()
+                      parts = [int(p) if p.isdigit() else 0 for p in v.split(".")]
+                      while len(parts) < 2: parts.append(0)
+                      return tuple(parts[:3])
+
+                    root = pathlib.Path(".")
+                    tasks_file = root / ".github" / "taskops" / "tasks.yml"
+                    if not tasks_file.exists():
+                      print("::warning::No tasks registry found, skipping.")
+                      sys.exit(0)
+
+                    with tasks_file.open("r", encoding="utf-8") as f:
+                      doc = yaml.safe_load(f) or {}
+
+                    # Determine current version (prefer module VERSION)
+                    version_path = root / "hybrid-collab-bridge" / "VERSION"
+                    if version_path.exists():
+                      current_version = version_path.read_text(encoding="utf-8").strip()
+                    else:
+                      current_version = (doc.get("current_version") or "v0.0").strip()
+
+                    cv = vtuple(current_version)
+
+                    tasks = doc.get("tasks", [])
+                    changed = False
+                    log_lines = []
+
+                    # Map for supersede checks
+                    by_id = {t.get("id"): t for t in tasks}
+
+                    # GH helpers
+                    def gh_req(method, url, data=None):
+                      req = urllib.request.Request(url, method=method)
+                      req.add_header("Authorization", f"token {TOKEN}")
+                      req.add_header("Accept", "application/vnd.github+json")
+                      if data is not None:
+                        body = json.dumps(data).encode()
+                        req.add_header("Content-Type", "application/json")
+                      else:
+                        body = None
+                      try:
+                        with urllib.request.urlopen(req, data=body) as r:
+                          return r.getcode(), json.loads(r.read() or b"{}")
+                      except urllib.error.HTTPError as e:
+                        try:
+                          payload = json.loads(e.read() or b"{}")
+                        except Exception:
+                          payload = {"message": str(e)}
+                        return e.code, payload
+
+                    def ensure_issue(t):
+                      if t.get("issue", {}).get("number"):
+                        return None
+                      title = f"[TaskOps] {t.get('title','(no title)')}"
+                      labels = ["taskops"]
+                      if t.get("group"): labels.append(f"group:{t['group']}")
+                      if t.get("min_version"): labels.append(f"min:{t['min_version']}")
+                      data = {
+                        "title": title,
+                        "body": f"Task ID: `{t['id']}`\n\nNotes: {t.get('notes','')}\n\nAuto-managed by TaskOps.",
+                        "labels": labels,
+                      }
+                      code, resp = gh_req("POST", f"https://api.github.com/repos/{REPO}/issues", data)
+                      if code in (200,201):
+                        t["issue"] = {"number": resp["number"], "url": resp.get("html_url")}
+                        return f"opened issue #{resp['number']} for {t['id']}"
+                      else:
+                        return f"failed to open issue for {t['id']}: {resp}"
+
+                    def comment_and_close(t, reason):
+                      iss = t.get("issue", {}).get("number")
+                      if not iss: return f"no issue to close for {t['id']}"
+                      gh_req("POST", f"https://api.github.com/repos/{REPO}/issues/{iss}/comments",
+                             {"body": f"Closing via TaskOps lifecycle: {reason}"})
+                      gh_req("PATCH", f"https://api.github.com/repos/{REPO}/issues/{iss}",
+                             {"state":"closed"})
+                      return f"closed issue #{iss} for {t['id']} ({reason})"
+
+                    for t in tasks:
+                      tid = t.get("id")
+                      status = (t.get("status") or "open").strip()
+                      minv = vtuple(t.get("min_version") or "v0.0")
+                      maxv = t.get("max_version")
+                      maxv_t = vtuple(maxv) if maxv else None
+                      supers = t.get("superseded_by")
+                      new_status = status
+                      reason = None
+
+                      # Obsolete by version window
+                      if maxv_t and cv > maxv_t and status != "obsolete":
+                        new_status = "obsolete"
+                        reason = f"version {current_version} > max {maxv}"
+
+                      # Obsolete by supersede
+                      if not reason and supers:
+                        sup = by_id.get(supers)
+                        if sup:
+                          # If superseding task exists (any status), consider this obsolete
+                          if status != "obsolete":
+                            new_status = "obsolete"
+                            reason = f"superseded by {supers}"
+
+                      # Future task not yet eligible — keep open, but don't create issue until we cross min_version
+                      eligible = cv >= minv
+
+                      # Manage issues for eligible open tasks
+                      if new_status == "open" and eligible:
+                        msg = ensure_issue(t)
+                        if msg:
+                          log_lines.append(msg)
+                          changed = True
+
+                      # Transition handling
+                      if new_status != status:
+                        t["status"] = new_status
+                        changed = True
+                        now = datetime.datetime.utcnow().isoformat() + "Z"
+                        if new_status == "obsolete":
+                          t["archived_at"] = now
+                          t["archive_reason"] = reason or "obsolete"
+                          log_lines.append(comment_and_close(t, t.get("archive_reason")))
+                        elif new_status == "done":
+                          log_lines.append(comment_and_close(t, "done"))
+                        else:
+                          # If moving back to open, ensure it has (or re-opens) an issue
+                          msg = ensure_issue(t)
+                          if msg:
+                            log_lines.append(msg)
+
+                    # Write back tasks.yml if changed
+                    if changed:
+                      with tasks_file.open("w", encoding="utf-8") as f:
+                        yaml.safe_dump(doc, f, sort_keys=False)
+                      # Commit
+                      os.system('git config user.name "StegVerse Bot"')
+                      os.system('git config user.email "bot@stegverse.org"')
+                      os.system('git add .github/taskops/tasks.yml')
+                      os.system('git commit -m "chore(taskops): update tasks registry (v%s)"' % current_version)
+                      os.system('git push')
+
+                    # Append log lines
+                    if log_lines:
+                      log = root / ".github" / "docs" / "README-LOG.md"
+                      log.parent.mkdir(parents=True, exist_ok=True)
+                      with log.open("a", encoding="utf-8") as w:
+                        ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                        for line in log_lines:
+                          w.write(f"- {ts} — {line}\n")
+                      # Commit log if changed
+                      os.system('git add .github/docs/README-LOG.md')
+                      os.system('git commit -m "chore(taskops): append activity log" || true')
+                      os.system('git push || true')
+
+                    print(f"Current version: {current_version}")
+                    print("Lifecycle processing complete.")
+                    PY
+  - commit:
+      message: "chore(taskops): bootstrap versioned tasks registry + lifecycle workflow"
