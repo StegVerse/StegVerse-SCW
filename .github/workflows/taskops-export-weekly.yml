@@ -1,0 +1,103 @@
+name: taskops-export-weekly
+
+on:
+  workflow_run:
+    workflows: ["export-hcb-weekly"]
+    types: [completed]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  triage-and-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare log file (idempotent)
+        run: |
+          set -euo pipefail
+          mkdir -p .github/docs
+          LOG=".github/docs/README-LOG.md"
+          if [ ! -f "$LOG" ]; then
+            cat > "$LOG" <<'MD'
+# Project Activity Log
+
+This log is maintained automatically by CI (TaskOps channel).
+
+| Timestamp (UTC) | Event | Status | Workflow | Run | SHA |
+|---|---|---|---|---|---|
+MD
+          fi
+
+      - name: Append log entry
+        env:
+          TS: ${{ github.event.workflow_run.updated_at }}
+          STATUS: ${{ github.event.workflow_run.conclusion }}
+          WF: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          printf '| %s | %s | %s | %s | `%s` |\n' \
+            "${TS}" "Export HCB (weekly)" "${STATUS}" "${WF}" "${SHA}" \
+            >> .github/docs/README-LOG.md
+          # add direct link to run (second line to keep table tidy)
+          echo "" >> .github/docs/README-LOG.md
+          echo "  ↳ [workflow run](${RUN_URL})" >> .github/docs/README-LOG.md
+          echo "" >> .github/docs/README-LOG.md
+
+      - name: Commit log (best-effort)
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet; then
+            git config user.name "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git add .github/docs/README-LOG.md
+            git commit -m "chore(taskops): log export-hcb-weekly run"
+            git push
+          fi
+
+      - name: Open or update failure issue (only on failure)
+        if: ${{ github.event.workflow_run.conclusion != 'success' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const title = `[TaskOps] export-hcb-weekly failed (run ${run.run_number})`;
+            const body = `Automated TaskOps triage.
+
+- **Workflow:** ${run.name}
+- **Status:** ${run.conclusion}
+- **Run:** ${run.html_url}
+- **SHA:** \`${run.head_sha}\`
+
+Please inspect logs and remediate. This issue will be reused for subsequent failures in the same week.`;
+
+            // Reuse the latest open failure issue if present
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'taskops,export,failed'
+            });
+
+            const match = issues.find(i => i.title.startsWith('[TaskOps] export-hcb-weekly failed'));
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['taskops','export','failed']
+              });
+            }
