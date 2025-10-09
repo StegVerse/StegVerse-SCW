@@ -1,0 +1,256 @@
+version: 1
+actions:
+  - write_files:
+      # --- TaskOps workflow ---
+      - path: ".github/workflows/taskops.yml"
+        mode: "100644"
+        contents: |
+          name: TaskOps – apply & archive
+
+          on:
+            workflow_dispatch:
+              inputs:
+                apply_only:
+                  description: "Apply tasks without archiving (true/false)"
+                  required: false
+                  default: "false"
+            push:
+              paths:
+                - ".github/taskops/**"
+
+          permissions:
+            contents: write
+            pull-requests: write
+
+          jobs:
+            run:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.x"
+
+                - name: Install deps
+                  run: pip install pyyaml
+
+                - name: TaskOps apply
+                  id: taskops
+                  env:
+                    APPLY_ONLY: ${{ inputs.apply_only }}
+                  run: |
+                    python - <<'PY'
+                    import os, sys, yaml, re, shutil, datetime, subprocess, pathlib, json
+
+                    repo = pathlib.Path(".").resolve()
+                    task_root = repo/".github"/"taskops"
+                    attic = repo/".github"/"attic"/"taskops"
+                    log_path = task_root/"README-LOG.md"
+
+                    if not task_root.exists():
+                        print("No .github/taskops/ present; nothing to do.")
+                        sys.exit(0)
+
+                    def load_yaml(p):
+                        with open(p, "r", encoding="utf-8") as f:
+                            return yaml.safe_load(f) or {}
+
+                    def write_text(path: pathlib.Path, text: str):
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(text, encoding="utf-8")
+
+                    def ensure_parent(path: pathlib.Path):
+                        path.parent.mkdir(parents=True, exist_ok=True)
+
+                    def apply_write_files(items):
+                        changed = []
+                        for it in items:
+                            path = repo / it["path"]
+                            mode = it.get("mode","100644")
+                            contents = it.get("contents","")
+                            if path.exists() and path.read_text(encoding="utf-8") == contents:
+                                continue
+                            ensure_parent(path)
+                            path.write_text(contents, encoding="utf-8")
+                            try:
+                                subprocess.run(["git","update-index","--chmod=+x" if mode=="100755" else "--chmod=-x", str(path)], check=False)
+                            except Exception:
+                                pass
+                            changed.append(str(path))
+                        return changed
+
+                    def apply_delete_paths(items):
+                        changed = []
+                        for it in items:
+                            path = repo / it
+                            if path.exists():
+                                if path.is_dir():
+                                    shutil.rmtree(path)
+                                else:
+                                    path.unlink()
+                                changed.append(str(path))
+                        return changed
+
+                    def apply_patch_lines(patches):
+                        changed = []
+                        for p in patches:
+                            file_path = repo / p["path"]
+                            if not file_path.exists():
+                                continue
+                            src = file_path.read_text(encoding="utf-8")
+                            anchor = re.compile(p["anchor"], re.M)
+                            m = anchor.search(src)
+                            if not m:
+                                continue
+                            position = p.get("position","after")
+                            block = p.get("text","")
+                            if position == "replace":
+                                new = anchor.sub(block, src, count=1)
+                            else:
+                                ins_at = m.start() if position=="before" else m.end()
+                                around = src[max(0, ins_at-500):ins_at+500]
+                                if block.strip() and block.strip() in around:
+                                    new = src
+                                else:
+                                    new = src[:ins_at] + block + src[ins_at:]
+                            if new != src:
+                                file_path.write_text(new, encoding="utf-8")
+                                changed.append(str(file_path))
+                        return changed
+
+                    # Gather tasks
+                    buckets = []
+                    for sub in ["tasks","cleanup","readme"]:
+                        d = task_root/sub
+                        if d.exists():
+                            for p in sorted(d.rglob("*.yml")):
+                                y = load_yaml(p)
+                                y["_file"] = str(p)
+                                y["_kind"] = sub
+                                buckets.append(y)
+
+                    if not buckets:
+                        print("No tasks found.")
+                        sys.exit(0)
+
+                    apply_only = (os.getenv("APPLY_ONLY","false").lower() in ("1","true","yes"))
+
+                    log_items = []
+                    any_changes = False
+
+                    for t in buckets:
+                        tid = t.get("id") or pathlib.Path(t["_file"]).stem
+                        summary = t.get("summary","")
+                        confirm = t.get("confirm","auto")  # auto | manual
+                        allow_reapply = bool(t.get("allow_reapply", False))
+
+                        if confirm == "manual" and not allow_reapply:
+                            status = "PENDING_CONFIRM"
+                            log_items.append({"id":tid,"kind":t["_kind"],"status":status,"summary":summary,"file":t["_file"]})
+                            continue
+
+                        changed_files = []
+
+                        for wf in t.get("write_files", []):
+                            changed_files += apply_write_files([wf])
+
+                        if t.get("delete_paths"):
+                            changed_files += apply_delete_paths(t["delete_paths"])
+
+                        if t.get("patch_lines"):
+                            changed_files += apply_patch_lines(t["patch_lines"])
+
+                        changed_files = sorted(set(changed_files))
+                        any_changes = any_changes or bool(changed_files)
+                        status = "APPLIED" if changed_files else "NOOP"
+                        log_items.append({
+                            "id": tid, "kind": t["_kind"], "status": status, "summary": summary,
+                            "file": t["_file"], "changed": changed_files
+                        })
+
+                        auto_archive = bool(t.get("auto_archive", True))
+                        if (status in ("APPLIED","NOOP")) and auto_archive and not apply_only:
+                            ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                            target = attic/f"{ts}__{tid}.yml"
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(t["_file"], target)
+
+                    lines = []
+                    lines.append("# TaskOps Log\n")
+                    lines.append(f"_Generated: {datetime.datetime.utcnow().isoformat()}Z_\n")
+                    lines.append("\n| id | kind | status | summary | source file | changed |\n|---|---|---|---|---|---|")
+                    for it in log_items:
+                        changed = "<br>".join(it.get("changed") or []) if it.get("changed") else ""
+                        lines.append(f"| `{it['id']}` | {it['kind']} | **{it['status']}** | {it['summary']} | `{it['file']}` | {changed} |")
+                    (task_root/"README-LOG.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    PY
+
+                - name: Create branch, commit, PR
+                  env:
+                    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  run: |
+                    set -e
+                    branch="taskops/apply-$(date +%Y%m%d-%H%M%S)"
+                    git config user.name "taskops-bot"
+                    git config user.email "bot@stegverse.org"
+                    git checkout -b "$branch"
+                    git add -A
+                    if git diff --cached --quiet; then
+                      echo "No repo changes; skipping PR."
+                      exit 0
+                    fi
+                    git commit -m "taskops: apply tasks & update README-LOG"
+                    git push -u origin "$branch"
+                    gh pr create --title "TaskOps: apply & archive" --body "Automated TaskOps run. See \`.github/taskops/README-LOG.md\`."
+
+      # --- Directories & seed files ---
+      - path: ".github/taskops/README-LOG.md"
+        mode: "100644"
+        contents: |
+          # TaskOps Log
+          _This file is generated by the TaskOps workflow. Do not edit manually._
+
+      - path: ".github/taskops/tasks/README-pointer.yml"
+        mode: "100644"
+        contents: |
+          id: readme-pointer-hcb
+          summary: Add link to the new Hybrid Collab Bridge repo in root README
+          confirm: auto
+          auto_archive: true
+
+          patch_lines:
+            - path: "README.md"
+              anchor: "^#\\s+"
+              position: after
+              text: |
+                ## Hybrid Collab Bridge
+
+                The Hybrid Collab Bridge has been exported to its own repository:
+                - https://github.com/StegVerse/hybrid-collab-bridge
+
+                ---
+
+      - path: ".github/taskops/readme/INDEX-entry.yml"
+        mode: "100644"
+        contents: |
+          id: docs-index-hcb
+          summary: Add HCB entry into docs/INDEX.md (if file exists)
+          confirm: auto
+          auto_archive: true
+
+          patch_lines:
+            - path: "docs/INDEX.md"
+              anchor: "^#\\s+"
+              position: after
+              text: |
+                - [Hybrid Collab Bridge](https://github.com/StegVerse/hybrid-collab-bridge) — API orchestration + human-coordination traces
+
+      - path: ".github/taskops/cleanup/.keep"
+        mode: "100644"
+        contents: ""
+
+  - commit:
+      message: "chore(taskops): bootstrap TaskOps lane (workflow, seeds, log)"
