@@ -1,0 +1,67 @@
+name: export-hcb
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_owner:
+        description: "Destination owner/org (e.g., StegVerse)"
+        required: true
+        default: "StegVerse"
+      target_repo:
+        description: "Destination repo name"
+        required: true
+        default: "hybrid-collab-bridge"
+      force_push:
+        description: "Force-push snapshot (overwrites remote)"
+        required: false
+        default: "true"
+  push:
+    paths:
+      - "hybrid-collab-bridge/**"
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SCW
+        uses: actions/checkout@v4
+
+      - name: Prepare snapshot
+        id: prep
+        run: |
+          set -euo pipefail
+          test -d hybrid-collab-bridge || { echo "hybrid-collab-bridge/ not found"; exit 1; }
+          mkdir -p /tmp/hcb-export
+          rsync -a --delete hybrid-collab-bridge/ /tmp/hcb-export/
+          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Push to standalone repo
+        env:
+          TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+          OWNER: ${{ inputs.target_owner || 'StegVerse' }}
+          REPO:  ${{ inputs.target_repo  || 'hybrid-collab-bridge' }}
+          FORCE: ${{ inputs.force_push   || 'true' }}
+        run: |
+          set -euo pipefail
+          cd /tmp/hcb-export
+
+          git init -b main
+          git config user.name "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add -A
+          git commit -m "export: snapshot from StegVerse-SCW @ ${{ steps.prep.outputs.sha }}"
+
+          url="https://x-access-token:${TOKEN}@github.com/${OWNER}/${REPO}.git"
+          git remote add origin "$url"
+
+          if [ "${FORCE}" = "true" ]; then
+            git push -f origin main
+          else
+            git push origin main
+          fi
+
+      - name: Output
+        run: echo "✅ Exported hybrid-collab-bridge to ${OWNER}/${REPO}"
