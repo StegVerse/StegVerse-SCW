@@ -1,0 +1,66 @@
+version: 1
+actions:
+  - run_shell:
+      name: Ensure README-HCB.md has required sections
+      shell: bash
+      script: |
+        set -euo pipefail
+        README="hybrid-collab-bridge/README-HCB.md"
+
+        if [ ! -f "$README" ]; then
+          echo "::warning title=README missing::$README not found, creating a new one"
+          mkdir -p "$(dirname "$README")"
+          cat > "$README" <<'MD'
+# Hybrid Collab Bridge (HCB)
+
+This README is maintained automatically by StegVerse CI (Hybrid Bridge Channel).
+
+MD
+        fi
+
+        NEED_MIGRATION=0
+        NEED_ENH=0
+
+        grep -qE '^##[[:space:]]+Migration' "$README" || NEED_MIGRATION=1
+        grep -qE '^##[[:space:]]+Future Enhancements' "$README" || NEED_ENH=1
+
+        if [ "$NEED_MIGRATION" -eq 1 ]; then
+          cat >> "$README" <<'MD'
+
+---
+
+## 🧰 Migration
+
+Follow these steps to move from an existing StegVerse module to the latest HCB structure.
+
+1. Ensure your `VERSION` file is up to date.
+2. Regenerate your export package using `export-hcb.yml`.
+3. Validate with the built-in HCB validator.
+4. Push to your integration target (direct push or PR).
+
+MD
+        fi
+
+        if [ "$NEED_ENH" -eq 1 ]; then
+          cat >> "$README" <<'MD'
+
+---
+
+## 🧱 Future Enhancements
+
+| Feature | Description |
+|--------|-------------|
+| TaskOps integration | Central task tracking for exports |
+| Auto version increment | Automatically bump tag (e.g., v1.2 → v1.3) |
+| Rollback workflow | Auto-revert failed exports |
+| Bridge integrity tests | Validate file structure before release |
+| ATTIC integration | Archive old releases automatically |
+
+Maintained automatically by StegVerse CI (Hybrid Bridge Channel).
+
+MD
+        fi
+
+        echo "[AutoPatch] README updated (Migration: $NEED_MIGRATION, Future Enhancements: $NEED_ENH)."
+  - commit:
+      message: "docs(hcb): ensure README-HCB has Migration + Future Enhancements (autopatch)"
