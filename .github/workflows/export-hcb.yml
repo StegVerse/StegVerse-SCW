@@ -11,8 +11,24 @@ on:
         description: "Destination repo name"
         required: true
         default: "hybrid-collab-bridge"
+      tag_name:
+        description: "Tag to create (e.g., v0.1.0). Leave blank to skip tagging."
+        required: false
+        default: "v0.1.0"
+      release_title:
+        description: "Release title (optional)"
+        required: false
+        default: "Hybrid Collab Bridge"
+      release_notes:
+        description: "Release notes (optional; if blank and tag present, auto-generate)"
+        required: false
+        default: ""
       force_push:
         description: "Force-push snapshot (overwrites remote)"
+        required: false
+        default: "true"
+      create_release:
+        description: "Create a GitHub Release when tag_name is provided"
         required: false
         default: "true"
   push:
@@ -38,12 +54,21 @@ jobs:
           rsync -a --delete hybrid-collab-bridge/ /tmp/hcb-export/
           echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+      - name: Write VERSION file (if tag provided)
+        env:
+          TAG_NAME: ${{ github.event.inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${TAG_NAME:-}" ]; then
+            echo "${TAG_NAME}" > /tmp/hcb-export/VERSION
+          fi
+
       - name: Push to standalone repo
         env:
           TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
-          OWNER: ${{ inputs.target_owner || 'StegVerse' }}
-          REPO:  ${{ inputs.target_repo  || 'hybrid-collab-bridge' }}
-          FORCE: ${{ inputs.force_push   || 'true' }}
+          OWNER: ${{ github.event.inputs.target_owner || 'StegVerse' }}
+          REPO:  ${{ github.event.inputs.target_repo  || 'hybrid-collab-bridge' }}
+          FORCE: ${{ github.event.inputs.force_push   || 'true' }}
         run: |
           set -euo pipefail
           cd /tmp/hcb-export
@@ -63,5 +88,42 @@ jobs:
             git push origin main
           fi
 
-      - name: Output
-        run: echo "✅ Exported hybrid-collab-bridge to ${OWNER}/${REPO}"
+      - name: Create tag and push (if requested)
+        if: ${{ inputs.tag_name != '' }}
+        env:
+          TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+          OWNER: ${{ github.event.inputs.target_owner || 'StegVerse' }}
+          REPO:  ${{ github.event.inputs.target_repo  || 'hybrid-collab-bridge' }}
+          TAG:   ${{ github.event.inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          cd /tmp/hcb-export
+          # Create an annotated tag at HEAD
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release (optional)
+        if: ${{ inputs.tag_name != '' && inputs.create_release == 'true' }}
+        env:
+          TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+          OWNER: ${{ github.event.inputs.target_owner || 'StegVerse' }}
+          REPO:  ${{ github.event.inputs.target_repo  || 'hybrid-collab-bridge' }}
+          TAG:   ${{ github.event.inputs.tag_name }}
+          TITLE: ${{ github.event.inputs.release_title }}
+          NOTES: ${{ github.event.inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          # If notes are blank, ask GitHub to auto-generate
+          if [ -z "${NOTES}" ]; then
+            body='{"tag_name":"'"${TAG}"'","name":"'"${TITLE}"'","generate_release_notes":true}'
+          else
+            # Escape quotes for JSON
+            esc_notes=$(printf '%s' "${NOTES}" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+            body='{"tag_name":"'"${TAG}"'","name":"'"${TITLE}"'","body":'"${esc_notes}"'}'
+          fi
+
+          curl -sSf -X POST \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "${body}" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/releases"
