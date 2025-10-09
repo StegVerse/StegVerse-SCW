@@ -1,27 +1,2 @@
-# AutoPatch manifest
-# This file is read by runner workflows to decide which patch specs to apply.
-#
-# Common runners in this repo:
-# - .github/workflows/autopatch-apply.yml        (applies .github/autopatch/patches.yml)
-# - .github/workflows/AutoPatch.yml / auto_patch.yml  (often calls scripts/autopatch_runner.py)
-# - .github/workflows/self_repair_autopatch.yml  (self-healing variant)
-# - scripts/autopatch_runner.py                  (--manifest .github/autopatch/patches.yml)
-# - scripts/auto_patch.py                        (legacy system using patches/manifest.json)
-#
-# TIP: Run the "autopatch-inspect" workflow to see which of these exist *now*.
-
 version: 1
-patches:
-  # Example entries (keep yours here)
-  # - id: taskops-readme-log
-  #   path: .github/autopatch/taskops-readme-log.patch.yml
-  - id: taskops-readme-log
-    path: .github/autopatch/taskops-readme-log.patch.yml
-  # - id: readme-hcb-ensure-sections
-  #   path: .github/autopatch/readme-hcb-ensure-sections.patch.yml
-  - id: readme-hcb-ensure-sections
-    path: .github/autopatch/readme-hcb-ensure-sections.patch.yml
-  # - id: readme-hcb-badge
-  #   path: .github/autopatch/readme-hcb-badge.patch.yml
-  - id: readme-hcb-badge
-    path: .github/autopatch/readme-hcb-badge.patch.yml
+patches: []
