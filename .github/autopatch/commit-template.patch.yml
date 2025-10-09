@@ -1,17 +1,38 @@
 version: 1
 actions:
-  - write_files:
-      - path: "templates/commit_template.txt"
-        mode: "100644"
-        contents: |
-          <type>(<scope>): <summary>
-          # feat(api): add provider registry for hybrid bridge
-          #
-          # Body (optional): what/why, key details, risks, follow-ups
-          #
-          # Footer (optional): references, automation tags, metadata
-          # Refs: #42
-          # Signed-off-by: Name <email@example.com>
-          # Version: v1.1
-  - commit:
-      message: "chore(templates): add/refresh universal commit template v1.1 (autopatch)" DM
+- write_files:
+    - path: "templates/commit_template.txt"
+      mode: "100644"
+      contents: |
+                # 🧭 StegVerse Commit Template (v1.1)
+                #
+                # Format (Conventional Commits):
+                # <type>(<scope>): <summary>
+                # Example:
+                #   feat(api): add provider registry for hybrid bridge
+                #
+                # Types: feat | fix | chore | docs | refactor | test | perf | ci | build
+                # Scope: optional (e.g., api, hcb, infra)
+                #
+                # Body (optional):
+                # - What changed and why
+                # - Risks and mitigations
+                # - Follow-ups or TODOs
+                #
+                # Footer (optional):
+                # - BREAKING CHANGE: <description>
+                # - Refs: #123
+                # - Co-authored-by: Name <email@example.com>
+                #
+                # --- Write below this line ---
+                <type>(<scope>): <summary>
+
+                # Body (optional): what/why, key details, risks, follow-ups
+
+                # Footer (optional): references, automation tags, metadata
+                # Refs: #
+                # Signed-off-by:  <>
+                # Version: v1.1
+
+- commit:
+    message: "chore(templates): add/update universal commit template v1.1 (autopatch)"
