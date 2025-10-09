@@ -1,0 +1,107 @@
+name: taskops-first-run-update
+
+on:
+  # Auto-update the checklist when these finish
+  workflow_run:
+    workflows:
+      - autopatch-apply
+      - export-hcb
+      - export-hcb-weekly
+      - validate-hcb
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine which box to tick
+        id: map
+        env:
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          WF_CONC: ${{ github.event.workflow_run.conclusion }}
+          WF_RUNID: ${{ github.event.workflow_run.id }}
+          WF_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          echo "Workflow: $WF_NAME ($WF_CONC)"
+          MARKER=""
+
+          if [ "$WF_CONC" != "success" ]; then
+            echo "No tick — run not successful."
+            echo "marker=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          case "$WF_NAME" in
+            autopatch-apply)    MARKER="APPLY_AP" ;;
+            export-hcb)
+              # Figure out if it was a dry-run or live push (best-effort)
+              # We read the logs metadata is not trivial here; so we tick DRYRUN always,
+              # and if a follow-up push/PR is detected we tick LIVE in a separate pass.
+              MARKER="EXPORT_DRYRUN"
+              ;;
+            export-hcb-weekly)  MARKER="WEEKLY_READY" ;;
+            validate-hcb)       MARKER="VALIDATE_OK" ;;
+            *)
+              MARKER=""
+              ;;
+          esac
+
+          echo "marker=$MARKER" >> $GITHUB_OUTPUT
+          echo "run_url=$WF_URL" >> $GITHUB_OUTPUT
+
+      - name: Update checklist
+        if: ${{ steps.map.outputs.marker != '' }}
+        env:
+          MARKER: ${{ steps.map.outputs.marker }}
+          RUN_URL: ${{ steps.map.outputs.run_url }}
+        run: |
+          set -euo pipefail
+          FILE="CHECKLIST-HCB-FIRST-RUN.md"
+          [ -f "$FILE" ] || { echo "::warning::Checklist not found, nothing to update."; exit 0; }
+
+          # Turn "- [ ] (MARKER)" into "- [x] (MARKER)"
+          # Do not re-check if already checked.
+          perl -0777 -pe "s/- \\[ \\] \\(${MARKER}\\)/- [x] (${MARKER})/g" -i "$FILE"
+
+          # If export-hcb succeeded, try to detect LIVE pushes separately:
+          if [ "$MARKER" = "EXPORT_DRYRUN" ]; then
+            # If the target repo exists and last export-hcb push happened recently,
+            # we can mark EXPORT_LIVE manually via manual rerun or future enhancement.
+            # (Left as tick-once-you-do-a-live-run — keeps logic simple & robust.)
+            :
+          fi
+
+          # Token OK heuristic: if export-hcb succeeded at least once, tick TOKEN_OK.
+          if grep -qE '^- \\[x\\] \\(EXPORT_DRYRUN\\)' "$FILE"; then
+            perl -0777 -pe "s/- \\[ \\] \\(TOKEN_OK\\)/- [x] (TOKEN_OK)/g" -i "$FILE" || true
+          fi
+
+          # README sections/badge heuristics: if autopatch-apply succeeded, tick them.
+          if [ "$MARKER" = "APPLY_AP" ]; then
+            perl -0777 -pe "s/- \\[ \\] \\(APPLY_SECTIONS\\)/- [x] (APPLY_SECTIONS)/g" -i "$FILE" || true
+            perl -0777 -pe "s/- \\[ \\] \\(APPLY_BADGE\\)/- [x] (APPLY_BADGE)/g" -i "$FILE" || true
+          fi
+
+          # Weekly ready: success marks WEEKLY_READY already.
+
+          # Append/update timestamp
+          TS="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          perl -0777 -pe "s/\\*\\*Last auto\\-update:\\*\\*.*$/**Last auto-update:** $TS/" -i "$FILE" \
+            || echo "**Last auto-update:** $TS" >> "$FILE"
+
+          # Commit if changed
+          if ! git diff --quiet -- "$FILE"; then
+            git config user.name "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git add "$FILE"
+            git commit -m "chore(taskops): auto-tick ${MARKER} on first-run checklist"
+            git push
+          else
+            echo "No changes to commit."
+          fi
