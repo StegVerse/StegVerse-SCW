@@ -1,0 +1,208 @@
+version: 1
+actions:
+  - run_shell:
+      name: "Generate .github/docs/README-HCB-AUTOMATION.md from workflows"
+      script: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import os, sys, pathlib, textwrap, yaml
+
+        root = pathlib.Path(".").resolve()
+        docs_dir = root / ".github" / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        out_fp = docs_dir / "README-HCB-AUTOMATION.md"
+
+        def load_yaml(path):
+          if not path.exists():
+            return None
+          with path.open("r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+        wf_core = load_yaml(root / ".github" / "workflows" / "export-hcb.yml")
+        wf_nightly = load_yaml(root / ".github" / "workflows" / "export-hcb-nightly.yml")
+        wf_weekly = load_yaml(root / ".github" / "workflows" / "export-hcb-weekly.yml")
+
+        # --- Extract core inputs & defaults safely ---
+        def get_core_inputs(wf):
+          defaults = {
+            "repos_csv": "StegVerse/hybrid-collab-bridge",
+            "export_branch": "main",
+            "sync_mode": "mirror",
+            "push_strategy": "direct",
+            "version_tag": "v1.2",
+            "dry_run": "true",
+            "tag_repo": "true",
+            "release_create": "true",
+          }
+          if not wf:
+            return defaults
+          # Prefer workflow_dispatch inputs block if present
+          try:
+            inputs = (wf.get("on", {}) or {}).get("workflow_dispatch", {}).get("inputs", {}) or {}
+            for k in defaults:
+              v = inputs.get(k, {}).get("default")
+              if v is not None:
+                defaults[k] = str(v)
+          except Exception:
+            pass
+          return defaults
+
+        core = get_core_inputs(wf_core)
+
+        # --- Extract crons ---
+        def get_crons(wf):
+          crons = []
+          if not wf:
+            return crons
+          try:
+            sched = (wf.get("on", {}) or {}).get("schedule", []) or []
+            for item in sched:
+              if isinstance(item, dict) and "cron" in item:
+                crons.append(item["cron"])
+          except Exception:
+            pass
+          return crons
+
+        nightly_crons = get_crons(wf_nightly)
+        weekly_crons  = get_crons(wf_weekly)
+
+        # --- Build README content dynamically from parsed data ---
+        table_rows = [
+          ("repos_csv", "Comma-separated list of target repositories (`owner/repo`)", core["repos_csv"]),
+          ("export_branch", "Target branch to export to (created if missing)", core["export_branch"]),
+          ("sync_mode", "`mirror` = replace contents, `overlay` = merge only new files", core["sync_mode"]),
+          ("push_strategy", "`direct` = push commits, `pr` = open pull request", core["push_strategy"]),
+          ("version_tag", "Version tag for commit/release", core["version_tag"]),
+          ("dry_run", "`true` = build only, no push", core["dry_run"]),
+          ("tag_repo", "`true` = create/force-push version tag", core["tag_repo"]),
+          ("release_create", "`true` = create GitHub release", core["release_create"]),
+        ]
+
+        nightly_cron_txt = ", ".join(nightly_crons) if nightly_crons else "—"
+        weekly_cron_txt  = ", ".join(weekly_crons) if weekly_crons else "—"
+
+        content = f"""# 🧩 Hybrid-Collab-Bridge Automation Workflows
+
+This repository includes a fully automated export pipeline for synchronizing the **`hybrid-collab-bridge/`** module from the main `StegVerse-SCW` repository into its dedicated repository (`StegVerse/hybrid-collab-bridge`).  
+All automation is handled through three coordinated GitHub Actions workflows.
+
+---
+
+<details>
+<summary><strong>🔹 1. <code>export-hcb.yml</code></strong> — Core Export Workflow</summary>
+
+### Purpose  
+Performs the actual export, packaging, and (optionally) pushing or opening a PR to the target repository.
+
+### Usage  
+Run manually from **Actions → export-hcb → Run workflow**.
+
+### Inputs
+
+| Input | Description | Default |
+|-------|-------------|---------|
+"""
+        for k, desc, default in table_rows:
+          content += f"| `{k}` | {desc} | `{default}` |\n"
+
+        content += """
+### Secrets Required
+- `STEGVERSE_BOT_TOKEN` → Fine-grained PAT with:
+  - Repository: *Read & Write*  
+  - Actions: *Read*  
+  - Metadata: *Read*
+
+### Outputs
+- Uploads a tarball (`hcb-export.tar.gz`) containing the exported bridge snapshot.  
+- Optionally pushes to the target repo or opens a PR.
+
+</details>
+
+---
+
+<details>
+<summary><strong>🔹 2. <code>export-hcb-nightly.yml</code></strong> — Nightly Validation Workflow</summary>
+
+### Purpose  
+Performs a **nightly dry-run validation** of the export logic to detect issues early without modifying any remote repository.
+
+### Schedule  
+Runs at (CRON): **{nightly_cron_txt}**.
+
+### Actions  
+- Calls `export-hcb.yml` using `dry_run: true`  
+- Does **not** push, tag, or release  
+- Validates directory structure and file changes  
+- Uploads the nightly export artifact for inspection
+
+### Manual Run  
+You can trigger this workflow manually from the Actions page to perform a one-off validation.
+
+</details>
+
+---
+
+<details>
+<summary><strong>🔹 3. <code>export-hcb-weekly.yml</code></strong> — Weekly Two-Stage Release</summary>
+
+### Purpose  
+Executes a two-stage **weekly release routine** every Sunday:
+1. Stage 1: Dry-run validation (`precheck`)
+2. Stage 2: Actual push/tag/release (`push`) if validation succeeds
+
+### Schedule  
+Runs at (CRON): **{weekly_cron_txt}**.
+
+### Manual Option  
+Run manually and pass `force_push=true` to skip the dry-run and push immediately.
+
+### Flow Summary
+1. Nightly workflow validates daily.  
+2. Weekly workflow confirms the Sunday snapshot is valid.  
+3. Push triggers automatically (or via `force_push=true`).  
+4. A new tag (`{core["version_tag"]}`, or specified) and release are created.
+
+</details>
+
+---
+
+## 🧠 Design Notes & Best Practices
+
+- **Single Source of Truth:**  
+  `export-hcb.yml` is the reusable core. Both scheduled jobs reuse it via `workflow_call`.
+
+- **Autonomous CI/CD:**  
+  Nightly and weekly workflows automatically inherit any future updates to `export-hcb.yml`.
+
+- **Self-Healing Export:**  
+  If `StegVerse/hybrid-collab-bridge` doesn’t exist, it’s automatically created via the bot token.
+
+- **Auditable & Traceable:**  
+  Each export produces logs and artifacts showing whether files changed, tags were pushed, or PRs opened.
+
+- **Clear Error Output:**  
+  Guard clauses produce GitHub-native annotations (`::error title=...::message`) for rapid debugging.
+
+---
+
+## 🧾 Visual Flow Overview
+
+```text
+┌────────────────────────────┐
+│ StegVerse-SCW repository   │
+│  └── hybrid-collab-bridge/ │
+└────────────┬───────────────┘
+             │  export-hcb.yml
+             ▼
+     Build + Package snapshot
+             │
+             ▼
+    export-hcb-nightly ({nightly_cron_txt})
+    export-hcb-weekly ({weekly_cron_txt})
+             │
+             ▼
+   ┌─────────────────────────────┐
+   │ StegVerse/hybrid-collab-bridge │
+   │   • PR / Direct Commit         │
+   │   • Tag / Release ({core["version_tag"]})  │
+   └─────────────────────────────┘
