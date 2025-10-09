@@ -1,0 +1,105 @@
+name: autopatch-apply
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - ".github/autopatch/**"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Apply patches from manifest
+        env:
+          MANIFEST: .github/autopatch/patches.yml
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import sys, os, yaml, pathlib, textwrap, subprocess
+
+          manifest_path = os.environ.get("MANIFEST", ".github/autopatch/patches.yml")
+          if not os.path.exists(manifest_path):
+            print(f"::error title=Manifest missing::{manifest_path} not found")
+            sys.exit(1)
+
+          with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f) or {}
+
+          patches = manifest.get("patches", [])
+          if not patches:
+            print("No patches to apply (manifest has empty 'patches').")
+            sys.exit(0)
+
+          def run(cmd, check=True):
+            print("+", " ".join(cmd))
+            r = subprocess.run(cmd, text=True)
+            if check and r.returncode != 0:
+              sys.exit(r.returncode)
+
+          def apply_action(action):
+            if "write_files" in action:
+              for fdesc in action["write_files"]:
+                path = fdesc["path"]
+                mode = fdesc.get("mode", "100644")
+                contents = fdesc.get("contents", "")
+                p = pathlib.Path(path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(contents, encoding="utf-8")
+                # set mode
+                run(["chmod", mode, path], check=False)
+
+            if "run_shell" in action:
+              sh = action["run_shell"]
+              script = sh.get("script", "")
+              shell = sh.get("shell", "bash")
+              run([shell, "-lc", script])
+
+            if "commit" in action:
+              msg = action["commit"].get("message", "chore(autopatch): apply")
+              # only commit if there are changes
+              if subprocess.run(["git", "diff", "--quiet"]).returncode != 0 or \
+                 subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+                run(["git", "config", "user.name", "StegVerse Bot"])
+                run(["git", "config", "user.email", "bot@stegverse.org"])
+                run(["git", "add", "-A"])
+                run(["git", "commit", "-m", msg])
+              else:
+                print("No changes to commit for this action.")
+
+          any_changes = False
+
+          for item in patches:
+            pid = item.get("id", "<no-id>")
+            path = item.get("path")
+            if not path or not os.path.exists(path):
+              print(f"::warning title=Patch skipped::{pid} → {path} missing")
+              continue
+            print(f"\n=== Applying patch: {pid} ({path}) ===")
+            with open(path, "r", encoding="utf-8") as pf:
+              spec = yaml.safe_load(pf) or {}
+            for action in spec.get("actions", []):
+              apply_action(action)
+              # detect staged/untracked changes
+              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0 or \
+                 subprocess.run(["git", "diff", "--quiet"]).returncode != 0:
+                any_changes = True
+
+          # push once at the end (best-effort)
+          if any_changes:
+            run(["git", "push"], check=False)
+          else:
+            print("Nothing changed; no push.")
+          PY
