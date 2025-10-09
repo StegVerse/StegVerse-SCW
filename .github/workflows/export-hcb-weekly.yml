@@ -2,22 +2,71 @@ name: export-hcb-weekly
 
 on:
   schedule:
-    - cron: "30 3 * * 0"   # Sundays at 03:30 UTC
-  workflow_dispatch:
-    inputs:
-      force_push:
-        description: "Skip dry-run and push immediately"
-        required: false
-        default: "false"
+    - cron: "0 7 * * 1"  # Mondays 07:00 UTC
+  workflow_dispatch: {}
 
 permissions:
   contents: write
   pull-requests: write
-  issues: read
 
 jobs:
-  precheck:
-    if: ${{ github.event_name == 'schedule' && (github.event.inputs.force_push != 'true') }}
+  validate-strict:
+    name: Validate HCB (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build payload (same as export)
+        run: |
+          set -euo pipefail
+          ROOT="$PWD"
+          SRC="$ROOT/hybrid-collab-bridge"
+          [ -d "$SRC" ] || { echo "::error::hybrid-collab-bridge/ not found"; exit 1; }
+
+          WORK="/tmp/hcb-export"
+          rm -rf "$WORK"; mkdir -p "$WORK"
+
+          rsync -a --delete \
+            --exclude 'sessions/' \
+            --exclude '**/__pycache__/' \
+            --exclude '**/.pytest_cache/' \
+            --exclude '.applied_*' \
+            --exclude '.env*' \
+            "$SRC/" "$WORK/"
+
+          # Carry VERSION (required)
+          if [ ! -f "$WORK/VERSION" ]; then
+            echo "::error title=Missing VERSION::VERSION required for weekly export"
+            exit 1
+          fi
+
+      - name: Strict validator
+        id: strict
+        run: |
+          set -euo pipefail
+          SRC="/tmp/hcb-export"
+          README="$SRC/README-HCB.md"
+
+          # Fail if README missing
+          [ -f "$README" ] || { echo "::error::README-HCB.md missing in export payload"; exit 1; }
+
+          # Enforce required sections (no warnings allowed)
+          grep -qE '^##[[:space:]]+Migration' "$README" || { echo "::error::README missing section: Migration"; exit 1; }
+          grep -qE '^##[[:space:]]+Future Enhancements' "$README" || { echo "::error::README missing section: Future Enhancements"; exit 1; }
+
+          # Enforce VERSION format vX.Y[.Z]
+          if ! grep -Eq '^v[0-9]+(\.[0-9]+){1,2}$' "$SRC/VERSION"; then
+            echo "::error::VERSION must look like v1.2 or v1.2.3"
+            exit 1
+          fi
+
+  export:
+    name: Export HCB (weekly)
+    needs: validate-strict
     uses: ./.github/workflows/export-hcb.yml
     secrets: inherit
     with:
@@ -25,22 +74,7 @@ jobs:
       export_branch: "main"
       sync_mode: "mirror"
       push_strategy: "direct"
-      version_tag: "v1.2"
-      dry_run: "true"      # run validations only
-      tag_repo: "false"
-      release_create: "false"
-
-  push:
-    needs: [precheck]
-    if: ${{ always() && (needs.precheck.result == 'success' || github.event.inputs.force_push == 'true') }}
-    uses: ./.github/workflows/export-hcb.yml
-    secrets: inherit
-    with:
-      repos_csv: "StegVerse/hybrid-collab-bridge"
-      export_branch: "main"
-      sync_mode: "mirror"
-      push_strategy: "direct"   # set "pr" to open a PR instead of direct push
-      version_tag: "v1.2"
-      dry_run: "false"          # actual push
-      tag_repo: "true"
-      release_create: "true"
+      version_tag: ""            # optional: keep blank to not retag weekly
+      dry_run: "false"           # do the real export on weekly schedule
+      tag_repo: "false"          # weekly: typically avoid retagging
+      release_create: "false"    # weekly: avoid noisy releases
