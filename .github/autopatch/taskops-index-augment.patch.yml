@@ -1,0 +1,40 @@
+version: 1
+actions:
+  - run_shell:
+      name: Ensure TASKOPS-INDEX entry for regression guard
+      shell: bash
+      script: |
+        set -euo pipefail
+        mkdir -p .github/docs
+        FILE=".github/docs/TASKOPS-INDEX.md"
+        if [ ! -f "$FILE" ]; then
+          cat > "$FILE" <<'MD'
+# 🧭 TaskOps Index
+
+Central index for TaskOps-managed flows in this repo.
+
+## First-Run / Bring-up
+- **Checklist**: `CHECKLIST-HCB-FIRST-RUN.md`
+- **Watcher/Updater**: `.github/workflows/taskops-first-run-update.yml`
+- **Completion Gate**: `.github/workflows/taskops-first-run-complete.yml`
+
+## HCB Export
+- **Export**: `.github/workflows/export-hcb.yml`, `.github/workflows/export-hcb-weekly.yml`
+- **Docs AutoPatch**: `.github/autopatch/readme-hcb-badge.patch.yml`, `.github/autopatch/readme-hcb-ensure-sections.patch.yml`
+
+MD
+        fi
+
+        BLOCK='
+## Regression & Reliability
+- **Regression Guard**: `.github/workflows/taskops-first-run-regression.yml` (unlocks on 2+ weekly failures and opens a regression issue)
+- **Activity Log**: `.github/docs/README-LOG.md` (appended by TaskOps watchers)
+'
+        if ! grep -q '## Regression & Reliability' "$FILE"; then
+          printf "%s\n" "$BLOCK" >> "$FILE"
+          echo "[AutoPatch] Appended Regression & Reliability section to TASKOPS-INDEX.md"
+        else
+          echo "[AutoPatch] TASKOPS-INDEX already has Regression & Reliability section"
+        fi
+  - commit:
+      message: "docs(taskops): index regression guard + activity log (autopatch)"
