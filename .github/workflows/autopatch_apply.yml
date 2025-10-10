@@ -6,6 +6,7 @@ on:
     branches: [ "main" ]
     paths:
       - ".github/autopatch/**"
+      - "scripts/autopatch_runner.py"
 
 permissions:
   contents: write
@@ -14,94 +15,146 @@ permissions:
 jobs:
   apply:
     runs-on: ubuntu-latest
+    env:
+      MANIFEST: .github/autopatch/patches.yml
+      DEFER: .github/autopatch/patches_deferred.yml
+      OUTDIR: self_healing_out
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
+      # Needs full history if your runner inspects previous commits; shallow is fine otherwise
         uses: actions/checkout@v4
 
-      # ✅ Reusable composite setup — installs Python and YAML libraries
-      - uses: ./.github/actions/setup-common-python.yml
+      - name: Setup common Python
+        id: py
+        uses: ./.github/actions/setup-common-python
+        with:
+          python-version: "3.11"
+          cache: "true"
+          extra-packages: ""   # add space-separated pip pkgs if you want
 
-      - name: Apply patches from manifest
-        shell: bash
+      - name: Ensure system tools
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import os, sys, subprocess, pathlib
-          try:
-              import yaml
-          except Exception:
-              try:
-                  from ruamel import yaml as ryaml
-                  yaml = ryaml
-              except Exception as e:
-                  print(f"::error title=YAML missing::{e}")
-                  sys.exit(1)
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
-          root = pathlib.Path(".").resolve()
-          manifest = root / ".github" / "autopatch" / "patches.yml"
-
-          if not manifest.exists():
-              print(f"::warning title=Manifest missing::{manifest} not found")
-              sys.exit(0)
-
-          with open(manifest, "r", encoding="utf-8") as f:
-              data = yaml.safe_load(f) or {}
-          patches = data.get("patches") if isinstance(data, dict) else data
-
-          if not patches:
-              print("::warning::No patches defined.")
-              sys.exit(0)
-
-          def ensure_parent(p):
-              p.parent.mkdir(parents=True, exist_ok=True)
-
-          for patch in patches:
-              pid = patch.get("id", "(unnamed)")
-              path = patch.get("path")
-              if not path:
-                  print(f"::warning::Skipping {pid}, missing path.")
-                  continue
-              pf = root / path
-              if not pf.exists():
-                  print(f"::warning::Patch file {path} not found.")
-                  continue
-
-              print(f"🩹 Applying patch {pid}")
-              with open(pf, "r", encoding="utf-8") as f:
-                  doc = yaml.safe_load(f) or {}
-              for action in doc.get("actions", []):
-                  if "write_files" in action:
-                      for spec in action["write_files"]:
-                          dest = root / spec["path"]
-                          ensure_parent(dest)
-                          dest.write_text(spec["contents"], encoding="utf-8")
-                          if "mode" in spec:
-                              os.chmod(dest, int(spec["mode"], 8))
-                          print(f"   ✍️  wrote {dest}")
-                  elif "commit" in action:
-                      msg = (
-                          action["commit"]
-                          if isinstance(action["commit"], str)
-                          else action["commit"].get("message", "chore(autopatch): update")
-                      )
-                      subprocess.run(["git", "add", "-A"], check=False)
-                      subprocess.run(["git", "commit", "-m", msg], check=False)
-                      print(f"   🧾 committed: {msg}")
-          print("✅ All patches processed successfully.")
-          PY
-
-      - name: Push changes
-        shell: bash
+      - name: Seed manifests if missing
         run: |
-          if ! git diff --quiet; then
-            git add -A
+          set -euo pipefail
+          mkdir -p .github/autopatch "${OUTDIR}"
+          if [ ! -f "${MANIFEST}" ]; then
+            cat > "${MANIFEST}" <<'YML'
+version: 1
+patches: []
+YML
+            echo "Seeded ${MANIFEST}"
           fi
+          if [ ! -f "${DEFER}" ]; then
+            cat > "${DEFER}" <<'YML'
+version: 1
+patches: []
+YML
+            echo "Seeded ${DEFER}"
+          fi
+
+      - name: Dry-run AutoPatch (preview)
+        id: dryrun
+        run: |
+          set -euo pipefail
+          python scripts/autopatch_runner.py \
+            --manifest "${MANIFEST}" \
+            --dry-run || true
+          # capture any report files into summary if present
+          if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
+            echo "### AutoPatch Dry-Run Report" >> "$GITHUB_STEP_SUMMARY"
+            cat "${OUTDIR}/AUTOPATCH_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Apply AutoPatch (prune + defer)
+        id: apply
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python scripts/autopatch_runner.py \
+            --manifest "${MANIFEST}" \
+            --prune-success \
+            --defer-file "${DEFER}"
+          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Capture apply exit (if failed)
+        if: failure()   # only runs if prior step failed
+        run: |
+          echo "Apply returned non-zero; marking in outputs."
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Commit manifest updates (if any)
+        run: |
+          set -euo pipefail
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add "${MANIFEST}" "${DEFER}" || true
           if ! git diff --cached --quiet; then
-            git -c user.name="StegVerse Bot" \
-                -c user.email="bot@stegverse.org" \
-                commit -m "chore(autopatch): apply patches"
-            git push
-            echo "✅ Changes pushed."
+            git commit -m "autopatch: prune successes, defer blocked items"
+            git push origin HEAD:main
           else
-            echo "ℹ️ No changes detected."
+            echo "No manifest changes to commit."
           fi
+
+      - name: Upload AutoPatch artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopatch-report-${{ github.run_id }}
+          path: |
+            self_healing_out/AUTOPATCH_REPORT.json
+            self_healing_out/AUTOPATCH_REPORT.md
+          if-no-files-found: warn
+
+      - name: TaskOps ledger (best-effort append)
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p .github/taskops
+          ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          applied="unknown"
+          if [ -f "${OUTDIR}/AUTOPATCH_REPORT.json" ]; then
+            applied=$(jq -r '.summary.applied // "0"' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo "0")
+          fi
+          cat > /tmp/taskops_entry.json <<JSON
+{"ts":"${ts}","job":"autopatch-apply","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${GITHUB_REF_NAME}","applied":"${applied}"}
+JSON
+          # append to ledger if present; create if you want to start tracking now
+          if [ -f ".github/taskops/ledger.jsonl" ]; then
+            cat /tmp/taskops_entry.json >> .github/taskops/ledger.jsonl
+            git add .github/taskops/ledger.jsonl
+            if ! git diff --cached --quiet; then
+              git commit -m "chore(taskops): log autopatch-apply run $GITHUB_RUN_ID"
+              git push origin HEAD:main
+            fi
+          else
+            echo "TaskOps ledger not found (skipping append). To enable, create .github/taskops/ledger.jsonl"
+          fi
+
+      - name: Summarize
+        if: always()
+        run: |
+          echo "### AutoPatch Apply Summary" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
+            cat "${OUTDIR}/AUTOPATCH_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No AUTOPATCH_REPORT.md generated._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set job outcome
+        if: always()
+        run: |
+          # Prefer the apply step's explicit output if present; otherwise succeed.
+          CODE="${{ steps.apply.outputs.exit_code }}"
+          if [ "$CODE" = "1" ]; then
+            echo "AutoPatch apply reported errors — failing job."
+            exit 1
+          fi
+          echo "AutoPatch apply completed."
