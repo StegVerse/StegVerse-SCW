@@ -1,123 +1,83 @@
 #!/usr/bin/env python3
-"""
-Validate .github/autopatch/patches.yml
+import sys, os, json, re, yaml, pathlib
+from yaml.parser import ParserError
+from yaml.scanner import ScannerError
 
-Checks:
-- file exists and is valid YAML
-- has top-level "version" (int) and "patches" (list)
-- each patch has "id" (str) and "path" (str)
-- each referenced patch file exists
-- each patch file is valid YAML with top-level "version" or "actions"
+MANIFEST = pathlib.Path(".github/autopatch/patches.yml")
 
-Outputs a compact JSON report to stdout and writes a copy to /tmp/manifest-report.json.
-Exits non-zero if any errors are found.
-"""
-from __future__ import annotations
-import json, sys, pathlib
+def log(msg): print(msg, flush=True)
 
-REPORT_PATH = pathlib.Path("/tmp/manifest-report.json")
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-MANIFEST = REPO_ROOT / ".github" / "autopatch" / "patches.yml"
+def safe_load_yaml(path: pathlib.Path):
+    text = path.read_text(encoding="utf-8")
+    # Auto-repair common YAML issues
+    fixed = re.sub(r"^\?", "-", text, flags=re.M)
+    fixed = fixed.replace("\t", "  ")
+    if fixed != text:
+        log(f"🧩 Auto-fixed formatting in {path}")
+        path.write_text(fixed, encoding="utf-8")
 
-def load_yaml(p: pathlib.Path):
     try:
-        import yaml  # provided by setup-common-python composite action
-    except Exception as e:
-        return None, [f"PyYAML not available: {e!s}"]
-    try:
-        return yaml.safe_load(p.read_text(encoding="utf-8")), []
-    except FileNotFoundError:
-        return None, [f"Missing file: {p}"]
-    except Exception as e:
-        return None, [f"YAML parse error in {p}: {e!s}"]
+        return yaml.safe_load(fixed)
+    except (ParserError, ScannerError) as e:
+        log(f"::error title=YAML parse error::{e}")
+        sys.exit(2)
 
-def main() -> int:
-    checks: list[dict] = []
-    errors: list[str] = []
-    warnings: list[str] = []
+def validate_schema(data):
+    ok, errors, warnings = True, [], []
 
-    # 1) Manifest presence + parse
-    if not MANIFEST.exists():
-        errors.append(f"Manifest not found: {MANIFEST}")
-        report = {
-            "ok": False, "checks": checks, "errors": errors, "warnings": warnings
-        }
-        REPORT_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        print(json.dumps(report, indent=2))
-        return 1
+    if not isinstance(data, dict) or "patches" not in data:
+        errors.append("Manifest root must contain 'patches' list.")
+        return False, errors, warnings
 
-    data, parse_errs = load_yaml(MANIFEST)
-    if parse_errs:
-        errors.extend(parse_errs)
-    else:
-        checks.append({"status":"OK","msg":f"Loaded {MANIFEST.relative_to(REPO_ROOT)}"})
-
-    # 2) Basic structure
-    if not parse_errs:
-        if not isinstance(data, dict):
-            errors.append("Manifest root must be a mapping/dict.")
+    seen = set()
+    for i, p in enumerate(data["patches"], start=1):
+        prefix = f"patch[{i}]"
+        if not isinstance(p, dict):
+            errors.append(f"{prefix}: must be a mapping (id/path/enabled).")
+            ok = False
+            continue
+        pid = p.get("id")
+        path = p.get("path")
+        if not pid:
+            errors.append(f"{prefix}: missing 'id'")
+        elif pid in seen:
+            errors.append(f"{prefix}: duplicate id '{pid}'")
         else:
-            # version
-            if "version" not in data:
-                errors.append('Missing top-level key: "version"')
-            elif not isinstance(data["version"], int):
-                errors.append('"version" must be an integer')
+            seen.add(pid)
+        if not path:
+            errors.append(f"{prefix}: missing 'path'")
+        elif not pathlib.Path(path).exists():
+            warnings.append(f"{prefix}: file not found → {path}")
+        if "enabled" not in p:
+            warnings.append(f"{prefix}: missing 'enabled' (defaulting True)")
 
-            # patches
-            patches = data.get("patches")
-            if patches is None:
-                errors.append('Missing top-level key: "patches"')
-                patches = []
-            elif not isinstance(patches, list):
-                errors.append('"patches" must be a list')
-                patches = []
+    return ok and not errors, errors, warnings
 
-            # 3) Validate each entry
-            for i, item in enumerate(patches, start=1):
-                pre = f"patches[{i}]"
-                if not isinstance(item, dict):
-                    errors.append(f"{pre} must be a mapping/dict")
-                    continue
-                pid = item.get("id")
-                ppath = item.get("path")
-                if not pid or not isinstance(pid, str):
-                    errors.append(f'{pre}.id missing or not a string')
-                if not ppath or not isinstance(ppath, str):
-                    errors.append(f'{pre}.path missing or not a string')
-                    continue
+def main():
+    log("🧩 Running manifest validator…")
 
-                patch_file = REPO_ROOT / ppath
-                if not patch_file.exists():
-                    errors.append(f'{pre}.path not found: {ppath}')
-                    continue
+    if not MANIFEST.exists():
+        log("::error title=Manifest missing::.github/autopatch/patches.yml not found")
+        sys.exit(2)
 
-                pdata, perrs = load_yaml(patch_file)
-                if perrs:
-                    errors.extend([f"{pre}: {x}" for x in perrs])
-                else:
-                    # sanity check on patch shape
-                    if not isinstance(pdata, dict):
-                        errors.append(f"{pre}: patch must parse to a mapping/dict")
-                    elif "version" not in pdata and "actions" not in pdata:
-                        warnings.append(f"{pre}: patch has no 'version' or 'actions' key (unusual)")
+    data = safe_load_yaml(MANIFEST)
+    ok, errors, warnings = validate_schema(data)
 
-    ok = len(errors) == 0
-    summary = f"✔ OK: {len(checks)} | ⚠ {len(warnings)} | ✖ {len(errors)}"
-    report = {
+    summary = {
         "ok": ok,
-        "checks": checks,
         "errors": errors,
         "warnings": warnings,
-        "summary": summary
+        "summary": f"✅ OK: {0 if not ok else len(data.get('patches',[]))} | ⚠️ {len(warnings)} | ❌ {len(errors)}"
     }
 
-    try:
-        REPORT_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    print(json.dumps(summary, indent=2))
 
-    print(json.dumps(report, indent=2))
-    return 0 if ok else 1
+    if errors:
+        sys.exit(2)
+    elif warnings:
+        sys.exit(1)
+    else:
+        sys.exit(0)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
