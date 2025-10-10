@@ -1,0 +1,48 @@
+name: "Setup Common Python"
+description: "Reusable composite action for installing Python, dependencies, and ensuring PyYAML is present"
+author: "StegVerse CI"
+inputs:
+  python-version:
+    description: "Python version to use"
+    required: false
+    default: "3.11"
+  cache:
+    description: "Enable caching"
+    required: false
+    default: "true"
+  extra-packages:
+    description: "Extra packages to install (space-separated)"
+    required: false
+    default: ""
+
+outputs:
+  yaml_available:
+    description: "Whether PyYAML is installed successfully"
+    value: ${{ steps.check_yaml.outputs.yaml_available }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: ${{ inputs.cache }}
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install PyYAML requests ${{ inputs.extra-packages }}
+
+    - name: Verify PyYAML availability
+      id: check_yaml
+      shell: bash
+      run: |
+        if python -c "import yaml" 2>/dev/null; then
+          echo "✅ PyYAML available"
+          echo "yaml_available=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "⚠️ PyYAML not found"
+          echo "yaml_available=false" >> "$GITHUB_OUTPUT"
+        fi
