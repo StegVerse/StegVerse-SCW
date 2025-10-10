@@ -13,10 +13,10 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ✅ Your requested line (installs Python + YAML libs)
+      # ✅ Reusable composite setup — installs Python and YAML libraries
       - uses: ./.github/workflows/setup-common-python.yml
 
       - name: Apply patches from manifest
@@ -25,151 +25,81 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os, sys, subprocess, pathlib
-
-          # --- YAML import with fallback -------------------------------------
           try:
-              import yaml  # PyYAML
+              import yaml
           except Exception:
               try:
-                  from ruamel import yaml as ruamel_yaml
-                  yaml = ruamel_yaml
+                  from ruamel import yaml as ryaml
+                  yaml = ryaml
               except Exception as e:
-                  print("::error title=YAML libraries unavailable::" + str(e))
+                  print(f"::error title=YAML missing::{e}")
                   sys.exit(1)
 
-          REPO_ROOT = pathlib.Path(".").resolve()
-          manifest_path = REPO_ROOT / ".github" / "autopatch" / "patches.yml"
+          root = pathlib.Path(".").resolve()
+          manifest = root / ".github" / "autopatch" / "patches.yml"
 
-          if not manifest_path.exists():
-              print(f"::warning title=Manifest missing::{manifest_path} not found. Nothing to do.")
+          if not manifest.exists():
+              print(f"::warning title=Manifest missing::{manifest} not found")
               sys.exit(0)
 
-          # Load manifest (support both {patches: [...]} and plain list)
-          with manifest_path.open("r", encoding="utf-8") as f:
-              data = yaml.safe_load(f)
+          with open(manifest, "r", encoding="utf-8") as f:
+              data = yaml.safe_load(f) or {}
+          patches = data.get("patches") if isinstance(data, dict) else data
 
-          patches = []
-          if isinstance(data, dict) and "patches" in data:
-              patches = data["patches"] or []
-          elif isinstance(data, list):
-              patches = data
-          else:
-              print("::warning title=Empty manifest::No patches declared.")
+          if not patches:
+              print("::warning::No patches defined.")
               sys.exit(0)
 
-          def run(cmd, **kw):
-              print("+", " ".join(cmd))
-              r = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kw)
-              if r.returncode != 0:
-                  print(r.stdout)
-                  sys.exit(r.returncode)
-              if r.stdout:
-                  print(r.stdout)
-              return r
-
-          def git_has_staged_changes():
-              return subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0
-
-          def ensure_parent(p: pathlib.Path):
+          def ensure_parent(p):
               p.parent.mkdir(parents=True, exist_ok=True)
 
-          def apply_patch_file(patch_file: pathlib.Path):
-              # Parse the patch YAML
-              with patch_file.open("r", encoding="utf-8") as pf:
-                  doc = yaml.safe_load(pf)
+          for patch in patches:
+              pid = patch.get("id", "(unnamed)")
+              path = patch.get("path")
+              if not path:
+                  print(f"::warning::Skipping {pid}, missing path.")
+                  continue
+              pf = root / path
+              if not pf.exists():
+                  print(f"::warning::Patch file {path} not found.")
+                  continue
 
-              if not isinstance(doc, dict) or "actions" not in doc:
-                  print(f"::warning title=Unsupported patch::{patch_file} has no 'actions' list; skipping.")
-                  return
-
-              actions = doc.get("actions") or []
-              for action in actions:
-                  if not isinstance(action, dict):
-                      print(f"::warning title=Malformed action::Skipping non-dict action in {patch_file}")
-                      continue
-
-                  # --- write_files ------------------------------------------------
+              print(f"🩹 Applying patch {pid}")
+              with open(pf, "r", encoding="utf-8") as f:
+                  doc = yaml.safe_load(f) or {}
+              for action in doc.get("actions", []):
                   if "write_files" in action:
-                      files = action["write_files"] or []
-                      if isinstance(files, dict):
-                          # allow single map form
-                          files = [files]
-                      for spec in files:
-                          path = spec.get("path")
-                          contents = spec.get("contents", "")
-                          mode = spec.get("mode")
-                          if not path:
-                              print("::warning title=write_files missing path::Skipping one file entry.")
-                              continue
-                          out = REPO_ROOT / path
-                          ensure_parent(out)
-                          out.write_text(contents, encoding="utf-8")
-                          if mode:
-                              try:
-                                  os.chmod(out, int(mode, 8))
-                              except Exception:
-                                  pass
-                          print(f"   ✍️  wrote {out}")
-
-                  # --- run_shell --------------------------------------------------
-                  elif "run_shell" in action:
-                      shell_spec = action["run_shell"]
-                      if isinstance(shell_spec, dict):
-                          script = shell_spec.get("script", "")
-                          name = shell_spec.get("name", "run_shell")
-                      else:
-                          script, name = str(shell_spec), "run_shell"
-                      print(f"   🏃  {name}")
-                      run(["bash", "-euo", "pipefail", "-c", script])
-
-                  # --- commit -----------------------------------------------------
+                      for spec in action["write_files"]:
+                          dest = root / spec["path"]
+                          ensure_parent(dest)
+                          dest.write_text(spec["contents"], encoding="utf-8")
+                          if "mode" in spec:
+                              os.chmod(dest, int(spec["mode"], 8))
+                          print(f"   ✍️  wrote {dest}")
                   elif "commit" in action:
-                      commit_spec = action["commit"] or {}
-                      if isinstance(commit_spec, str):
-                          msg = commit_spec
-                      else:
-                          msg = commit_spec.get("message", "chore(autopatch): update")
-                      # Stage everything first so message-only commits work
-                      run(["git", "add", "-A"])
-                      if git_has_staged_changes():
-                          run(["git", "commit", "-m", msg])
-                          print(f"   🧾 committed: {msg}")
-                      else:
-                          print("   ⏭  no changes to commit (skipping).")
-
-                  else:
-                      # Unknown action – ignore but continue
-                      known = ("write_files", "run_shell", "commit")
-                      print(f"::notice title=Unknown action::{set(action.keys()) - set(known)} in {patch_file}")
-
-          print(f"📦 Manifest: {manifest_path}")
-          for entry in patches:
-              pid = entry.get("id") if isinstance(entry, dict) else "(unnamed)"
-              pth = entry.get("path") if isinstance(entry, dict) else None
-              if not pth:
-                  print(f"::warning title=No path in patch entry::{pid}")
-                  continue
-              patch_file = REPO_ROOT / pth
-              if not patch_file.exists():
-                  print(f"::warning title=Patch file missing::{patch_file}")
-                  continue
-              print(f"🩹 Applying {pid} → {patch_file}")
-              apply_patch_file(patch_file)
-
-          print("✅ AutoPatch completed.")
+                      msg = (
+                          action["commit"]
+                          if isinstance(action["commit"], str)
+                          else action["commit"].get("message", "chore(autopatch): update")
+                      )
+                      subprocess.run(["git", "add", "-A"], check=False)
+                      subprocess.run(["git", "commit", "-m", msg], check=False)
+                      print(f"   🧾 committed: {msg}")
+          print("✅ All patches processed successfully.")
           PY
 
-      - name: Push changes (if any)
+      - name: Push changes
+        shell: bash
         run: |
-          set -euo pipefail
           if ! git diff --quiet; then
             git add -A
           fi
           if ! git diff --cached --quiet; then
-            git -c user.name="StegVerse Bot" -c user.email="bot@stegverse.org" \
-              commit -m "chore(autopatch): apply patches from manifest"
+            git -c user.name="StegVerse Bot" \
+                -c user.email="bot@stegverse.org" \
+                commit -m "chore(autopatch): apply patches"
             git push
             echo "✅ Changes pushed."
           else
-            echo "ℹ️ No changes to push."
+            echo "ℹ️ No changes detected."
           fi
