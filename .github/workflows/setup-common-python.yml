@@ -1,5 +1,5 @@
 name: setup-common-python
-description: Standard Python setup with YAML libs (PyYAML + fallback)
+description: Standard Python setup with YAML libs
 runs:
   using: "composite"
   steps:
@@ -15,10 +15,10 @@ runs:
         pip install pyyaml || true
         python - <<'PY'
         try:
-            import yaml  # noqa
-            print("PyYAML present.")
+            import yaml
+            print("PyYAML present ✅")
         except Exception:
             import subprocess, sys
-            print("PyYAML missing, installing ruamel.yaml as fallback...")
+            print("Installing fallback ruamel.yaml ...")
             subprocess.check_call([sys.executable, "-m", "pip", "install", "ruamel.yaml"])
         PY
