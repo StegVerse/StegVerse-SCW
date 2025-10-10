@@ -16,9 +16,9 @@ runs:
         python - <<'PY'
         try:
             import yaml
-            print("PyYAML present ✅")
+            print("✅ PyYAML installed successfully.")
         except Exception:
             import subprocess, sys
-            print("Installing fallback ruamel.yaml ...")
+            print("⚠️ PyYAML missing — installing ruamel.yaml fallback...")
             subprocess.check_call([sys.executable, "-m", "pip", "install", "ruamel.yaml"])
         PY
