@@ -2,14 +2,13 @@ name: validate-autopatch-manifest
 
 on:
   workflow_dispatch: {}
-  push:
-    paths:
-      - ".github/autopatch/**"
-      - "scripts/validate_manifest.py"
-      - ".github/actions/setup-common-python/**"
+  schedule:
+    - cron: "0 9 * * 1"   # Mondays 09:00 UTC
 
 permissions:
   contents: read
+  actions: read
+  issues: write
 
 jobs:
   validate:
@@ -19,26 +18,96 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Use the composite action we created; it installs Python + PyYAML and
-      # exposes an output "yaml_available" that we key off of below.
-      - name: Setup common Python
-        id: py
-        uses: ./.github/actions/setup-common-python
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "true"
+          python-version: "3.x"
+          cache: "pip"
 
-      # ✅ This is the line you asked for—wired in the right place
-      - name: Validate manifest with Python
-        if: ${{ steps.py.outputs.yaml_available == 'true' }}
+      - name: Install deps
         run: |
-          echo "🧩 Running manifest validator..."
-          python scripts/validate_manifest.py
+          python -m pip install --upgrade pip
+          pip install pyyaml
 
-      - name: Upload validation report
-        if: always() && hashFiles('/tmp/manifest-report.json') != ''
+      - name: Run validator
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          SCRIPT=".github/scripts/validate_manifest.py"
+          if [[ ! -f "$SCRIPT" ]]; then
+            echo "::error title=Validator missing::$SCRIPT not found"
+            exit 2
+          fi
+
+          # Run the validator and capture exit code
+          set +e
+          python "$SCRIPT" | tee manifest_report.json
+          CODE=$?
+          set -e
+
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+
+          # Create a concise markdown summary for the job page
+          echo '### AutoPatch Manifest Validation' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '\`\`\`json' >> "$GITHUB_STEP_SUMMARY"
+          cat manifest_report.json >> "$GITHUB_STEP_SUMMARY"
+          echo '\`\`\`' >> "$GITHUB_STEP_SUMMARY"
+
+          # Prepare a readable issue body
+          {
+            echo "# AutoPatch Manifest Validation"
+            echo
+            echo "**Repository:** $GITHUB_REPOSITORY"
+            echo "**Run:** https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "## Result"
+            echo
+            echo "\`\`\`json"
+            cat manifest_report.json
+            echo "\`\`\`"
+          } > issue_body.md
+
+          # Fail the step only for hard errors; warnings proceed to issue creation
+          if [[ "$CODE" -eq 2 ]]; then
+            echo "::error title=Validation failed::One or more errors were found."
+          fi
+          exit 0
+
+      - name: Upload JSON report
         uses: actions/upload-artifact@v4
         with:
-          name: autopatch-manifest-report
-          path: /tmp/manifest-report.json
-          if-no-files-found: warn
+          name: autopatch-manifest-report-${{ github.run_id }}
+          path: manifest_report.json
+          if-no-files-found: error
+
+      # Create or update a single rolling issue to track warnings/errors
+      - name: Open/Update tracking issue
+        if: ${{ steps.validate.outputs.exit_code != '0' }}
+        uses: peter-evans/create-issue-from-file@v4
+        with:
+          title: "AutoPatch manifest validation ❗"
+          content-filepath: issue_body.md
+          labels: "autopatch,ci,needs-attention"
+          # Keep one open issue and update it rather than spamming new ones
+          update-existing: true
+          search-existing: "title"
+
+      # Mark job outcome based on validator exit code:
+      # 0 = success, 1 = warnings (success but issue opened), 2 = errors (fail)
+      - name: Set job conclusion
+        if: always()
+        shell: bash
+        run: |
+          CODE='${{ steps.validate.outputs.exit_code }}'
+          if [[ "$CODE" == "2" ]]; then
+            echo "Validation: errors found — failing job."
+            exit 1
+          elif [[ "$CODE" == "1" ]]; then
+            echo "Validation: warnings found — job succeeds (issue opened)."
+            exit 0
+          else
+            echo "Validation: clean."
+            exit 0
+          fi
