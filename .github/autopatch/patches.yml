@@ -1,7 +1,8 @@
-version: 1
+version: 1.0
 patches:
   - id: hcb-first-run-checklist
-  path: .github/autopatch/hcb-first-run-checklist.patch.yml
+    path: .github/autopatch/hcb-first-run-checklist.patch.yml
+    enabled: true
   - id: patch-only-guard
   path: .github/autopatch/patch-only-guard.patch.yml
   - id: taskops-tasks-bootstrap
