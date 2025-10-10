@@ -1,4 +1,80 @@
 name: "Setup Common Python"
+description: "Install Python, cache pip, and ensure a YAML library is available (PyYAML -> ruamel.yaml fallback)."
+inputs:
+  python-version:
+    description: "Python version to use"
+    required: false
+    default: "3.x"
+  cache:
+    description: "Enable pip caching via actions/setup-python"
+    required: false
+    default: "true"
+  extra-packages:
+    description: "Space-separated extra packages to install with pip (optional)"
+    required: false
+    default: ""
+outputs:
+  yaml_available:
+    description: "true if a YAML parser is importable (pyyaml or ruamel.yaml)"
+    value: ${{ steps.probe-yaml.outputs.yaml_available }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        # Enable pip caching unless explicitly disabled
+        cache: ${{ inputs.cache == 'true' && 'pip' || '' }}
+
+    - name: Upgrade pip
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+
+    - name: Install PyYAML (soft) + extras
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Try PyYAML, but don't fail if it cannot install (we will fallback)
+        pip install pyyaml || true
+        # Optional caller-provided packages
+        if [ -n "${{ inputs.extra-packages }}" ]; then
+          pip install ${{ inputs.extra-packages }}
+        fi
+
+    - name: Ensure YAML parser (fallback to ruamel.yaml)
+      id: probe-yaml
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "yaml_available=false" >> "$GITHUB_OUTPUT"
+        python - <<'PY'
+import sys, subprocess
+def have(pkg):
+    try:
+        __import__(pkg)
+        return True
+    except Exception:
+        return False
+
+ok = have("yaml")
+if not ok:
+    print("PyYAML not found; installing ruamel.yaml fallback...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "ruamel.yaml"])
+    ok = have("ruamel.yaml")
+print(f"YAML available? {ok}")
+# communicate back to composite outputs
+with open("${GITHUB_OUTPUT}", "a") as fp:  # noqa: E999 (GitHub injects env var)
+    fp.write(f"yaml_available={'true' if ok else 'false'}\n")
+PY
+
+    - name: Final probe log
+      shell: bash
+      run: |
+        echo "yaml_available=${{ steps.probe-yaml.outputs.yaml_available }}"name: "Setup Common Python"
 description: "Installs Python and YAML dependencies (PyYAML or fallback)"
 runs:
   using: "composite"
