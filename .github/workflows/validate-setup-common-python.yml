@@ -1,0 +1,32 @@
+name: validate-setup-common-python
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify setup-common-python composite action
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run setup-common-python
+        uses: ./.github/actions/setup-common-python
+
+      - name: Verify Python and YAML modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "🐍 Checking Python installation..."
+          python --version
+          echo "📦 Checking YAML availability..."
+          python - <<'PY'
+          try:
+              import yaml
+              print("✅ PyYAML imported successfully.")
+          except Exception as e:
+              print(f"❌ YAML module check failed: {e}")
+              raise
+          PY
+          echo "🎉 Validation successful — setup-common-python works correctly!"
