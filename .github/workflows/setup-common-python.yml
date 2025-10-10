@@ -1,24 +1,15 @@
-name: setup-common-python
+- name: Setup common Python
 description: Standard Python setup with YAML libs
+  id: py
 runs:
+  uses: /.github/actions/setup-common-python
   using: "composite"
+    with:
   steps:
+    python-version: "3.11"
     - uses: actions/setup-python@v5
+  cache: "true"
       with:
+  # optional: add frequently used packages here
         python-version: "3.x"
-
-    - name: Install YAML dependencies
-      shell: bash
-      run: |
-        set -euo pipefail
-        python -m pip install --upgrade pip
-        pip install pyyaml || true
-        python - <<'PY'
-        try:
-            import yaml
-            print("PyYAML present ✅")
-        except Exception:
-            import subprocess, sys
-            print("Installing fallback ruamel.yaml ...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "ruamel.yaml"])
-        PY
+  extra-packages: "requests"
