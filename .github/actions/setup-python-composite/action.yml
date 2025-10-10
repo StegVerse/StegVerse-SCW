@@ -1,29 +1,24 @@
-name: "Setup Python (composite)"
-description: "Setup Python and optionally install requirements or packages"
-inputs:
-  python-version:
-    default: "3.x"
-  requirements:
-    description: "Path to requirements.txt (optional)"
-    required: false
-    default: ""
-  packages:
-    description: "Space-separated pip packages to install (optional)"
-    required: false
-    default: ""
+name: "Setup Common Python"
+description: "Installs Python and YAML dependencies (PyYAML or fallback)"
 runs:
   using: "composite"
   steps:
     - uses: actions/setup-python@v5
       with:
-        python-version: ${{ inputs.python-version }}
-        cache: "pip"
-    - shell: bash
+        python-version: "3.x"
+
+    - name: Install YAML dependencies
+      shell: bash
       run: |
+        set -euo pipefail
         python -m pip install --upgrade pip
-        if [ -n "${{ inputs.requirements }}" ] && [ -f "${{ inputs.requirements }}" ]; then
-          pip install -r "${{ inputs.requirements }}"
-        fi
-        if [ -n "${{ inputs.packages }}" ]; then
-          pip install ${{ inputs.packages }}
-        fi
+        pip install pyyaml || true
+        python - <<'PY'
+        try:
+            import yaml
+            print("PyYAML present ✅")
+        except Exception:
+            import subprocess, sys
+            print("Installing fallback ruamel.yaml ...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "ruamel.yaml"])
+        PY
