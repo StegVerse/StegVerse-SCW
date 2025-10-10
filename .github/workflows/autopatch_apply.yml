@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ✅ Reusable composite setup — installs Python and YAML libraries
-      - uses: ./.github/workflows/setup-common-python.yml
+      - uses: ./.github/actions/setup-common-python
 
       - name: Apply patches from manifest
         shell: bash
