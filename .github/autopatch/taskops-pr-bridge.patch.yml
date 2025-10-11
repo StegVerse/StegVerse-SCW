@@ -1,0 +1,241 @@
+version: 1
+actions:
+  - write_files:
+      # ------------------------------------------------------------------
+      # TaskOps PR Bridge script
+      # ------------------------------------------------------------------
+      - path: "scripts/taskops_pr_bridge.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import os, sys, re, json, pathlib, copy, datetime
+          try:
+              import yaml
+          except Exception:
+              print("PyYAML is required (pip install pyyaml)", file=sys.stderr)
+              sys.exit(0)
+
+          ROOT = pathlib.Path(".")
+          TDIR = ROOT / ".github" / "taskops"
+          TASKS = TDIR / "tasks.yml"
+
+          def now_iso():
+              return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+          def load_yaml(p):
+              if not p.exists():
+                  return None
+              return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+
+          def save_yaml(p, data):
+              p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+          def flatten(tasks):
+              out = []
+              for bucket in ("open","in_progress","blocked","done"):
+                  for it in tasks.get(bucket, []) or []:
+                      x = copy.deepcopy(it)
+                      x["_bucket"] = bucket
+                      out.append(x)
+              return out
+
+          def to_bucket(tasks, task_id):
+              for b in ("open","in_progress","blocked","done"):
+                  for it in tasks.get(b, []) or []:
+                      if it.get("id") == task_id:
+                          return b
+              return None
+
+          def move_task(tasks, task_id, dest_bucket, set_closed=False):
+              if dest_bucket not in ("open","in_progress","blocked","done"):
+                  return False
+              src = to_bucket(tasks, task_id)
+              if src == dest_bucket:
+                  return False
+              if not src:
+                  return False
+              # remove from src
+              keep = []
+              found = None
+              for it in tasks[src]:
+                  if it.get("id") == task_id and not found:
+                      found = copy.deepcopy(it)
+                  else:
+                      keep.append(it)
+              tasks[src] = keep
+              if not found:
+                  return False
+              if set_closed:
+                  found["closed_at"] = now_iso()
+              tasks.setdefault(dest_bucket, [])
+              tasks[dest_bucket].append(found)
+              return True
+
+          # --- ID extraction helpers --------------------------------------
+          # We support a few patterns:
+          # 1) Lines like "TaskOps: foo-bar" or "taskops: foo-bar"
+          # 2) "Task: foo-bar", "task: foo-bar"
+          # 3) Any explicit mention of IDs under a "TaskOps" section
+          # 4) Bare kebab-case IDs if they appear inside "TaskOps IDs" list
+          SECTION_RE = re.compile(r"(?im)^(?:#+\s*)?(?:taskops|taskops ids?|tasks?)\s*[:\-]?\s*$")
+          ID_RE = re.compile(r"\b([a-z0-9][a-z0-9\-_]{1,63})\b")
+
+          def find_ids(text):
+              ids = set()
+
+              # direct prefixes
+              for m in re.finditer(r'(?im)^\s*(?:taskops|task)\s*[:\-]\s*([a-z0-9][a-z0-9\-_]{1,63})\s*$', text):
+                  ids.add(m.group(1))
+
+              # try to capture IDs from a "TaskOps" section (following lines until blank or next header)
+              lines = text.splitlines()
+              for i, line in enumerate(lines):
+                  if SECTION_RE.match(line.strip()):
+                      # collect subsequent bullet-like lines until blank/header
+                      j = i + 1
+                      while j < len(lines):
+                          ln = lines[j]
+                          if not ln.strip(): break
+                          if ln.strip().startswith("#"): break
+                          # pick kebab-ish tokens in this line
+                          for m in ID_RE.finditer(ln):
+                              token = m.group(1)
+                              # try to avoid generic words; heuristic: must contain a dash or underscore
+                              if "-" in token or "_" in token:
+                                  ids.add(token.lower())
+                          j += 1
+
+              return sorted(ids)
+
+          def main():
+              event = os.getenv("GITHUB_EVENT_NAME", "")
+              payload_path = os.getenv("GITHUB_EVENT_PATH", "")
+              if not payload_path or not os.path.exists(payload_path):
+                  print("[pr-bridge] No event payload; exiting calmly.")
+                  return 0
+
+              tasks = load_yaml(TASKS)
+              if tasks is None:
+                  print("[pr-bridge] tasks.yml not found; nothing to do.")
+                  return 0
+
+              data = json.loads(open(payload_path, "r", encoding="utf-8").read() or "{}")
+              action = data.get("action", "")
+              pr = data.get("pull_request") or {}
+              merged = pr.get("merged", False)
+              title = pr.get("title") or ""
+              body  = pr.get("body") or ""
+              text = f"{title}\n\n{body}"
+
+              ids = find_ids(text)
+              if not ids:
+                  print("[pr-bridge] no TaskOps IDs found; exiting.")
+                  return 0
+
+              print(f"[pr-bridge] ids -> {ids}; action={action}; merged={merged}")
+
+              changed = False
+              if event == "pull_request":
+                  if action in ("opened","edited","reopened","synchronize"):
+                      # Move any referenced IDs to in_progress (if they exist)
+                      for tid in ids:
+                          moved = move_task(tasks, tid, "in_progress")
+                          if moved:
+                              print(f"[pr-bridge] moved {tid} -> in_progress")
+                              changed = True
+                  elif action == "closed":
+                      # If merged -> done (set closed_at)
+                      if merged:
+                          for tid in ids:
+                              # if already in done, skip; else move
+                              if to_bucket(tasks, tid) != "done":
+                                  moved = move_task(tasks, tid, "done", set_closed=True)
+                                  if moved:
+                                      print(f"[pr-bridge] moved {tid} -> done (merged)")
+                                      changed = True
+
+              if changed:
+                  save_yaml(TASKS, tasks)
+                  print("[pr-bridge] tasks.yml updated.")
+              else:
+                  print("[pr-bridge] no changes required.")
+
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+      # ------------------------------------------------------------------
+      # TaskOps PR Bridge workflow
+      # ------------------------------------------------------------------
+      - path: ".github/workflows/taskops-pr-bridge.yml"
+        mode: "100644"
+        contents: |
+          name: taskops-pr-bridge
+
+          on:
+            workflow_dispatch: {}
+            pull_request:
+              types: [opened, edited, reopened, synchronize, closed]
+
+          permissions:
+            contents: write
+            pull-requests: read
+
+          jobs:
+            bridge:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with:
+                    persist-credentials: true
+                    fetch-depth: 0
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.x"
+
+                - name: Install deps
+                  run: |
+                    python -m pip install --upgrade pip
+                    pip install pyyaml
+
+                - name: Update TaskOps from PR event
+                  env:
+                    GITHUB_EVENT_NAME: ${{ github.event_name }}
+                    GITHUB_EVENT_PATH: ${{ github.event_path }}
+                  run: |
+                    python scripts/taskops_pr_bridge.py
+
+                - name: Commit TaskOps changes (if any)
+                  run: |
+                    set -euo pipefail
+                    git config user.name "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add .github/taskops/tasks.yml \
+                            .github/taskops/README-TASKOPS.md \
+                            .github/taskops/ledger.jsonl \
+                            .github/taskops/.state.json || true
+                    if git diff --cached --quiet; then
+                      echo "No TaskOps changes to commit."
+                    else
+                      git commit -m "chore(taskops): PR-bridge sync from PR event"
+                      git push origin HEAD:${{ github.ref_name || 'main' }}
+
+                # Re-run TaskOps updater to refresh README/ledger snapshot
+                - name: Refresh TaskOps summary
+                  run: |
+                    python scripts/taskops_update.py
+                    git add .github/taskops/README-TASKOPS.md \
+                            .github/taskops/ledger.jsonl \
+                            .github/taskops/.state.json || true
+                    if git diff --cached --quiet; then
+                      echo "No README/ledger changes after updater."
+                    else
+                      git commit -m "chore(taskops): refresh README & ledger (post-bridge)"
+                      git push origin HEAD:${{ github.ref_name || 'main' }}
+
+  - commit:
+      message: "chore(taskops): add PR–Bridge (auto in_progress & done from PR events)"
