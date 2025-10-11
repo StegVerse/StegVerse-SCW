@@ -6,3 +6,5 @@ patches:
   path: .github/autopatch/taskops-pr-bridge.patch.yml
   - id: taskops-pr-bridge
   path: .github/autopatch/taskops-pr-bridge.patch.yml
+  - id: pr-template-taskops
+  path: .github/autopatch/pr-template-taskops.patch.yml
