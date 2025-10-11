@@ -12,3 +12,5 @@ patches:
   path: .github/autopatch/reindex-nudge.patch.yml
   - id: actions-reindex-nudge-taskops
   path: .github/autopatch/reindex-nudge-taskops.patch.yml
+  - id: kick-autopatch
+  path: .github/autopatch/kick-autopatch.patch.yml
