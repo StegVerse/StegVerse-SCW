@@ -1,9 +1,6 @@
 name: reindex-nudge
-
 on:
   workflow_dispatch: {}
-  schedule:
-    - cron: "17 3 * * 6"   # optional: weekly nudge (Sat 03:17 UTC)
 
 permissions:
   contents: write
@@ -12,20 +9,37 @@ jobs:
   nudge:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Set up job
+        run: echo "🌀 Starting Reindex-Nudge..."
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Update timestamp
         run: |
-          mkdir -p .github/reindex
-          date -u +'%Y-%m-%dT%H:%M:%SZ' > .github/reindex/last_nudge.txt
+          mkdir -p .github/trigger/reindex/
+          echo "$(date -u)" > .github/trigger/reindex/last_nudge.txt
+          echo "Updated reindex timestamp."
 
       - name: Commit & push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           git config user.name "StegVerse Bot"
           git config user.email "bot@stegverse.org"
-          git add .github/reindex/last_nudge.txt
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(reindex): nudge workflow indexing"
-            git push origin HEAD:main
+
+          git add .github/trigger/reindex/last_nudge.txt || true
+          # Only commit if changed
+          if git diff --cached --quiet; then
+            echo "No changes detected — skipping commit."
           else
-            echo "Nothing to commit (timestamp unchanged)."
+            git commit -m "chore(reindex): refresh workflow cache $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            git push origin HEAD:main
+          fi
+
+      - name: Confirmation
+        run: echo "✅ Reindex-Nudge completed successfully!"
