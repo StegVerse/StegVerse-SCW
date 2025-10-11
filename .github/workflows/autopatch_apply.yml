@@ -1,17 +1,21 @@
 name: autopatch-apply
 
 on:
-  workflow_dispatch: {}       # 👈 adds manual run support
+  workflow_dispatch: {}        # manual run
   push:
     branches: [ "main" ]
     paths:
       - ".github/autopatch/**"
       - "scripts/autopatch_runner.py"
       - ".github/trigger/autopatch/**"
-      
+
 permissions:
   contents: write
   pull-requests: write
+
+concurrency:
+  group: autopatch-apply-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   apply:
@@ -23,20 +27,21 @@ jobs:
 
     steps:
       - name: Checkout
-      # Needs full history if your runner inspects previous commits; shallow is fine otherwise
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
-      - name: Setup common Python
-        id: py
-        uses: ./.github/actions/setup-common-python
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "true"
-          extra-packages: ""   # add space-separated pip pkgs if you want
 
-      - name: Ensure system tools
+      - name: Ensure tools
         run: |
           set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install pyyaml jq 2>/dev/null || true
           sudo apt-get update -y
           sudo apt-get install -y jq
 
@@ -60,38 +65,31 @@ YML
           fi
 
       - name: Dry-run AutoPatch (preview)
-        id: dryrun
+        continue-on-error: true
         run: |
           set -euo pipefail
           python scripts/autopatch_runner.py \
             --manifest "${MANIFEST}" \
             --dry-run || true
-          # capture any report files into summary if present
           if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
-            echo "### AutoPatch Dry-Run Report" >> "$GITHUB_STEP_SUMMARY"
-            cat "${OUTDIR}/AUTOPATCH_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### AutoPatch Dry-Run Report"
+              echo
+              cat "${OUTDIR}/AUTOPATCH_REPORT.md"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Apply AutoPatch (prune + defer)
-        id: apply
-        continue-on-error: true
+        id: apply_step
         run: |
           set -euo pipefail
           python scripts/autopatch_runner.py \
             --manifest "${MANIFEST}" \
             --prune-success \
             --defer-file "${DEFER}"
-          echo "exit_code=0" >> "$GITHUB_OUTPUT"
-        shell: bash
-
-      - name: Capture apply exit (if failed)
-        if: failure()   # only runs if prior step failed
-        run: |
-          echo "Apply returned non-zero; marking in outputs."
-          echo "exit_code=1" >> "$GITHUB_OUTPUT"
-        shell: bash
 
       - name: Commit manifest updates (if any)
+        if: always()
         run: |
           set -euo pipefail
           git config user.name  "StegVerse Bot"
@@ -125,13 +123,14 @@ YML
             applied=$(jq -r '.summary.applied // "0"' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo "0")
           fi
           cat > /tmp/taskops_entry.json <<JSON
-{"ts":"${ts}","job":"autopatch-apply","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${GITHUB_REF_NAME}","applied":"${applied}"}
+{"ts":"${ts}","event":"autopatch_apply","job":"autopatch-apply","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${GITHUB_REF_NAME}","applied":"${applied}"}
 JSON
-          # append to ledger if present; create if you want to start tracking now
           if [ -f ".github/taskops/ledger.jsonl" ]; then
             cat /tmp/taskops_entry.json >> .github/taskops/ledger.jsonl
             git add .github/taskops/ledger.jsonl
             if ! git diff --cached --quiet; then
+              git config user.name  "StegVerse Bot"
+              git config user.email "bot@stegverse.org"
               git commit -m "chore(taskops): log autopatch-apply run $GITHUB_RUN_ID"
               git push origin HEAD:main
             fi
@@ -142,20 +141,13 @@ JSON
       - name: Summarize
         if: always()
         run: |
-          echo "### AutoPatch Apply Summary" >> "$GITHUB_STEP_SUMMARY"
-          if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
-            cat "${OUTDIR}/AUTOPATCH_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "_No AUTOPATCH_REPORT.md generated._" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Set job outcome
-        if: always()
-        run: |
-          # Prefer the apply step's explicit output if present; otherwise succeed.
-          CODE="${{ steps.apply.outputs.exit_code }}"
-          if [ "$CODE" = "1" ]; then
-            echo "AutoPatch apply reported errors — failing job."
-            exit 1
-          fi
-          echo "AutoPatch apply completed."
+          {
+            echo "### AutoPatch Apply Summary"
+            if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
+              echo
+              cat "${OUTDIR}/AUTOPATCH_REPORT.md"
+            else
+              echo
+              echo "_No AUTOPATCH_REPORT.md generated._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
