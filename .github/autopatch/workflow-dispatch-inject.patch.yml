@@ -1,0 +1,101 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/patches/inject_workflow_dispatch.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import sys, pathlib, yaml
+
+          ROOT = pathlib.Path(".")
+          WF_DIR = ROOT / ".github" / "workflows"
+
+          def load_yaml(p: pathlib.Path):
+              try:
+                  return yaml.safe_load(p.read_text(encoding="utf-8"))
+              except Exception:
+                  return None
+
+          def save_yaml(p: pathlib.Path, data):
+              # Use default PyYAML dumper (keeps it simple/consistent)
+              txt = yaml.safe_dump(
+                  data,
+                  sort_keys=False,
+                  allow_unicode=True,
+                  default_flow_style=False,
+              )
+              p.write_text(txt, encoding="utf-8")
+
+          def to_mapping_on(on_val):
+              """Normalize 'on' into a mapping if it's a list or string."""
+              if on_val is None:
+                  return {}
+              if isinstance(on_val, dict):
+                  return on_val
+              if isinstance(on_val, list):
+                  # list of event names -> mapping with empty config
+                  m = {}
+                  for ev in on_val:
+                      if isinstance(ev, str):
+                          m[ev] = {}
+                  return m
+              if isinstance(on_val, str):
+                  return {on_val: {}}
+              # unknown type -> keep as-is (and we will replace with mapping)
+              return {}
+
+          def should_skip(on_map: dict):
+              # Skip pure reusable workflows (only 'workflow_call' present)
+              if not on_map:
+                  return False
+              keys = [k for k in on_map.keys()]
+              return keys == ["workflow_call"] or (len(keys) == 1 and "workflow_call" in keys)
+
+          def ensure_dispatch(d: dict, path: pathlib.Path):
+              if not isinstance(d, dict):
+                  return False
+              on_val = d.get("on", None)
+              on_map = to_mapping_on(on_val)
+              # If the file is reusable-only, skip
+              if should_skip(on_map):
+                  return False
+              # Already has workflow_dispatch?
+              if "workflow_dispatch" in on_map:
+                  return False
+              # Inject minimal block
+              on_map["workflow_dispatch"] = {}
+              d["on"] = on_map
+              return True
+
+          def main():
+              changed = []
+              if not WF_DIR.exists():
+                  print("[inject] No .github/workflows directory found; skipping.")
+                  return 0
+              for p in WF_DIR.glob("*.y*ml"):
+                  data = load_yaml(p)
+                  if data is None:
+                      print(f"[inject] WARN: could not parse YAML: {p}")
+                      continue
+                  if ensure_dispatch(data, p):
+                      save_yaml(p, data)
+                      changed.append(str(p))
+                      print(f"[inject] Added workflow_dispatch to: {p}")
+              # Write a small report for downstream steps
+              OUT = ROOT / "self_healing_out"
+              OUT.mkdir(parents=True, exist_ok=True)
+              (OUT / "WORKFLOW_DISPATCH_INJECTED.txt").write_text(
+                  "\n".join(changed), encoding="utf-8"
+              )
+              print(f"[inject] Done. Files changed: {len(changed)}")
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+  - run_shell:
+      name: Inject workflow_dispatch into workflows
+      script: |
+        set -euo pipefail
+        python scripts/patches/inject_workflow_dispatch.py
+  - commit:
+      message: "chore(autopatch): inject workflow_dispatch into missing workflows"
