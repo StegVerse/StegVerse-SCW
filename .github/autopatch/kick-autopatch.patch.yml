@@ -1,0 +1,116 @@
+version: 1
+actions:
+  - write_files:
+      # --- 1) Kick workflow: creates a trigger file and pushes it (which fires autopatch-apply)
+      - path: ".github/workflows/kick-autopatch.yml"
+        mode: "100644"
+        contents: |
+          name: kick-autopatch
+
+          on:
+            workflow_dispatch:
+              inputs:
+                message:
+                  description: "Optional note to include in the trigger file"
+                  required: false
+                  default: "manual kick"
+                branch:
+                  description: "Branch to push the trigger to (empty = current or main)"
+                  required: false
+                  default: ""
+
+          permissions:
+            contents: write
+
+          jobs:
+            kick:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with:
+                    persist-credentials: true
+                    fetch-depth: 0
+
+                - name: Create trigger file and push
+                  env:
+                    INPUT_MESSAGE: ${{ inputs.message }}
+                    INPUT_BRANCH:  ${{ inputs.branch }}
+                  run: |
+                    set -euo pipefail
+
+                    # Determine branch to push
+                    BRANCH="${INPUT_BRANCH}"
+                    if [ -z "$BRANCH" ]; then
+                      # If dispatch ran on a branch, github.ref_name is set; else default to main
+                      BRANCH="${GITHUB_REF_NAME:-main}"
+                    fi
+                    echo "Using branch: $BRANCH"
+
+                    # Prepare trigger file
+                    mkdir -p .github/trigger/autopatch
+                    TS="$(date -u +'%Y%m%dT%H%M%SZ')"
+                    FILE=".github/trigger/autopatch/ping-${TS}.txt"
+                    {
+                      echo "autopatch kick at ${TS}"
+                      echo "by=${GITHUB_ACTOR}"
+                      echo "msg=${INPUT_MESSAGE}"
+                      echo "run_id=${GITHUB_RUN_ID}"
+                    } > "${FILE}"
+
+                    # Commit & push; this push path fires autopatch-apply.yml via its path filter
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add "${FILE}"
+                    git commit -m "chore(autopatch): kick trigger ${TS}"
+                    git push origin "HEAD:${BRANCH}"
+
+                - name: Summary
+                  run: |
+                    echo "### Kick AutoPatch" >> "$GITHUB_STEP_SUMMARY"
+                    echo "" >> "$GITHUB_STEP_SUMMARY"
+                    echo "- Created trigger file under \`.github/trigger/autopatch/\`" >> "$GITHUB_STEP_SUMMARY"
+                    echo "- This should immediately trigger **autopatch-apply** (path filter)" >> "$GITHUB_STEP_SUMMARY"
+
+      # --- 2) Local helper script: does the same thing without Actions
+      - path: "scripts/kick_autopatch.sh"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          MSG="${1:-manual kick}"
+          mkdir -p .github/trigger/autopatch
+          TS="$(date -u +'%Y%m%dT%H%M%SZ')"
+          FILE=".github/trigger/autopatch/ping-${TS}.txt"
+          {
+            echo "autopatch kick at ${TS}"
+            echo "by=\${USER:-local}"
+            echo "msg=${MSG}"
+          } > "${FILE}"
+          git add "${FILE}"
+          echo "Created ${FILE}. Now commit and push to fire autopatch-apply:"
+          echo "  git commit -m 'chore(autopatch): local kick ${TS}' && git push"
+
+      # --- 3) Short docs entry
+      - path: ".github/docs/AUTOPATCH.md"
+        mode: "100644"
+        contents: |
+          # 🔁 AutoPatch — Quick Kick
+
+          If **autopatch-apply** needs to be nudged, use one of:
+
+          ## A) Actions button
+          - Go to **Actions → kick-autopatch → Run workflow**
+          - Optionally set a message. Leave branch blank to use the current (or `main`).
+
+          ## B) Local CLI
+          ```bash
+          bash scripts/kick_autopatch.sh "manual kick note"
+          git commit -m "chore(autopatch): local kick"
+          git push
+          ```
+
+          Either method creates a tiny file under `.github/trigger/autopatch/…`, which **autopatch-apply.yml** listens to via its `push.paths` filter.
+
+  - commit:
+      message: "chore(actions): add kick-autopatch workflow + local helper (autopatch)"
