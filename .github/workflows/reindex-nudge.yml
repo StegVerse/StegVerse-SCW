@@ -1,0 +1,31 @@
+name: reindex-nudge
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "17 3 * * 6"   # optional: weekly nudge (Sat 03:17 UTC)
+
+permissions:
+  contents: write
+
+jobs:
+  nudge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update timestamp
+        run: |
+          mkdir -p .github/reindex
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > .github/reindex/last_nudge.txt
+
+      - name: Commit & push
+        run: |
+          git config user.name "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/reindex/last_nudge.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(reindex): nudge workflow indexing"
+            git push origin HEAD:main
+          else
+            echo "Nothing to commit (timestamp unchanged)."
