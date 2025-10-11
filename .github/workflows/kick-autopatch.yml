@@ -1,0 +1,24 @@
+name: kick-autopatch
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  kick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Touch sentinel file
+        run: |
+          mkdir -p .github/trigger/autopatch
+          echo "kick $(date -u +'%Y-%m-%dT%H:%M:%SZ')" > ".github/trigger/autopatch/ping-${{ github.run_id }}"
+      - name: Commit & push
+        run: |
+          git config user.name "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/trigger/autopatch/
+          git commit -m "chore(kick): trigger autopatch from workflow ${{ github.run_id }}"
+          git push origin HEAD:main
