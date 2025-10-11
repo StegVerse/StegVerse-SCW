@@ -1,0 +1,322 @@
+version: 1
+actions:
+  - write_files:
+      # -----------------------------
+      # 1) TaskOps rules (milestone-tag auto-close)
+      # -----------------------------
+      - path: ".github/taskops/rules.yml"
+        mode: "100644"
+        contents: |
+          version: 1
+          rules:
+            # When tag vX.Y is pushed, move any task containing label `milestone:vX.Y`
+            # from open/in_progress/blocked -> done and stamp closed_at (UTC).
+            - id: close-on-tag-milestone
+              when: "tag_push"
+              matcher: "milestone"   # label prefix to match e.g., milestone:v1.2
+              action: "close"
+
+      # -----------------------------
+      # 2) Update TaskOps updater to support rules + badge
+      # -----------------------------
+      - path: "scripts/taskops_update.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import json, sys, pathlib, copy, hashlib, datetime, os, re
+          try:
+              import yaml
+          except Exception:
+              print("PyYAML is required (pip install pyyaml)", file=sys.stderr)
+              sys.exit(1)
+
+          ROOT = pathlib.Path(".")
+          TDIR = ROOT / ".github" / "taskops"
+          TASKS = TDIR / "tasks.yml"
+          RULES = TDIR / "rules.yml"
+          LEDGER = TDIR / "ledger.jsonl"
+          STATE = TDIR / ".state.json"
+          README = TDIR / "README-TASKOPS.md"
+
+          def now_iso():
+              return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+          def load_yaml(p):
+              return yaml.safe_load(p.read_text(encoding="utf-8"))
+
+          def load_json(p):
+              return json.loads(p.read_text(encoding="utf-8"))
+
+          def write_json(p, obj):
+              p.write_text(json.dumps(obj, indent=2, sort_keys=True), encoding="utf-8")
+
+          def sha(obj):
+              return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()
+
+          def flatten(tasks):
+              all_items = []
+              for bucket in ("open","in_progress","blocked","done"):
+                  for it in tasks.get(bucket, []) or []:
+                      x = copy.deepcopy(it)
+                      x["_bucket"] = bucket
+                      all_items.append(x)
+              return all_items
+
+          def summarize(tasks):
+              repo = os.getenv("GITHUB_REPOSITORY", "")
+              badge = ""
+              if repo:
+                  badge = f"![TaskOps](https://github.com/{repo}/actions/workflows/taskops-update.yml/badge.svg)"
+              counts = {b: len(tasks.get(b, []) or []) for b in ("open","in_progress","blocked","done")}
+              txt = []
+              txt.append(f"# 🧭 TaskOps — Repo Tasks  {badge}")
+              txt.append("")
+              txt.append(f"Updated: `{now_iso()}`  \nSource: `.github/taskops/tasks.yml`")
+              txt.append("")
+              txt.append("## Status")
+              txt.append(f"- open: **{counts['open']}**")
+              txt.append(f"- in_progress: **{counts['in_progress']}**")
+              txt.append(f"- blocked: **{counts['blocked']}**")
+              txt.append(f"- done: **{counts['done']}**")
+              txt.append("")
+              for bucket in ("open","in_progress","blocked","done"):
+                  items = tasks.get(bucket, []) or []
+                  if not items: continue
+                  title = bucket.replace("_"," ").title()
+                  txt.append(f"## {title}")
+                  for it in items:
+                      lane = it.get("lane","")
+                      title_line = f"- **{it['id']}** — _{lane}_: {it['title']}"
+                      txt.append(title_line)
+                      if it.get("labels"):
+                          txt.append(f"  - labels: `{', '.join(it['labels'])}`")
+                      if it.get("detail"):
+                          txt.append(f"  - {it['detail']}")
+                      if bucket == "done" and it.get("closed_at"):
+                          txt.append(f"  - closed: `{it['closed_at']}`")
+                  txt.append("")
+              return "\n".join(txt).strip() + "\n"
+
+          def to_index(items):
+              return { it["id"]: it for it in items }
+
+          def apply_rules(tasks, tag_name):
+              """Close tasks by milestone label matching the provided tag_name (e.g., v1.2)"""
+              if not RULES.exists() or not tag_name:
+                  return False
+              rules = load_yaml(RULES) or {}
+              changed = False
+              for rule in rules.get("rules", []):
+                  if rule.get("when") != "tag_push":
+                      continue
+                  if rule.get("matcher") != "milestone":
+                      continue
+                  # Normalize tag (strip refs/tags/ if present)
+                  t = tag_name
+                  m = re.match(r"^refs/tags/(.+)$", t)
+                  if m: t = m.group(1)
+                  target_label = f"milestone:{t}"
+
+                  def move_to_done(bucket_name):
+                      nonlocal changed
+                      arr = tasks.get(bucket_name, []) or []
+                      keep = []
+                      moved = []
+                      for it in arr:
+                          labels = it.get("labels", []) or []
+                          if target_label in labels:
+                              it = copy.deepcopy(it)
+                              it["closed_at"] = now_iso()
+                              moved.append(it)
+                              changed = True
+                          else:
+                              keep.append(it)
+                      tasks[bucket_name] = keep
+                      return moved
+
+                  moved = []
+                  for b in ("open","in_progress","blocked"):
+                      moved += move_to_done(b)
+
+                  if moved:
+                      tasks.setdefault("done", [])
+                      tasks["done"].extend(moved)
+              return changed
+
+          def diff_events(prev, curr):
+              events = []
+              pidx = {x["id"]: x for x in prev}
+              cidx = {x["id"]: x for x in curr}
+              for cid, item in cidx.items():
+                  if cid not in pidx:
+                      events.append({"type":"created","id":cid,"at":now_iso(),"item":item})
+                  else:
+                      if pidx[cid].get("_bucket") != item.get("_bucket"):
+                          events.append({"type":"status_changed","id":cid,"at":now_iso(),
+                                         "from":pidx[cid].get("_bucket"),"to":item.get("_bucket")})
+                      pi = copy.deepcopy(pidx[cid]); ci = copy.deepcopy(item)
+                      for k in ("_bucket",): pi.pop(k, None); ci.pop(k, None)
+                      if sha(pi) != sha(ci):
+                          events.append({"type":"updated","id":cid,"at":now_iso(),"item":item})
+              for pid, pitem in pidx.items():
+                  if pid not in cidx:
+                      events.append({"type":"closed","id":pid,"at":now_iso(),"item":pitem})
+              return events
+
+          def main():
+              if not TASKS.exists():
+                  print("No tasks.yml found; nothing to do.")
+                  return 0
+              tasks = load_yaml(TASKS) or {}
+              tasks.setdefault("meta", {}).update({"updated_at": now_iso()})
+
+              # Apply auto-close rules if TASKOPS_TAG is set (from tag watcher)
+              tag = os.getenv("TASKOPS_TAG", "").strip()
+              changed_by_rules = apply_rules(tasks, tag)
+
+              # Persist tasks.yml if changed (rules updated buckets)
+              if changed_by_rules:
+                  TASKS.write_text(yaml.safe_dump(tasks, sort_keys=False), encoding="utf-8")
+
+              curr = flatten(tasks)
+              prev = []
+              if STATE.exists():
+                  st = load_json(STATE)
+                  if st.get("snapshot"):
+                      prev = st["snapshot"]
+
+              events = diff_events(prev, curr)
+              if events:
+                  with LEDGER.open("a", encoding="utf-8") as f:
+                      for ev in events:
+                          f.write(json.dumps(ev, sort_keys=True) + "\n")
+
+              README.write_text(summarize(tasks), encoding="utf-8")
+              (TDIR / ".state.json").write_text(json.dumps({"snapshot": curr}, indent=2), encoding="utf-8")
+
+              print(f"[taskops] tag={tag or '-'} events={len(events)} snapshot={len(curr)}")
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+      # -----------------------------
+      # 3) Tag watcher workflow (runs on tag push)
+      # -----------------------------
+      - path: ".github/workflows/taskops-tag-watcher.yml"
+        mode: "100644"
+        contents: |
+          name: taskops-tag-watcher
+          on:
+            workflow_dispatch: {}
+            push:
+              tags:
+                - 'v*'
+          permissions:
+            contents: write
+          jobs:
+            tag_close:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                  with:
+                    persist-credentials: true
+                    fetch-depth: 0
+                - uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.x"
+                - name: Install deps
+                  run: |
+                    python -m pip install --upgrade pip
+                    pip install pyyaml
+                - name: Apply TaskOps rules on tag
+                  env:
+                    TASKOPS_TAG: ${{ github.ref }}
+                  run: |
+                    python scripts/taskops_update.py
+                - name: Commit TaskOps changes (if any)
+                  run: |
+                    set -euo pipefail
+                    git config user.name "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add .github/taskops/README-TASKOPS.md \
+                            .github/taskops/ledger.jsonl \
+                            .github/taskops/.state.json \
+                            .github/taskops/tasks.yml || true
+                    if git diff --cached --quiet; then
+                      echo "No TaskOps changes to commit."
+                    else:
+                      git commit -m "chore(taskops): auto-close milestone tasks for ${{ github.ref }}"
+                      git push origin HEAD:main
+                    fi
+
+      # -----------------------------
+      # 4) Developer PR template
+      # -----------------------------
+      - path: ".github/pull_request_template.md"
+        mode: "100644"
+        contents: |
+          ## Summary
+          - What changed?
+          - Why?
+
+          ## TaskOps linkage
+          - Related TaskOps IDs: `task-id-1, task-id-2`
+          - Milestone (optional): `milestone:vX.Y`
+
+          ## Checklist
+          - [ ] Tests / Lint pass
+          - [ ] Secrets/permissions unchanged (or documented)
+          - [ ] Docs updated if needed
+
+          > Tip: include `milestone:vX.Y` label in tasks so they auto-close when tag `vX.Y` is pushed.
+
+      # -----------------------------
+      # 5) Issue form for new TaskOps task
+      # -----------------------------
+      - path: ".github/ISSUE_TEMPLATE/task.yml"
+        mode: "100644"
+        contents: |
+          name: "TaskOps: New Task"
+          description: Create a new TaskOps item (mirrored into tasks.yml)
+          labels: ["taskops"]
+          body:
+            - type: input
+              id: id
+              attributes:
+                label: Task ID
+                description: Unique stable ID (kebab-case)
+              validations:
+                required: true
+            - type: input
+              id: lane
+              attributes:
+                label: Lane
+                description: One of [autopatch, hcb, docs, infra]
+              validations:
+                required: true
+            - type: input
+              id: title
+              attributes:
+                label: Title
+              validations:
+                required: true
+            - type: textarea
+              id: detail
+              attributes:
+                label: Detail
+            - type: input
+              id: milestone
+              attributes:
+                label: Milestone label (optional)
+                description: e.g., milestone:v1.2
+            - type: checkboxes
+              id: confirm
+              attributes:
+                label: Confirm
+                options:
+                  - label: I will add this to `.github/taskops/tasks.yml` (open bucket)
+                    required: true
+
+  - commit:
+      message: "chore(taskops): add tag-driven auto-close, badge, PR/Issue templates, and tag watcher"
