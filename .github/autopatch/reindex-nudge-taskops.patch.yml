@@ -1,0 +1,264 @@
+version: 1
+actions:
+  - write_files:
+      # ------------------------------------------------------------------
+      # Reindex Nudge (augmented with TaskOps logging + optional escalation PR)
+      # ------------------------------------------------------------------
+      - path: "scripts/taskops_log.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import sys, os, json, pathlib, datetime
+
+          ROOT = pathlib.Path(".")
+          TDIR = ROOT / ".github" / "taskops"
+          LEDGER = TDIR / "ledger.jsonl"  # unified ledger
+
+          def now_iso():
+              return datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z"
+
+          def ensure_dirs():
+              TDIR.mkdir(parents=True, exist_ok=True)
+              if not LEDGER.exists():
+                  LEDGER.write_text("", encoding="utf-8")
+
+          def append_ledger(entry: dict):
+              with LEDGER.open("a", encoding="utf-8") as f:
+                  f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+          def main():
+              ensure_dirs()
+              # Read JSON payload from stdin (so workflow can pipe structured data)
+              payload = sys.stdin.read().strip()
+              if not payload:
+                  print("taskops_log: no payload on stdin; noop")
+                  return 0
+              try:
+                  data = json.loads(payload)
+              except Exception as e:
+                  print(f"taskops_log: invalid JSON payload: {e}", file=sys.stderr)
+                  return 0
+
+              data.setdefault("ts", now_iso())
+              append_ledger(data)
+              print("taskops_log: appended entry")
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+      - path: ".github/workflows/actions-reindex-nudge.yml"
+        mode: "100644"
+        contents: |
+          name: actions-reindex-nudge
+
+          on:
+            workflow_dispatch:
+              inputs:
+                do_touch:
+                  description: "Also commit a tiny timestamp file to .github/trigger/reindex/ to force a rescan"
+                  required: false
+                  default: "true"
+            push:
+              paths:
+                - ".github/trigger/reindex/**"
+
+          permissions:
+            contents: write
+            pull-requests: write
+
+          jobs:
+            reindex:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with:
+                    persist-credentials: true
+                    fetch-depth: 0
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.x"
+
+                - name: Enumerate workflows (for logs)
+                  run: |
+                    echo "Listing workflow files under .github/workflows"
+                    ls -la .github/workflows || true
+                    echo "----"
+                    echo "Dumping first lines of each workflow (helps GitHub re-index internally)"
+                    for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+                      [ -f "$f" ] && head -n 30 "$f" || true
+                    done
+
+                - name: Optional touch (commit a nudge file to trigger re-scan)
+                  if: ${{ github.event_name == 'workflow_dispatch' && inputs.do_touch == 'true' }}
+                  run: |
+                    set -euo pipefail
+                    mkdir -p .github/trigger/reindex
+                    TS="$(date -u +'%Y%m%dT%H%M%SZ')"
+                    echo "reindex nudge at ${TS}" > .github/trigger/reindex/ping-${TS}.txt
+                    git config user.name "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add .github/trigger/reindex/ping-${TS}.txt
+                    git commit -m "chore(actions): reindex nudge ${TS}"
+                    git push origin HEAD:${{ github.ref_name || 'main' }}
+
+                - name: Build quick report
+                  id: report
+                  run: |
+                    mkdir -p self_healing_out
+                    ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+                    cat > self_healing_out/ACTIONS_REINDEX_REPORT.json <<JSON
+                    {
+                      "event": "actions_reindex",
+                      "repo": "${GITHUB_REPOSITORY}",
+                      "run_id": "${GITHUB_RUN_ID}",
+                      "ref": "${GITHUB_REF}",
+                      "by": "${GITHUB_ACTOR}",
+                      "trigger": "${GITHUB_EVENT_NAME}",
+                      "ts": "${ts}"
+                    }
+                    JSON
+                    echo "json_path=self_healing_out/ACTIONS_REINDEX_REPORT.json" >> $GITHUB_OUTPUT
+
+                - name: Upload report
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: actions_reindex_report_${{ github.run_id }}
+                    path: self_healing_out/ACTIONS_REINDEX_REPORT.json
+                    if-no-files-found: warn
+
+                # ---- TaskOps: append to unified ledger.jsonl
+                - name: Log to TaskOps ledger
+                  run: |
+                    python - <<'PY' < "${{ steps.report.outputs.json_path }}"
+                    import sys, json, subprocess, pathlib
+                    # Ensure logger exists (should be from patch); if not, inline append fallback
+                    logger = pathlib.Path("scripts/taskops_log.py")
+                    payload = sys.stdin.read()
+                    if logger.exists():
+                        p = subprocess.run(["python", str(logger)], input=payload.encode(), check=False)
+                        sys.exit(p.returncode)
+                    # Fallback: append line directly
+                    tdir = pathlib.Path(".github/taskops"); tdir.mkdir(parents=True, exist_ok=True)
+                    led = tdir / "ledger.jsonl"
+                    with led.open("a", encoding="utf-8") as f:
+                        f.write(payload.strip()+"\n")
+                    print("fallback: appended to ledger.jsonl")
+                    PY
+
+                - name: Commit TaskOps ledger (and refresh README if present)
+                  env:
+                    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  run: |
+                    set -euo pipefail
+                    git config user.name "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+
+                    # Optional README refresh
+                    if [ -f "scripts/taskops_update.py" ]; then
+                      python scripts/taskops_update.py || true
+                    fi
+
+                    git add .github/taskops/ledger.jsonl .github/taskops/README-TASKOPS.md .github/taskops/.state.json 2>/dev/null || true
+
+                    if git diff --cached --quiet; then
+                      echo "No TaskOps changes to commit."
+                    else
+                      git commit -m "chore(taskops): log actions reindex event"
+                      git push origin HEAD:${{ github.ref_name || 'main' }}
+                    fi
+
+                # ---- Escalation: if too many reindex events in the last 7 days, open a review PR
+                - name: Evaluate reindex frequency & escalate if needed
+                  env:
+                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  run: |
+                    python - <<'PY'
+                    import os, json, pathlib, datetime, subprocess, sys, urllib.request, urllib.error
+                    repo = os.environ.get("GITHUB_REPOSITORY","")
+                    token = os.environ.get("GITHUB_TOKEN","")
+                    led = pathlib.Path(".github/taskops/ledger.jsonl")
+                    if not led.exists():
+                        print("No ledger; skipping escalation.")
+                        sys.exit(0)
+                    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=7)
+                    count = 0
+                    for line in led.read_text(encoding="utf-8").splitlines():
+                        try:
+                            ev = json.loads(line)
+                        except: continue
+                        if ev.get("event") == "actions_reindex":
+                            try:
+                                ts = ev.get("ts")
+                                if ts:
+                                    # ISO with Z
+                                    dt = datetime.datetime.fromisoformat(ts.replace("Z",""))
+                                else:
+                                    continue
+                                if dt >= cutoff:
+                                    count += 1
+                            except: pass
+
+                    print(f"Recent 7d reindex events: {count}")
+                    if count < 4:
+                        sys.exit(0)
+
+                    branch = f"taskops/reindex-review-{datetime.datetime.utcnow().strftime('%Y%m%d')}"
+                    # Create alert file
+                    p = pathlib.Path(".github/taskops/reindex"); p.mkdir(parents=True, exist_ok=True)
+                    alert = p / f"ALERT-{datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.md"
+                    alert.write_text(f"# Reindex Frequency Alert\\n\\nRecent 7d events: {count}.\\n\\nPlease review workflows index stability.\\n", encoding="utf-8")
+
+                    subprocess.run(["git","add",str(alert)], check=True)
+                    subprocess.run(["git","commit","-m",f"chore(taskops): reindex escalation (7d={count})"], check=True)
+
+                    # Create PR from new branch (force branch creation)
+                    subprocess.run(["git","checkout","-b",branch], check=True)
+                    subprocess.run(["git","push","-u","origin",branch], check=True)
+
+                    # Open PR
+                    data = {
+                      "title": f"TaskOps: Reindex frequency review (7d={count})",
+                      "head": branch,
+                      "base": os.environ.get("GITHUB_REF_NAME","main"),
+                      "body": "Auto-created by actions-reindex-nudge after repeated reindex events.\\n\\n## TaskOps\\n- actions-index-stability-review"
+                    }
+                    req = urllib.request.Request(f"https://api.github.com/repos/{repo}/pulls",
+                                                 data=json.dumps(data).encode(),
+                                                 headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
+                                                 method="POST")
+                    try:
+                        with urllib.request.urlopen(req) as r:
+                            print("Escalation PR opened.")
+                    except urllib.error.HTTPError as e:
+                        print("PR open failed:", e.read().decode())
+                    PY
+
+      - path: ".github/docs/REINDEX.md"
+        mode: "100644"
+        contents: |
+          # ⚙️ Actions Reindex Nudge (with TaskOps logging)
+
+          If a workflow's **Run workflow** button disappears, do one of:
+
+          ## Option A — Click to run
+          1. Actions → **actions-reindex-nudge** → **Run workflow**.
+          2. Keep **do_touch = true** (default). This commits a tiny file under `.github/trigger/reindex/` to force an Actions rescan.
+
+          ## Option B — No button available? Trigger by commit
+          1. Create or edit a file under `.github/trigger/reindex/` (e.g. `manual-ping.txt`).
+          2. Commit to `main`. The reindex workflow runs due to the `push` path filter.
+
+          ## TaskOps Integration
+          - Every run appends a JSON line in `.github/taskops/ledger.jsonl` with event = `actions_reindex`.
+          - If more than 3 reindex events occur within 7 days, an **escalation PR** is auto-opened for review.
+
+          ## Notes
+          - Safe: does not modify workflow definitions; only nudges the indexer.
+          - Artifacts: `actions_reindex_report_<run_id>.json` includes timestamp and run metadata.
+
+  - commit:
+      message: "chore(actions): reindex nudge + TaskOps logging and escalation (autopatch)"
