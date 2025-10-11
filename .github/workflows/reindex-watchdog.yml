@@ -1,0 +1,86 @@
+name: reindex-watchdog
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 */6 * * *"  # every 6 hours
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify & optionally dispatch reindex-nudge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name || 'main' }}
+        run: |
+          set -euo pipefail
+
+          NUDGE_FILE=".github/workflows/reindex-nudge.yml"
+
+          if [ ! -f "$NUDGE_FILE" ]; then
+            echo "reindex-nudge workflow missing — raising/refreshing an issue."
+            python - <<'PY'
+import os, json, urllib.request, urllib.error
+repo = os.environ["REPO"]
+token = os.environ["GH_TOKEN"]
+headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+
+def gh(method, url, data=None):
+    req = urllib.request.Request(url, data=(json.dumps(data).encode() if data else None), method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.getcode(), json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"{}")
+
+# Find existing open issue
+code, issues = gh("GET", f"https://api.github.com/repos/{repo}/issues?state=open&labels=reindex-watchdog")
+iid = None
+if code == 200:
+    for it in issues:
+        if "reindex-nudge" in (it.get("title") or "").lower():
+            iid = it["number"]; break
+
+body = "Watchdog detected that `.github/workflows/reindex-nudge.yml` is missing.\n" \
+       "Please run **AutoPatch Apply** to restore or commit the bootstrap patch."
+if iid is None:
+    gh("POST", f"https://api.github.com/repos/{repo}/issues", {
+        "title": "Watchdog: reindex-nudge workflow missing",
+        "body": body,
+        "labels": ["reindex-watchdog","ci"]
+    })
+else:
+    gh("POST", f"https://api.github.com/repos/{repo}/issues/{iid}/comments", {"body": body})
+PY
+            exit 1
+          fi
+
+          echo "reindex-nudge.yml found — dispatching it now."
+
+          python - <<'PY'
+import os, json, urllib.request, urllib.error
+repo = os.environ["REPO"]
+token = os.environ["GH_TOKEN"]
+ref = os.environ.get("BRANCH") or "main"
+headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+
+# Use the filename to dispatch the workflow
+url = f"https://api.github.com/repos/{repo}/actions/workflows/reindex-nudge.yml/dispatches"
+req = urllib.request.Request(url, data=json.dumps({"ref": ref}).encode(), method="POST", headers=headers)
+try:
+    urllib.request.urlopen(req).read()
+    print("✅ reindex-nudge dispatched.")
+except urllib.error.HTTPError as e:
+    print("⚠️  Failed to dispatch reindex-nudge:", e.read().decode())
+    raise
+PY
