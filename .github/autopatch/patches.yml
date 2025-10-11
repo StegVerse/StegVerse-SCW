@@ -1,2 +1,10 @@
-version: 1.0
-patches: []
+version: 1
+patches:
+  - id: readme-hcb-autoupdate
+    path: .github/autopatch/readme-hcb-autoupdate.patch.yml
+  - id: hcb-first-run-checklist
+    path: .github/autopatch/hcb-first-run-checklist.patch.yml
+  - id: taskops-bootstrap
+    path: .github/autopatch/taskops-bootstrap.patch.yml
+  - id: workflow-dispatch-inject
+    path: .github/autopatch/workflow-dispatch-inject.patch.yml
