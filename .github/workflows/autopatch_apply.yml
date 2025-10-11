@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/autopatch/**"
       - "scripts/autopatch_runner.py"
+      - ".github/trigger/autopatch/**"   # ← add this line
       
 permissions:
   contents: write
