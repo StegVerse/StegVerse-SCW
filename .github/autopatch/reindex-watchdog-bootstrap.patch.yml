@@ -19,7 +19,7 @@ actions:
               steps:
                 - name: Checkout
                   uses: actions/checkout@v4
-                - name: Verify & optionally dispatch reindex-nudge
+                - name: Verify & dispatch (nudge or autopatch-apply)
                   env:
                     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
                     REPO: ${{ github.repository }}
@@ -27,36 +27,34 @@ actions:
                   run: |
                     set -euo pipefail
                     NUDGE_FILE=".github/workflows/reindex-nudge.yml"
-                    if [ ! -f "$NUDGE_FILE" ]; then
-                      echo "reindex-nudge workflow missing — raising/refreshing an issue."
-                      python - <<'PY'
-import os, json, urllib.request, urllib.error
-repo = os.environ["REPO"]
-token = os.environ["GH_TOKEN"]
-headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
-def gh(m,u,d=None):
-  r=urllib.request.Request(u,data=(json.dumps(d).encode() if d else None),method=m,headers=headers)
-  try:
-    with urllib.request.urlopen(r) as R: pass
-  except urllib.error.HTTPError as e:
-    pass
-gh("POST", f"https://api.github.com/repos/{repo}/issues", {
-  "title": "Watchdog: reindex-nudge workflow missing",
-  "body": "AutoPatch installed the watchdog but reindex-nudge is absent. Run AutoPatch Apply to restore.",
-  "labels": ["reindex-watchdog","ci"]
-})
-PY
-                      exit 1
-                    fi
-                    echo "reindex-nudge.yml found — dispatching."
+                    [ -f "$NUDGE_FILE" ] && have_nudge=true || have_nudge=false
                     python - <<'PY'
-import os, json, urllib.request
-repo = os.environ["REPO"]; token=os.environ["GH_TOKEN"]; ref=os.environ.get("BRANCH") or "main"
-h={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
-u=f"https://api.github.com/repos/{repo}/actions/workflows/reindex-nudge.yml/dispatches"
-urllib.request.urlopen(urllib.request.Request(u,data=json.dumps({"ref":ref}).encode(),method="POST",headers=h))
-print("✅ reindex-nudge dispatched.")
+import os, json, urllib.request, urllib.error, sys
+repo   = os.environ["REPO"]
+token  = os.environ["GH_TOKEN"]
+ref    = os.environ.get("BRANCH") or "main"
+have_n = os.environ.get("have_nudge","false").lower()=="true"
+headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+def post(url,payload):
+  req=urllib.request.Request(url,data=json.dumps(payload).encode(),method="POST",headers=headers)
+  try:
+    urllib.request.urlopen(req).read(); return True,None
+  except urllib.error.HTTPError as e:
+    try: return False,e.read().decode()
+    except: return False,str(e)
+def issue(t,b):
+  post(f"https://api.github.com/repos/{repo}/issues",{"title":t,"body":b,"labels":["reindex-watchdog","ci"]})
+if have_n:
+  ok,err=post(f"https://api.github.com/repos/{repo}/actions/workflows/reindex-nudge.yml/dispatches",{"ref":ref})
+  if ok: print("✅ reindex-nudge dispatched."); sys.exit(0)
+  print("⚠️  Failed to dispatch reindex-nudge:",err); issue("Watchdog: failed to dispatch reindex-nudge",f"Err:\n```\n{err}\n```"); sys.exit(1)
+ok,err=post(f"https://api.github.com/repos/{repo}/actions/workflows/autopatch-apply.yml/dispatches",{"ref":ref})
+if ok:
+  print("🩹 reindex-nudge missing — triggered autopatch-apply.")
+  issue("Watchdog: reindex-nudge missing — triggered AutoPatch",
+        f"Dispatched `autopatch-apply.yml` on `{ref}` to restore the nudge.")
+  sys.exit(0)
+print("❌ autopatch-apply dispatch failed:",err); issue("Watchdog: nudge missing & autopatch-apply failed",f"Err:\n```\n{err}\n```"); sys.exit(1)
 PY
-
   - commit:
-      message: "chore(autopatch): add reindex-watchdog workflow (bootstrap)"
+      message: "chore(autopatch): add self-healing reindex-watchdog (auto-dispatch autopatch-apply)"
