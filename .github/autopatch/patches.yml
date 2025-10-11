@@ -10,3 +10,5 @@ patches:
   path: .github/autopatch/pr-template-taskops.patch.yml
   - id: actions-reindex-nudge
   path: .github/autopatch/reindex-nudge.patch.yml
+  - id: actions-reindex-nudge-taskops
+  path: .github/autopatch/reindex-nudge-taskops.patch.yml
