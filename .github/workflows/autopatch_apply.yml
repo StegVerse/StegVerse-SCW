@@ -1,13 +1,13 @@
 name: autopatch-apply
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch: {}       # 👈 adds manual run support
   push:
     branches: [ "main" ]
     paths:
       - ".github/autopatch/**"
       - "scripts/autopatch_runner.py"
-      - ".github/trigger/autopatch/**"   # ← add this line
+      - ".github/trigger/autopatch/**"
       
 permissions:
   contents: write
