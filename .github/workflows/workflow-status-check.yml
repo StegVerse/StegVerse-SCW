@@ -1,0 +1,256 @@
+name: workflow-status-check
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Gather workflow files
+        id: gather
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .github/_reports
+          # List local workflow files
+          find .github/workflows -maxdepth 1 \( -name "*.yml" -o -name "*.yaml" \) -type f -print0 \
+            | xargs -0 -I{} realpath {} \
+            | sed "s|$PWD/||" \
+            > .github/_reports/local_workflows.txt || true
+          echo "Local workflow files:"
+          cat .github/_reports/local_workflows.txt || true
+
+      - name: Build status report (compare local vs API, fetch last run)
+        id: report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+import os, json, sys, pathlib, re, time
+import urllib.request, urllib.error
+import yaml
+
+repo = os.environ["REPO"]
+token = os.environ["GH_TOKEN"]
+
+def gh_get(url):
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.getcode(), json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except Exception:
+            return e.code, {"message": str(e)}
+    except Exception as e:
+        return 0, {"message": str(e)}
+
+# Local workflows
+local_list_path = pathlib.Path(".github/_reports/local_workflows.txt")
+local_files = []
+if local_list_path.exists():
+    for line in local_list_path.read_text().splitlines():
+        p = line.strip()
+        if p:
+            local_files.append(p)
+
+# API workflows (registered with Actions)
+code, wf_api = gh_get(f"https://api.github.com/repos/{repo}/actions/workflows?per_page=100")
+if code != 200:
+    print(f"::error title=API error::GET workflows returned HTTP {code} {wf_api}")
+    sys.exit(1)
+
+api_by_path = {}
+api_by_id = {}
+for w in wf_api.get("workflows", []) or []:
+    api_by_path[w.get("path","")] = w
+    api_by_id[w.get("id")] = w
+
+def has_dispatch(path):
+    try:
+        data = yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    on = (data or {}).get("on")
+    if on is None:
+        return False
+    if isinstance(on, dict):
+        return "workflow_dispatch" in on
+    if isinstance(on, list):
+        return "workflow_dispatch" in on
+    return False
+
+def last_run_info(wid):
+    # GET last run
+    code, runs = gh_get(f"https://api.github.com/repos/{repo}/actions/workflows/{wid}/runs?per_page=1")
+    if code != 200:
+        return {"error": f"runs_http_{code}"}
+    items = runs.get("workflow_runs") or []
+    if not items:
+        return {"exists": False}
+    r = items[0]
+    return {
+        "exists": True,
+        "status": r.get("status"),
+        "conclusion": r.get("conclusion"),
+        "run_number": r.get("run_number"),
+        "event": r.get("event"),
+        "created_at": r.get("created_at"),
+        "html_url": r.get("html_url"),
+    }
+
+report = {
+    "repo": repo,
+    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "workflows": [],
+    "summary": {
+        "total_local": len(local_files),
+        "missing_in_api": 0,
+        "no_dispatch": 0,
+        "with_last_run": 0,
+        "problems": 0,
+    }
+}
+
+problems = []
+
+for path in local_files:
+    item = {
+        "path": path,
+        "has_workflow_dispatch": has_dispatch(path),
+        "api_registered": path in api_by_path,
+        "api_info": None,
+        "last_run": None,
+    }
+    api = api_by_path.get(path)
+    if api:
+        item["api_info"] = {
+            "id": api.get("id"),
+            "name": api.get("name"),
+            "state": api.get("state"),
+            "badge_url": api.get("badge_url"),
+            "created_at": api.get("created_at"),
+            "updated_at": api.get("updated_at"),
+            "html_url": api.get("html_url"),
+        }
+        lr = last_run_info(api.get("id"))
+        item["last_run"] = lr
+        if lr.get("exists"):
+            report["summary"]["with_last_run"] += 1
+    else:
+        report["summary"]["missing_in_api"] += 1
+        problems.append(f"Not registered with Actions API: `{path}` (possible YAML error or path issue)")
+
+    if not item["has_workflow_dispatch"]:
+        report["summary"]["no_dispatch"] += 1
+        problems.append(f"No `workflow_dispatch` trigger found in `{path}` (Run button will not appear).")
+
+    report["workflows"].append(item)
+
+report["problems"] = problems
+report["summary"]["problems"] = len(problems)
+
+out_json = pathlib.Path(".github/_reports/workflow_status_report.json")
+out_md   = pathlib.Path(".github/_reports/workflow_status_report.md")
+
+out_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+# Build Markdown summary
+lines = []
+lines.append(f"# Workflow Status Report")
+lines.append(f"- Repo: **{repo}**")
+lines.append(f"- Generated: `{report['generated_at']}`")
+lines.append("")
+lines.append("## Summary")
+s = report["summary"]
+lines.append(f"- Local files: **{s['total_local']}**")
+lines.append(f"- Missing in API: **{s['missing_in_api']}**")
+lines.append(f"- Without `workflow_dispatch`: **{s['no_dispatch']}**")
+lines.append(f"- With last run: **{s['with_last_run']}**")
+lines.append(f"- Problems: **{s['problems']}**")
+lines.append("")
+if problems:
+    lines.append("## Problems")
+    for p in problems:
+        lines.append(f"- {p}")
+    lines.append("")
+lines.append("## Details")
+for w in report["workflows"]:
+    lines.append(f"### `{w['path']}`")
+    lines.append(f"- workflow_dispatch: `{w['has_workflow_dispatch']}`")
+    lines.append(f"- registered (API): `{w['api_registered']}`")
+    if w["api_info"]:
+        ai = w["api_info"]
+        lines.append(f"- name/state: **{ai.get('name')}** / `{ai.get('state')}`")
+        lines.append(f"- id: `{ai.get('id')}`")
+        lines.append(f"- url: {ai.get('html_url')}")
+    if w["last_run"]:
+        lr = w["last_run"]
+        if lr.get("exists"):
+            lines.append(f"- last run: `{lr.get('status')}` → `{lr.get('conclusion')}` (#{lr.get('run_number')}, {lr.get('event')}, {lr.get('created_at')})")
+            lines.append(f"  - {lr.get('html_url')}")
+        elif lr.get("error"):
+            lines.append(f"- last run: error {lr['error']}")
+        else:
+            lines.append(f"- last run: _none_")
+    lines.append("")
+out_md.write_text("\n".join(lines), encoding="utf-8")
+
+# Print short summary to job summary
+print("### Workflow Status Report")
+print()
+print("```json")
+print(json.dumps(report["summary"], indent=2))
+print("```")
+
+# Exit code: warn (1) if problems, else 0
+if problems:
+    sys.exit(1)
+else:
+    sys.exit(0)
+PY
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-status-report-${{ github.run_id }}
+          path: .github/_reports/workflow_status_report.*
+
+      - name: Create/Update tracking issue
+        if: failure()  # problems found (exit code 1)
+        uses: peter-evans/create-issue-from-file@v4
+        with:
+          title: "Workflow status problems detected ❗"
+          content-filepath: .github/_reports/workflow_status_report.md
+          labels: "workflows,ci,needs-attention"
+          update-existing: true
+          search-existing: "title"
