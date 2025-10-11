@@ -30,15 +30,6 @@ actions:
           def save_yaml(p, data):
               p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
-          def flatten(tasks):
-              out = []
-              for bucket in ("open","in_progress","blocked","done"):
-                  for it in tasks.get(bucket, []) or []:
-                      x = copy.deepcopy(it)
-                      x["_bucket"] = bucket
-                      out.append(x)
-              return out
-
           def to_bucket(tasks, task_id):
               for b in ("open","in_progress","blocked","done"):
                   for it in tasks.get(b, []) or []:
@@ -54,9 +45,7 @@ actions:
                   return False
               if not src:
                   return False
-              # remove from src
-              keep = []
-              found = None
+              keep, found = [], None
               for it in tasks[src]:
                   if it.get("id") == task_id and not found:
                       found = copy.deepcopy(it)
@@ -71,52 +60,38 @@ actions:
               tasks[dest_bucket].append(found)
               return True
 
-          # --- ID extraction helpers --------------------------------------
-          # We support a few patterns:
-          # 1) Lines like "TaskOps: foo-bar" or "taskops: foo-bar"
-          # 2) "Task: foo-bar", "task: foo-bar"
-          # 3) Any explicit mention of IDs under a "TaskOps" section
-          # 4) Bare kebab-case IDs if they appear inside "TaskOps IDs" list
-          SECTION_RE = re.compile(r"(?im)^(?:#+\s*)?(?:taskops|taskops ids?|tasks?)\s*[:\-]?\s*$")
-          ID_RE = re.compile(r"\b([a-z0-9][a-z0-9\-_]{1,63})\b")
+          SECTION_RE = re.compile(r"(?im)^(?:#+\\s*)?(?:taskops|taskops ids?|tasks?)\\s*[:\\-]?\\s*$")
+          ID_RE = re.compile(r"\\b([a-z0-9][a-z0-9\\-_]{1,63})\\b")
 
           def find_ids(text):
               ids = set()
-
-              # direct prefixes
-              for m in re.finditer(r'(?im)^\s*(?:taskops|task)\s*[:\-]\s*([a-z0-9][a-z0-9\-_]{1,63})\s*$', text):
+              for m in re.finditer(r'(?im)^\\s*(?:taskops|task)\\s*[:\\-]\\s*([a-z0-9][a-z0-9\\-_]{1,63})\\s*$', text):
                   ids.add(m.group(1))
-
-              # try to capture IDs from a "TaskOps" section (following lines until blank or next header)
               lines = text.splitlines()
               for i, line in enumerate(lines):
                   if SECTION_RE.match(line.strip()):
-                      # collect subsequent bullet-like lines until blank/header
                       j = i + 1
                       while j < len(lines):
                           ln = lines[j]
                           if not ln.strip(): break
                           if ln.strip().startswith("#"): break
-                          # pick kebab-ish tokens in this line
                           for m in ID_RE.finditer(ln):
                               token = m.group(1)
-                              # try to avoid generic words; heuristic: must contain a dash or underscore
                               if "-" in token or "_" in token:
                                   ids.add(token.lower())
                           j += 1
-
               return sorted(ids)
 
           def main():
               event = os.getenv("GITHUB_EVENT_NAME", "")
               payload_path = os.getenv("GITHUB_EVENT_PATH", "")
               if not payload_path or not os.path.exists(payload_path):
-                  print("[pr-bridge] No event payload; exiting calmly.")
+                  print("[pr-bridge] No event payload; exit.")
                   return 0
 
               tasks = load_yaml(TASKS)
               if tasks is None:
-                  print("[pr-bridge] tasks.yml not found; nothing to do.")
+                  print("[pr-bridge] tasks.yml not found; no-op.")
                   return 0
 
               data = json.loads(open(payload_path, "r", encoding="utf-8").read() or "{}")
@@ -125,41 +100,34 @@ actions:
               merged = pr.get("merged", False)
               title = pr.get("title") or ""
               body  = pr.get("body") or ""
-              text = f"{title}\n\n{body}"
+              text = f"{title}\\n\\n{body}"
 
               ids = find_ids(text)
               if not ids:
-                  print("[pr-bridge] no TaskOps IDs found; exiting.")
+                  print("[pr-bridge] no TaskOps IDs found; exit.")
                   return 0
 
-              print(f"[pr-bridge] ids -> {ids}; action={action}; merged={merged}")
-
+              print(f"[pr-bridge] ids={ids}; action={action}; merged={merged}")
               changed = False
+
               if event == "pull_request":
                   if action in ("opened","edited","reopened","synchronize"):
-                      # Move any referenced IDs to in_progress (if they exist)
                       for tid in ids:
-                          moved = move_task(tasks, tid, "in_progress")
-                          if moved:
-                              print(f"[pr-bridge] moved {tid} -> in_progress")
+                          if move_task(tasks, tid, "in_progress"):
+                              print(f"[pr-bridge] {tid} -> in_progress")
                               changed = True
-                  elif action == "closed":
-                      # If merged -> done (set closed_at)
-                      if merged:
-                          for tid in ids:
-                              # if already in done, skip; else move
-                              if to_bucket(tasks, tid) != "done":
-                                  moved = move_task(tasks, tid, "done", set_closed=True)
-                                  if moved:
-                                      print(f"[pr-bridge] moved {tid} -> done (merged)")
-                                      changed = True
+                  elif action == "closed" and merged:
+                      for tid in ids:
+                          if to_bucket(tasks, tid) != "done":
+                              if move_task(tasks, tid, "done", set_closed=True):
+                                  print(f"[pr-bridge] {tid} -> done (merged)")
+                                  changed = True
 
               if changed:
                   save_yaml(TASKS, tasks)
                   print("[pr-bridge] tasks.yml updated.")
               else:
                   print("[pr-bridge] no changes required.")
-
               return 0
 
           if __name__ == "__main__":
@@ -224,7 +192,6 @@ actions:
                       git commit -m "chore(taskops): PR-bridge sync from PR event"
                       git push origin HEAD:${{ github.ref_name || 'main' }}
 
-                # Re-run TaskOps updater to refresh README/ledger snapshot
                 - name: Refresh TaskOps summary
                   run: |
                     python scripts/taskops_update.py
