@@ -1,33 +1,284 @@
 version: 1
 actions:
   - write_files:
-      # --- TaskOps workflow ---
-      - path: ".github/workflows/taskops.yml"
+      - path: ".github/taskops/tasks.yml"
         mode: "100644"
         contents: |
-          name: TaskOps – apply & archive
+          version: 1
+          meta:
+            owner: StegVerse
+            updated_at: 1970-01-01T00:00:00Z
+            notes: |
+              This file is the source of truth for TaskOps.
+              Edit this file (not the README) to add/modify tasks.
+          lanes:
+            - id: autopatch
+              title: AutoPatch & CI
+              description: Tasks that evolve the patch runner and CI workflows.
+            - id: hcb
+              title: Hybrid Collab Bridge
+              description: Tasks to evolve the hybrid-collab-bridge module and export.
+            - id: docs
+              title: Docs & Index
+              description: Docs, READMEs, and repository index upkeep.
+            - id: infra
+              title: Infra & Self-Heal
+              description: Watchdogs, reindex nudges, permissions, secrets.
 
+          # Status buckets. Move items between these lists.
+          # id: must be unique and stable; lane: one of the lanes above.
+          open:
+            - id: taskops-bootstrap
+              lane: infra
+              title: "Bootstrap TaskOps (tasks.yml + updater workflow + ledger)"
+              detail: "Install TaskOps scaffolding so all change tasks are tracked, closed, and logged."
+              created_at: 2025-10-11T00:00:00Z
+              labels: [ "taskops", "infra" ]
+
+            - id: export-hcb-live
+              lane: hcb
+              title: "Export hybrid-collab-bridge to StegVerse/hybrid-collab-bridge (live push)"
+              detail: "Switch export-hcb from dry-run to direct push with version tag v1.2."
+              created_at: 2025-10-11T00:00:00Z
+              labels: [ "hcb", "export" ]
+
+            - id: autopatch-manifest-unify
+              lane: autopatch
+              title: "Unify manifest entries and add comments for discoverability"
+              detail: "Ensure patches.yml includes concise notes and IDs are consistent."
+              created_at: 2025-10-11T00:00:00Z
+              labels: [ "autopatch", "docs" ]
+
+          in_progress:
+            - id: watchdog-autodispatch
+              lane: infra
+              title: "Watchdog auto-dispatches reindex-nudge or autopatch-apply"
+              detail: "Installed; verify it runs on schedule and opens issues on failure."
+              created_at: 2025-10-11T00:00:00Z
+              labels: [ "infra", "self-heal" ]
+
+          blocked: []
+
+          done:
+            - id: reindex-nudge-installed
+              lane: infra
+              title: "Install reindex-nudge workflow"
+              detail: "Adds .github/workflows/reindex-nudge.yml with safe timestamp push."
+              created_at: 2025-10-11T00:00:00Z
+              closed_at: 2025-10-11T00:00:00Z
+              labels: [ "infra", "self-heal" ]
+
+      - path: ".github/taskops/README-TASKOPS.md"
+        mode: "100644"
+        contents: |
+          # 🧭 TaskOps — StegVerse repo-level task tracker
+
+          TaskOps is a repo-native, patch-friendly task system:
+          - Source of truth: `.github/taskops/tasks.yml`
+          - Append-only audit: `.github/taskops/ledger.jsonl`
+          - Human view: this README (auto-updated by the workflow)
+          - Script: `scripts/taskops_update.py`
+
+          ## How to use
+          1. **Edit** tasks in `.github/taskops/tasks.yml` (not here).
+          2. Commit changes to `main`.
+          3. Actions → **taskops-update** runs and:
+             - re-writes this README summary,
+             - appends changes to the **ledger**, and
+             - keeps a small `.state.json` for diffing.
+
+          ## Buckets
+          - `open` → `in_progress` → `done` or `blocked`
+          - Each item: `{ id, lane, title, detail, created_at, [closed_at], labels[] }`
+
+          ## Lanes
+          - `autopatch` — patch runner & CI
+          - `hcb` — hybrid-collab-bridge
+          - `docs` — READMEs & indexes
+          - `infra` — watchdogs, nudges, permissions
+
+          ## Ledger format
+          - JSON Lines (`.jsonl`): one event per line.
+          - Events: `created`, `status_changed`, `updated`, `closed`.
+
+          ---
+          _This README is generated. Edit `tasks.yml`, not this file._
+
+      - path: ".github/taskops/ledger.jsonl"
+        mode: "100644"
+        contents: ""
+
+      - path: ".github/taskops/.state.json"
+        mode: "100644"
+        contents: |
+          { "snapshot": null }
+
+      - path: "scripts/taskops_update.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import json, sys, pathlib, copy, hashlib, datetime
+          try:
+              import yaml
+          except Exception:
+              print("PyYAML is required (pip install pyyaml)", file=sys.stderr)
+              sys.exit(1)
+
+          ROOT = pathlib.Path(".")
+          TDIR = ROOT / ".github" / "taskops"
+          TASKS = TDIR / "tasks.yml"
+          LEDGER = TDIR / "ledger.jsonl"
+          STATE = TDIR / ".state.json"
+          README = TDIR / "README-TASKOPS.md"
+
+          def now_iso():
+              return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+          def load_yaml(p):
+              return yaml.safe_load(p.read_text(encoding="utf-8"))
+
+          def load_json(p):
+              return json.loads(p.read_text(encoding="utf-8"))
+
+          def write_json(p, obj):
+              p.write_text(json.dumps(obj, indent=2, sort_keys=True), encoding="utf-8")
+
+          def sha(obj):
+              return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()
+
+          def to_index(items):
+              return { it["id"]: it for it in items }
+
+          def flatten(tasks):
+              all_items = []
+              for bucket in ("open","in_progress","blocked","done"):
+                  for it in tasks.get(bucket, []) or []:
+                      x = copy.deepcopy(it)
+                      x["_bucket"] = bucket
+                      all_items.append(x)
+              return all_items
+
+          def summarize(tasks):
+              txt = []
+              lanes = {ln["id"]: ln for ln in tasks.get("lanes", [])}
+              def lane_title(lid): return lanes.get(lid, {}).get("title", lid)
+
+              counts = {b: len(tasks.get(b, []) or []) for b in ("open","in_progress","blocked","done")}
+              txt.append(f"# 🧭 TaskOps — Repo Tasks")
+              txt.append("")
+              txt.append(f"Updated: `{now_iso()}`  \nSource: `.github/taskops/tasks.yml`")
+              txt.append("")
+              txt.append("## Status")
+              txt.append(f"- open: **{counts['open']}**")
+              txt.append(f"- in_progress: **{counts['in_progress']}**")
+              txt.append(f"- blocked: **{counts['blocked']}**")
+              txt.append(f"- done: **{counts['done']}**")
+              txt.append("")
+              for bucket in ("open","in_progress","blocked","done"):
+                  items = tasks.get(bucket, []) or []
+                  if not items: continue
+                  title = bucket.replace("_"," ").title()
+                  txt.append(f"## {title}")
+                  for it in items:
+                      lid = it.get("lane","")
+                      txt.append(f"- **{it['id']}** — _{lane_title(lid)}_: {it['title']}")
+                      if it.get("labels"):
+                          txt.append(f"  - labels: `{', '.join(it['labels'])}`")
+                      if it.get("detail"):
+                          txt.append(f"  - {it['detail']}")
+                      if bucket == "done" and it.get("closed_at"):
+                          txt.append(f"  - closed: `{it['closed_at']}`")
+                  txt.append("")
+              return "\n".join(txt).strip() + "\n"
+
+          def diff_events(prev, curr):
+              # Return ledger events between snapshots
+              events = []
+              pidx = {x["id"]: x for x in prev}
+              cidx = {x["id"]: x for x in curr}
+
+              # Created and updated
+              for cid, item in cidx.items():
+                  if cid not in pidx:
+                      events.append({"type":"created","id":cid,"at":now_iso(),"item":item})
+                  else:
+                      # status change or any field differences (excluding timestamps)
+                      pb = pidx[cid].get("_bucket"); cb = item.get("_bucket")
+                      if pb != cb:
+                          events.append({"type":"status_changed","id":cid,"at":now_iso(),"from":pb,"to":cb})
+                      # any non-bucket content change?
+                      pi = copy.deepcopy(pidx[cid]); ci = copy.deepcopy(item)
+                      for k in ("_bucket",): pi.pop(k, None); ci.pop(k, None)
+                      if sha(pi) != sha(ci):
+                          events.append({"type":"updated","id":cid,"at":now_iso(),"item":item})
+
+              # Closed
+              for pid, pitem in pidx.items():
+                  if pid not in cidx:
+                      events.append({"type":"closed","id":pid,"at":now_iso(),"item":pitem})
+              return events
+
+          def main():
+              if not TASKS.exists():
+                  print("No tasks.yml found; nothing to do.")
+                  return 0
+              tasks = load_yaml(TASKS) or {}
+
+              # Update meta timestamp
+              tasks.setdefault("meta", {}).update({"updated_at": now_iso()})
+              TASKS.write_text(yaml.safe_dump(tasks, sort_keys=False), encoding="utf-8")
+
+              curr = flatten(tasks)
+              prev = []
+              if STATE.exists():
+                  st = load_json(STATE)
+                  if st.get("snapshot"):
+                      prev = st["snapshot"]
+
+              events = diff_events(prev, curr)
+              if events:
+                  with LEDGER.open("a", encoding="utf-8") as f:
+                      for ev in events:
+                          f.write(json.dumps(ev, sort_keys=True) + "\n")
+
+              # Rewrite README summary
+              README.write_text(summarize(tasks), encoding="utf-8")
+
+              # Save snapshot
+              write_json(STATE, {"snapshot": curr})
+
+              print(f"[taskops] events: {len(events)}; snapshot size: {len(curr)}")
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+      - path: ".github/workflows/taskops-update.yml"
+        mode: "100644"
+        contents: |
+          name: taskops-update
           on:
-            workflow_dispatch:
-              inputs:
-                apply_only:
-                  description: "Apply tasks without archiving (true/false)"
-                  required: false
-                  default: "false"
+            workflow_dispatch: {}
             push:
+              branches: [ "main" ]
               paths:
-                - ".github/taskops/**"
+                - ".github/taskops/tasks.yml"
+                - "scripts/taskops_update.py"
+            schedule:
+              - cron: "13 3 * * *"  # daily @ 03:13 UTC
 
           permissions:
             contents: write
-            pull-requests: write
 
           jobs:
-            run:
+            update:
               runs-on: ubuntu-latest
               steps:
                 - name: Checkout
                   uses: actions/checkout@v4
+                  with:
+                    persist-credentials: true
+                    fetch-depth: 0
 
                 - name: Setup Python
                   uses: actions/setup-python@v5
@@ -35,222 +286,32 @@ actions:
                     python-version: "3.x"
 
                 - name: Install deps
-                  run: pip install pyyaml
-
-                - name: TaskOps apply
-                  id: taskops
-                  env:
-                    APPLY_ONLY: ${{ inputs.apply_only }}
                   run: |
-                    python - <<'PY'
-                    import os, sys, yaml, re, shutil, datetime, subprocess, pathlib, json
+                    python -m pip install --upgrade pip
+                    pip install pyyaml
 
-                    repo = pathlib.Path(".").resolve()
-                    task_root = repo/".github"/"taskops"
-                    attic = repo/".github"/"attic"/"taskops"
-                    log_path = task_root/"README-LOG.md"
-
-                    if not task_root.exists():
-                        print("No .github/taskops/ present; nothing to do.")
-                        sys.exit(0)
-
-                    def load_yaml(p):
-                        with open(p, "r", encoding="utf-8") as f:
-                            return yaml.safe_load(f) or {}
-
-                    def write_text(path: pathlib.Path, text: str):
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        path.write_text(text, encoding="utf-8")
-
-                    def ensure_parent(path: pathlib.Path):
-                        path.parent.mkdir(parents=True, exist_ok=True)
-
-                    def apply_write_files(items):
-                        changed = []
-                        for it in items:
-                            path = repo / it["path"]
-                            mode = it.get("mode","100644")
-                            contents = it.get("contents","")
-                            if path.exists() and path.read_text(encoding="utf-8") == contents:
-                                continue
-                            ensure_parent(path)
-                            path.write_text(contents, encoding="utf-8")
-                            try:
-                                subprocess.run(["git","update-index","--chmod=+x" if mode=="100755" else "--chmod=-x", str(path)], check=False)
-                            except Exception:
-                                pass
-                            changed.append(str(path))
-                        return changed
-
-                    def apply_delete_paths(items):
-                        changed = []
-                        for it in items:
-                            path = repo / it
-                            if path.exists():
-                                if path.is_dir():
-                                    shutil.rmtree(path)
-                                else:
-                                    path.unlink()
-                                changed.append(str(path))
-                        return changed
-
-                    def apply_patch_lines(patches):
-                        changed = []
-                        for p in patches:
-                            file_path = repo / p["path"]
-                            if not file_path.exists():
-                                continue
-                            src = file_path.read_text(encoding="utf-8")
-                            anchor = re.compile(p["anchor"], re.M)
-                            m = anchor.search(src)
-                            if not m:
-                                continue
-                            position = p.get("position","after")
-                            block = p.get("text","")
-                            if position == "replace":
-                                new = anchor.sub(block, src, count=1)
-                            else:
-                                ins_at = m.start() if position=="before" else m.end()
-                                around = src[max(0, ins_at-500):ins_at+500]
-                                if block.strip() and block.strip() in around:
-                                    new = src
-                                else:
-                                    new = src[:ins_at] + block + src[ins_at:]
-                            if new != src:
-                                file_path.write_text(new, encoding="utf-8")
-                                changed.append(str(file_path))
-                        return changed
-
-                    # Gather tasks
-                    buckets = []
-                    for sub in ["tasks","cleanup","readme"]:
-                        d = task_root/sub
-                        if d.exists():
-                            for p in sorted(d.rglob("*.yml")):
-                                y = load_yaml(p)
-                                y["_file"] = str(p)
-                                y["_kind"] = sub
-                                buckets.append(y)
-
-                    if not buckets:
-                        print("No tasks found.")
-                        sys.exit(0)
-
-                    apply_only = (os.getenv("APPLY_ONLY","false").lower() in ("1","true","yes"))
-
-                    log_items = []
-                    any_changes = False
-
-                    for t in buckets:
-                        tid = t.get("id") or pathlib.Path(t["_file"]).stem
-                        summary = t.get("summary","")
-                        confirm = t.get("confirm","auto")  # auto | manual
-                        allow_reapply = bool(t.get("allow_reapply", False))
-
-                        if confirm == "manual" and not allow_reapply:
-                            status = "PENDING_CONFIRM"
-                            log_items.append({"id":tid,"kind":t["_kind"],"status":status,"summary":summary,"file":t["_file"]})
-                            continue
-
-                        changed_files = []
-
-                        for wf in t.get("write_files", []):
-                            changed_files += apply_write_files([wf])
-
-                        if t.get("delete_paths"):
-                            changed_files += apply_delete_paths(t["delete_paths"])
-
-                        if t.get("patch_lines"):
-                            changed_files += apply_patch_lines(t["patch_lines"])
-
-                        changed_files = sorted(set(changed_files))
-                        any_changes = any_changes or bool(changed_files)
-                        status = "APPLIED" if changed_files else "NOOP"
-                        log_items.append({
-                            "id": tid, "kind": t["_kind"], "status": status, "summary": summary,
-                            "file": t["_file"], "changed": changed_files
-                        })
-
-                        auto_archive = bool(t.get("auto_archive", True))
-                        if (status in ("APPLIED","NOOP")) and auto_archive and not apply_only:
-                            ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-                            target = attic/f"{ts}__{tid}.yml"
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.move(t["_file"], target)
-
-                    lines = []
-                    lines.append("# TaskOps Log\n")
-                    lines.append(f"_Generated: {datetime.datetime.utcnow().isoformat()}Z_\n")
-                    lines.append("\n| id | kind | status | summary | source file | changed |\n|---|---|---|---|---|---|")
-                    for it in log_items:
-                        changed = "<br>".join(it.get("changed") or []) if it.get("changed") else ""
-                        lines.append(f"| `{it['id']}` | {it['kind']} | **{it['status']}** | {it['summary']} | `{it['file']}` | {changed} |")
-                    (task_root/"README-LOG.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-                    PY
-
-                - name: Create branch, commit, PR
-                  env:
-                    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                - name: Run TaskOps updater
                   run: |
-                    set -e
-                    branch="taskops/apply-$(date +%Y%m%d-%H%M%S)"
-                    git config user.name "taskops-bot"
+                    python scripts/taskops_update.py
+
+                - name: Commit changes (ledger/readme/state)
+                  run: |
+                    set -euo pipefail
+                    git config user.name "StegVerse Bot"
                     git config user.email "bot@stegverse.org"
-                    git checkout -b "$branch"
-                    git add -A
+                    git add .github/taskops/README-TASKOPS.md \
+                            .github/taskops/ledger.jsonl \
+                            .github/taskops/.state.json \
+                            .github/taskops/tasks.yml || true
                     if git diff --cached --quiet; then
-                      echo "No repo changes; skipping PR."
-                      exit 0
+                      echo "No TaskOps changes to commit."
+                    else
+                      git commit -m "chore(taskops): update README & ledger"
+                      git push origin HEAD:main
                     fi
-                    git commit -m "taskops: apply tasks & update README-LOG"
-                    git push -u origin "$branch"
-                    gh pr create --title "TaskOps: apply & archive" --body "Automated TaskOps run. See \`.github/taskops/README-LOG.md\`."
 
-      # --- Directories & seed files ---
-      - path: ".github/taskops/README-LOG.md"
-        mode: "100644"
-        contents: |
-          # TaskOps Log
-          _This file is generated by the TaskOps workflow. Do not edit manually._
-
-      - path: ".github/taskops/tasks/README-pointer.yml"
-        mode: "100644"
-        contents: |
-          id: readme-pointer-hcb
-          summary: Add link to the new Hybrid Collab Bridge repo in root README
-          confirm: auto
-          auto_archive: true
-
-          patch_lines:
-            - path: "README.md"
-              anchor: "^#\\s+"
-              position: after
-              text: |
-                ## Hybrid Collab Bridge
-
-                The Hybrid Collab Bridge has been exported to its own repository:
-                - https://github.com/StegVerse/hybrid-collab-bridge
-
-                ---
-
-      - path: ".github/taskops/readme/INDEX-entry.yml"
-        mode: "100644"
-        contents: |
-          id: docs-index-hcb
-          summary: Add HCB entry into docs/INDEX.md (if file exists)
-          confirm: auto
-          auto_archive: true
-
-          patch_lines:
-            - path: "docs/INDEX.md"
-              anchor: "^#\\s+"
-              position: after
-              text: |
-                - [Hybrid Collab Bridge](https://github.com/StegVerse/hybrid-collab-bridge) — API orchestration + human-coordination traces
-
-      - path: ".github/taskops/cleanup/.keep"
-        mode: "100644"
-        contents: ""
+                - name: Summary
+                  run: echo "✅ TaskOps update complete."
 
   - commit:
-      message: "chore(taskops): bootstrap TaskOps lane (workflow, seeds, log)"
+      message: "chore(taskops): bootstrap TaskOps (tasks.yml, updater, ledger, workflow)"
