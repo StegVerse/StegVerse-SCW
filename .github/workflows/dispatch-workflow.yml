@@ -1,0 +1,74 @@
+name: dispatch-workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_file:
+        description: "Workflow file to dispatch (e.g., .github/workflows/autopatch-apply.yml)"
+        required: true
+      ref:
+        description: "Git ref to run on (branch or tag)"
+        required: false
+        default: "main"
+      inputs_json:
+        description: "JSON object of inputs for target workflow_dispatch (optional)"
+        required: false
+        default: "{}"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs_json
+        id: parse
+        run: |
+          set -euo pipefail
+          echo '${{ github.event.inputs.inputs_json }}' | python - <<'PY'
+import json, os, sys
+s = os.environ["GITHUB_EVENT_INPUTS_INPUTS_JSON"]
+try:
+    j = json.loads(s or "{}")
+    assert isinstance(j, dict)
+except Exception as e:
+    print(f"::error title=Bad inputs_json::Must be JSON object. {e}")
+    sys.exit(1)
+print("OK")
+PY
+
+      - name: Dispatch target workflow via API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.inputs.ref }}
+          WF_FILE: ${{ github.event.inputs.workflow_file }}
+          WF_INPUTS: ${{ github.event.inputs.inputs_json }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error title=Missing token::GITHUB_TOKEN not available."
+            exit 1
+          fi
+          # GitHub API requires the workflow id OR filename
+          # POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches
+          api="https://api.github.com/repos/${REPO}/actions/workflows/$(python - <<'PY'
+import os, urllib.parse
+print(urllib.parse.quote(os.environ["WF_FILE"]))
+PY
+)/dispatches"
+
+          echo "Dispatching ${WF_FILE} on ref=${REF} with inputs=${WF_INPUTS}"
+          resp=$(curl -sS -X POST "$api" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"ref\":\"${REF}\",\"inputs\":${WF_INPUTS}}")
+          # Successful dispatch returns 204 No Content
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "::error title=Dispatch failed::curl exit ${code}"
+            exit $code
+          fi
+          echo "✅ Dispatched"
