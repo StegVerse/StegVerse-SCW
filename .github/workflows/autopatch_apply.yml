@@ -1,7 +1,7 @@
 name: autopatch-apply
 
 on:
-  workflow_dispatch: {}        # manual run
+  workflow_dispatch: {}
   push:
     branches: [ "main" ]
     paths:
@@ -38,39 +38,39 @@ jobs:
           python-version: "3.11"
 
       - name: Ensure tools
+        shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install pyyaml jq 2>/dev/null || true
+          pip install pyyaml
           sudo apt-get update -y
           sudo apt-get install -y jq
 
       - name: Seed manifests if missing
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p .github/autopatch "${OUTDIR}"
+
           if [ ! -f "${MANIFEST}" ]; then
-            cat > "${MANIFEST}" <<'YML'
-version: 1
-patches: []
-YML
+            printf '%s\n' 'version: 1' 'patches: []' > "${MANIFEST}"
             echo "Seeded ${MANIFEST}"
           fi
+
           if [ ! -f "${DEFER}" ]; then
-            cat > "${DEFER}" <<'YML'
-version: 1
-patches: []
-YML
+            printf '%s\n' 'version: 1' 'patches: []' > "${DEFER}"
             echo "Seeded ${DEFER}"
           fi
 
       - name: Dry-run AutoPatch (preview)
+        shell: bash
         continue-on-error: true
         run: |
           set -euo pipefail
           python scripts/autopatch_runner.py \
             --manifest "${MANIFEST}" \
             --dry-run || true
+
           if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
             {
               echo "### AutoPatch Dry-Run Report"
@@ -81,6 +81,7 @@ YML
 
       - name: Apply AutoPatch (prune + defer)
         id: apply_step
+        shell: bash
         run: |
           set -euo pipefail
           python scripts/autopatch_runner.py \
@@ -90,6 +91,7 @@ YML
 
       - name: Commit manifest updates (if any)
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
           git config user.name  "StegVerse Bot"
@@ -114,6 +116,7 @@ YML
 
       - name: TaskOps ledger (best-effort append)
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p .github/taskops
@@ -140,6 +143,7 @@ JSON
 
       - name: Summarize
         if: always()
+        shell: bash
         run: |
           {
             echo "### AutoPatch Apply Summary"
