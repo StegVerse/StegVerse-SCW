@@ -1,4 +1,2 @@
 version: 1
-patches:
-- id: reindex-watchdog-bootstrap
-  path: .github/autopatch/reindex-watchdog-bootstrap.patch.yml
+patches: []
