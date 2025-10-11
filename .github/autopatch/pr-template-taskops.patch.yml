@@ -1,0 +1,56 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/pull_request_template.md"
+        mode: "100644"
+        contents: |
+          <!--
+          🧭 StegVerse PR Template (TaskOps-aware)
+          - Keep the headings; the PR-Bridge relies on the "## TaskOps" section and list items below it.
+          - Put TaskOps IDs in a list, one per line, like: "- my-task-id".
+          - Optional milestone label: "milestone:vX.Y" (auto-closed on tag vX.Y via tag-watcher).
+          -->
+
+          ## Summary
+          Describe what changed and why in 1–3 sentences.
+
+          ## Changes
+          - Bullet the key code/config changes
+          - Note migrations or breaking changes if any
+
+          ## Testing
+          - [ ] Unit-tested locally
+          - [ ] Manual test notes (what you ran / observed)
+
+          ## TaskOps
+          <!-- The PR-Bridge scans this section. Keep the list format. -->
+          - my-task-id-1
+          - my-task-id-2
+          <!-- Optional milestone label (kept in tasks.yml labels): milestone:vX.Y -->
+
+          ## Risk & Rollback
+          - Risk level: low / medium / high
+          - Rollback plan: how to revert safely
+
+          ## Security / Permissions
+          - Secrets / tokens changed? If yes, which and why.
+          - New scopes or GitHub App permissions? Justify.
+
+          ## Documentation
+          - [ ] README/Runbooks updated (if applicable)
+          - [ ] Changelog / release notes (if applicable)
+
+          ## CI / Checks
+          - [ ] Lint
+          - [ ] Tests
+          - [ ] Workflows green
+
+          <!--
+          Conventional commits (recommended):
+          feat: … | fix: … | chore: … | docs: … | refactor: … | test: …
+          Examples:
+          - feat(hcb): add provider registry
+          - chore(taskops): refresh README & ledger
+          -->
+  - commit:
+      message: "chore(docs): install TaskOps-aware PR template (autopatch)"
