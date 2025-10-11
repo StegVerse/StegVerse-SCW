@@ -1,2 +1,6 @@
 version: 1
-patches: []
+patches:
+  - id: reindex-nudge-bootstrap
+    path: .github/autopatch/reindex-nudge-bootstrap.patch.yml
+  - id: reindex-watchdog-bootstrap
+    path: .github/autopatch/reindex-watchdog-bootstrap.patch.yml
