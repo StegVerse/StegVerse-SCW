@@ -1,0 +1,53 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/workflows/reindex-nudge.yml"
+        mode: "100644"
+        contents: |
+          name: reindex-nudge
+          on:
+            workflow_dispatch: {}
+
+          permissions:
+            contents: write
+
+          jobs:
+            nudge:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Set up job
+                  run: echo "🌀 Starting Reindex-Nudge..."
+
+                - name: Checkout repo
+                  uses: actions/checkout@v4
+                  with:
+                    persist-credentials: true
+                    fetch-depth: 0
+
+                - name: Update timestamp
+                  run: |
+                    mkdir -p .github/trigger/reindex/
+                    echo "$(date -u)" > .github/trigger/reindex/last_nudge.txt
+                    echo "Updated reindex timestamp."
+
+                - name: Commit & push
+                  env:
+                    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  run: |
+                    set -euo pipefail
+                    git config user.name "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add .github/trigger/reindex/last_nudge.txt || true
+
+                    if git diff --cached --quiet; then
+                      echo "No changes detected — skipping commit."
+                    else
+                      git commit -m "chore(reindex): refresh workflow cache $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+                      git push origin HEAD:main
+                    fi
+
+                - name: Confirmation
+                  run: echo "✅ Reindex-Nudge completed successfully!"
+
+  - commit:
+      message: "chore(autopatch): add reindex-nudge workflow (bootstrap)"
