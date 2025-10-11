@@ -4,3 +4,5 @@ Committing any file in this folder triggers the **autopatch-apply** workflow (vi
 
 ## Usage
 - Create or update a file here, e.g.:
+
+echo “kick $(date -u +%FT%TZ)” > .github/trigger/autopatch/ping-$(date +%s)
