@@ -20,3 +20,5 @@ patches:
   path: .github/autopatch/taskops-bootstrap.patch.yml
   - id: taskops-ledger-hooks
   path: .github/autopatch/taskops-ledger-hooks.patch.yml
+  - id: taskops-badge-plus
+  path: .github/autopatch/taskops-badge-plus.patch.yml
