@@ -6,16 +6,12 @@ on:
     branches: [ "main" ]
     paths:
       - ".github/autopatch/**"
-      - "scripts/autopatch_runner.py"
+      - "scripts/**"
       - ".github/trigger/autopatch/**"
 
 permissions:
   contents: write
   pull-requests: write
-
-concurrency:
-  group: autopatch-apply-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   apply:
@@ -28,40 +24,50 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
-          fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup common Python (composite)
+        id: py
+        uses: ./.github/actions/setup-common-python
         with:
           python-version: "3.11"
+          cache: "pip"
+          extra-packages: "pyyaml jq"  # jq here is a no-op; kept for consistency
 
-      - name: Ensure tools
-        shell: bash
+      - name: Ensure system jq (for README status)
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install pyyaml
           sudo apt-get update -y
           sudo apt-get install -y jq
 
       - name: Seed manifests if missing
-        shell: bash
         run: |
           set -euo pipefail
           mkdir -p .github/autopatch "${OUTDIR}"
           if [ ! -f "${MANIFEST}" ]; then
-            printf '%s\n' 'version: 1' 'patches: []' > "${MANIFEST}"
+            cat > "${MANIFEST}" <<'YML'
+version: 1
+patches: []
+YML
             echo "Seeded ${MANIFEST}"
           fi
           if [ ! -f "${DEFER}" ]; then
-            printf '%s\n' 'version: 1' 'patches: []' > "${DEFER}"
+            cat > "${DEFER}" <<'YML'
+version: 1
+patches: []
+YML
             echo "Seeded ${DEFER}"
           fi
 
+      # --- NEW: Validate manifest nicely before running anything heavy
+      - name: Validate manifest (friendly)
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip pyyaml >/dev/null
+          python scripts/validate_yaml_manifest.py
+        env:
+          MANIFEST: ${{ env.MANIFEST }}
+
       - name: Dry-run AutoPatch (preview)
-        shell: bash
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -77,18 +83,22 @@ jobs:
           fi
 
       - name: Apply AutoPatch (prune + defer)
-        id: apply_step
-        shell: bash
+        id: apply
+        continue-on-error: true
         run: |
           set -euo pipefail
           python scripts/autopatch_runner.py \
             --manifest "${MANIFEST}" \
             --prune-success \
             --defer-file "${DEFER}"
+          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+
+      - name: Capture apply exit (if failed)
+        if: failure()
+        run: |
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
 
       - name: Commit manifest updates (if any)
-        if: always()
-        shell: bash
         run: |
           set -euo pipefail
           git config user.name  "StegVerse Bot"
@@ -101,6 +111,62 @@ jobs:
             echo "No manifest changes to commit."
           fi
 
+      # --- NEW: Update README with last AutoPatch result (tiny status line)
+      - name: Update README with last AutoPatch status
+        if: always()
+        run: |
+          set -euo pipefail
+          REPORT_JSON="${OUTDIR}/AUTOPATCH_REPORT.json"
+          if [ ! -f "$REPORT_JSON" ]; then
+            echo "No report json found; skipping README status update."
+            exit 0
+          fi
+          applied=$(jq -r '.summary.applied // 0'    "$REPORT_JSON")
+          noop=$(jq -r '.summary.noop // 0'          "$REPORT_JSON")
+          skipped=$(jq -r '.summary.skipped // 0'    "$REPORT_JSON")
+          blocked=$(jq -r '.summary.blocked // 0'    "$REPORT_JSON")
+          errorc=$(jq -r '.summary.error // 0'       "$REPORT_JSON")
+          ts=$(date -u +'%Y-%m-%d %H:%MZ')
+          line="Last AutoPatch: ✅ applied ${applied} | ➖ noop ${noop} | ⏭ skipped ${skipped} | ⛔ blocked ${blocked} | ❌ error ${errorc} — run #${GITHUB_RUN_ID} @ ${ts}"
+
+          README="README.md"
+          if [ ! -f "$README" ]; then
+            echo "README.md not found at repo root; skipping."
+            exit 0
+          fi
+
+          start="<!-- autopatch-status:start -->"
+          end="<!-- autopatch-status:end -->"
+
+          if grep -q "$start" "$README"; then
+            awk -v s="$start" -v e="$end" -v L="$line" '
+              BEGIN{inblk=0}
+              $0 ~ s {print s; print L; inblk=1; next}
+              $0 ~ e {print e; inblk=0; next}
+              inblk==0 {print}
+            ' "$README" > /tmp/readme.new
+          else
+            # Insert after the first heading or at the very top if no heading found
+            awk -v s="$start" -v e="$end" -v L="$line" '
+              NR==1 {
+                print;
+                print ""; print s; print L; print e; next
+              }
+              {print}
+            ' "$README" > /tmp/readme.new
+          fi
+
+          if ! diff -q "$README" /tmp/readme.new >/dev/null 2>&1; then
+            mv /tmp/readme.new "$README"
+            git add "$README"
+            git config user.name  "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git commit -m "docs(readme): update last AutoPatch status line"
+            git push origin HEAD:main
+          else
+            echo "README already up to date."
+          fi
+
       - name: Upload AutoPatch artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -111,53 +177,46 @@ jobs:
             self_healing_out/AUTOPATCH_REPORT.md
           if-no-files-found: warn
 
-      # ⬇️ NEW: rich TaskOps ledger append with counts for badges
-      - name: TaskOps ledger (rich append)
+      - name: TaskOps ledger (best-effort append)
         if: always()
-        shell: bash
         run: |
           set -euo pipefail
           mkdir -p .github/taskops
-          LEDGER=".github/taskops/ledger.jsonl"
-
           ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          repo="${GITHUB_REPOSITORY}"
-          branch="${GITHUB_REF_NAME}"
-          run_url="https://github.com/${repo}/actions/runs/${GITHUB_RUN_ID}"
-
-          applied=0; noop=0; skipped=0; blocked=0; error=0
+          applied="unknown"
           if [ -f "${OUTDIR}/AUTOPATCH_REPORT.json" ]; then
-            applied=$(jq -r '.summary.applied // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
-            noop=$(jq -r '.summary.noop // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
-            skipped=$(jq -r '.summary.skipped // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
-            blocked=$(jq -r '.summary.blocked // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
-            error=$(jq -r '.summary.error // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
+            applied=$(jq -r '.summary.applied // "0"' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo "0")
           fi
-
-          printf '{"ts":"%s","event":"autopatch_summary","repo":"%s","branch":"%s","run_id":"%s","run_url":"%s","applied":%s,"noop":%s,"skipped":%s,"blocked":%s,"error":%s}\n' \
-            "$ts" "$repo" "$branch" "$GITHUB_RUN_ID" "$run_url" \
-            "$applied" "$noop" "$skipped" "$blocked" "$error" \
-            >> "$LEDGER"
-
-          git config user.name  "StegVerse Bot"
-          git config user.email "bot@stegverse.org"
-          git add "$LEDGER"
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(taskops): log autopatch summary (applied=$applied error=$error)"
-            git push origin HEAD:main
+          cat > /tmp/taskops_entry.json <<JSON
+{"ts":"${ts}","job":"autopatch-apply","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${GITHUB_REF_NAME}","applied":"${applied}"}
+JSON
+          if [ -f ".github/taskops/ledger.jsonl" ]; then
+            cat /tmp/taskops_entry.json >> .github/taskops/ledger.jsonl
+            git add .github/taskops/ledger.jsonl
+            if ! git diff --cached --quiet; then
+              git commit -m "chore(taskops): log autopatch-apply run $GITHUB_RUN_ID"
+              git push origin HEAD:main
+            fi
+          else
+            echo "TaskOps ledger not found (skipping append). To enable, create .github/taskops/ledger.jsonl"
           fi
 
       - name: Summarize
         if: always()
-        shell: bash
         run: |
-          {
-            echo "### AutoPatch Apply Summary"
-            if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
-              echo
-              cat "${OUTDIR}/AUTOPATCH_REPORT.md"
-            else
-              echo
-              echo "_No AUTOPATCH_REPORT.md generated._"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "### AutoPatch Apply Summary" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
+            cat "${OUTDIR}/AUTOPATCH_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No AUTOPATCH_REPORT.md generated._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set job outcome
+        if: always()
+        run: |
+          CODE="${{ steps.apply.outputs.exit_code }}"
+          if [ "$CODE" = "1" ]; then
+            echo "AutoPatch apply reported errors — failing job."
+            exit 1
+          fi
+          echo "AutoPatch apply completed."
