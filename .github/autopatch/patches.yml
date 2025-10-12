@@ -18,3 +18,5 @@ patches:
   path: .github/autopatch/kick-autopatch.patch.yml
   - id: taskops-bootstrap
   path: .github/autopatch/taskops-bootstrap.patch.yml
+  - id: taskops-ledger-hooks
+  path: .github/autopatch/taskops-ledger-hooks.patch.yml
