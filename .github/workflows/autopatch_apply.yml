@@ -51,12 +51,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .github/autopatch "${OUTDIR}"
-
           if [ ! -f "${MANIFEST}" ]; then
             printf '%s\n' 'version: 1' 'patches: []' > "${MANIFEST}"
             echo "Seeded ${MANIFEST}"
           fi
-
           if [ ! -f "${DEFER}" ]; then
             printf '%s\n' 'version: 1' 'patches: []' > "${DEFER}"
             echo "Seeded ${DEFER}"
@@ -70,7 +68,6 @@ jobs:
           python scripts/autopatch_runner.py \
             --manifest "${MANIFEST}" \
             --dry-run || true
-
           if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
             {
               echo "### AutoPatch Dry-Run Report"
@@ -114,31 +111,40 @@ jobs:
             self_healing_out/AUTOPATCH_REPORT.md
           if-no-files-found: warn
 
-      - name: TaskOps ledger (best-effort append)
+      # ⬇️ NEW: rich TaskOps ledger append with counts for badges
+      - name: TaskOps ledger (rich append)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p .github/taskops
+          LEDGER=".github/taskops/ledger.jsonl"
+
           ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          applied="unknown"
+          repo="${GITHUB_REPOSITORY}"
+          branch="${GITHUB_REF_NAME}"
+          run_url="https://github.com/${repo}/actions/runs/${GITHUB_RUN_ID}"
+
+          applied=0; noop=0; skipped=0; blocked=0; error=0
           if [ -f "${OUTDIR}/AUTOPATCH_REPORT.json" ]; then
-            applied=$(jq -r '.summary.applied // "0"' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo "0")
+            applied=$(jq -r '.summary.applied // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
+            noop=$(jq -r '.summary.noop // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
+            skipped=$(jq -r '.summary.skipped // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
+            blocked=$(jq -r '.summary.blocked // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
+            error=$(jq -r '.summary.error // 0' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo 0)
           fi
-          cat > /tmp/taskops_entry.json <<JSON
-{"ts":"${ts}","event":"autopatch_apply","job":"autopatch-apply","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${GITHUB_REF_NAME}","applied":"${applied}"}
-JSON
-          if [ -f ".github/taskops/ledger.jsonl" ]; then
-            cat /tmp/taskops_entry.json >> .github/taskops/ledger.jsonl
-            git add .github/taskops/ledger.jsonl
-            if ! git diff --cached --quiet; then
-              git config user.name  "StegVerse Bot"
-              git config user.email "bot@stegverse.org"
-              git commit -m "chore(taskops): log autopatch-apply run $GITHUB_RUN_ID"
-              git push origin HEAD:main
-            fi
-          else
-            echo "TaskOps ledger not found (skipping append). To enable, create .github/taskops/ledger.jsonl"
+
+          printf '{"ts":"%s","event":"autopatch_summary","repo":"%s","branch":"%s","run_id":"%s","run_url":"%s","applied":%s,"noop":%s,"skipped":%s,"blocked":%s,"error":%s}\n' \
+            "$ts" "$repo" "$branch" "$GITHUB_RUN_ID" "$run_url" \
+            "$applied" "$noop" "$skipped" "$blocked" "$error" \
+            >> "$LEDGER"
+
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add "$LEDGER"
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(taskops): log autopatch summary (applied=$applied error=$error)"
+            git push origin HEAD:main
           fi
 
       - name: Summarize
