@@ -43,22 +43,18 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .github/autopatch "${OUTDIR}"
+
           if [ ! -f "${MANIFEST}" ]; then
-            cat > "${MANIFEST}" <<'YML'
-version: 1
-patches: []
-YML
+            printf "version: 1\npatches: []\n" > "${MANIFEST}"
             echo "Seeded ${MANIFEST}"
           fi
+
           if [ ! -f "${DEFER}" ]; then
-            cat > "${DEFER}" <<'YML'
-version: 1
-patches: []
-YML
+            printf "version: 1\npatches: []\n" > "${DEFER}"
             echo "Seeded ${DEFER}"
           fi
 
-      # --- NEW: Validate manifest nicely before running anything heavy
+      # --- Validate manifest nicely before running anything heavy
       - name: Validate manifest (friendly)
         run: |
           set -euo pipefail
@@ -66,7 +62,6 @@ YML
           python scripts/validate_yaml_manifest.py
         env:
           MANIFEST: ${{ env.MANIFEST }}
-
       - name: Dry-run AutoPatch (preview)
         continue-on-error: true
         run: |
