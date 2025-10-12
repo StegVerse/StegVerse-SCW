@@ -16,3 +16,5 @@ patches:
   path: .github/autopatch/kick-autopatch.patch.yml
   - id: kick-autopatch
   path: .github/autopatch/kick-autopatch.patch.yml
+  - id: taskops-bootstrap
+  path: .github/autopatch/taskops-bootstrap.patch.yml
