@@ -1,24 +1,24 @@
 version: 1
 patches:
   - id: taskops-enhancements
-  path: .github/autopatch/taskops-enhancements.patch.yml
+    path: .github/autopatch/taskops-enhancements.patch.yml
   - id: taskops-pr-bridge
-  path: .github/autopatch/taskops-pr-bridge.patch.yml
+    path: .github/autopatch/taskops-pr-bridge.patch.yml
   - id: taskops-pr-bridge
-  path: .github/autopatch/taskops-pr-bridge.patch.yml
+    path: .github/autopatch/taskops-pr-bridge.patch.yml
   - id: pr-template-taskops
-  path: .github/autopatch/pr-template-taskops.patch.yml
+    path: .github/autopatch/pr-template-taskops.patch.yml
   - id: actions-reindex-nudge
-  path: .github/autopatch/reindex-nudge.patch.yml
+    path: .github/autopatch/reindex-nudge.patch.yml
   - id: actions-reindex-nudge-taskops
-  path: .github/autopatch/reindex-nudge-taskops.patch.yml
+    path: .github/autopatch/reindex-nudge-taskops.patch.yml
   - id: kick-autopatch
-  path: .github/autopatch/kick-autopatch.patch.yml
+    path: .github/autopatch/kick-autopatch.patch.yml
   - id: kick-autopatch
-  path: .github/autopatch/kick-autopatch.patch.yml
+    path: .github/autopatch/kick-autopatch.patch.yml
   - id: taskops-bootstrap
-  path: .github/autopatch/taskops-bootstrap.patch.yml
+    path: .github/autopatch/taskops-bootstrap.patch.yml
   - id: taskops-ledger-hooks
-  path: .github/autopatch/taskops-ledger-hooks.patch.yml
+    path: .github/autopatch/taskops-ledger-hooks.patch.yml
   - id: taskops-badge-plus
-  path: .github/autopatch/taskops-badge-plus.patch.yml
+    path: .github/autopatch/taskops-badge-plus.patch.yml
