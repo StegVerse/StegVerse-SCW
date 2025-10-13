@@ -1,4 +1,2 @@
 version: 1
-patches:
-  - id: readme-autodocs-badge
-    path: .github/autopatch/readme-autodocs-badge.patch.yml
+patches: []
