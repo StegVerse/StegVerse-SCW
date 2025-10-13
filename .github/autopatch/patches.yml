@@ -1,2 +1,4 @@
 version: 1
-patches: []
+patches:
+  - id: autodocs-bootstrap
+    path: .github/autopatch/autodocs-bootstrap.patch.yml
