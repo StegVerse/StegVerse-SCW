@@ -1,0 +1,72 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/taskops_autodocs_link.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          AutoDocs + TaskOps Linker
+          - Reads .github/taskops/ledger.jsonl
+          - Reads .github/docs/PR_SAFE_STATUS.md
+          - Writes combined dashboard to .github/docs/TASKOPS_STATUS.md
+          - Updates README.md between <!-- taskops-status:start --> ... <!-- taskops-status:end -->
+          """
+          import pathlib, json, datetime, re
+
+          LEDGER = pathlib.Path(".github/taskops/ledger.jsonl")
+          PRSAFE = pathlib.Path(".github/docs/PR_SAFE_STATUS.md")
+          DASH = pathlib.Path(".github/docs/TASKOPS_STATUS.md")
+          README = pathlib.Path("README.md")
+          START = "<!-- taskops-status:start -->"
+          END = "<!-- taskops-status:end -->"
+
+          def load_ledger():
+              if not LEDGER.exists():
+                  return []
+              entries = []
+              for line in LEDGER.read_text(encoding="utf-8").splitlines():
+                  try:
+                      entries.append(json.loads(line))
+                  except:
+                      pass
+              return entries[-15:]
+
+          def render_table(entries):
+              if not entries:
+                  return "_No TaskOps entries yet._"
+              rows = ["| Timestamp | Job | Branch | Applied |", "|---|---|---|---|"]
+              for e in entries:
+                  rows.append(f"| {e.get('ts','')} | {e.get('job','')} | {e.get('branch','')} | {e.get('applied','')} |")
+              return "\n".join(rows)
+
+          def update_readme(block_md: str):
+              txt = README.read_text(encoding="utf-8") if README.exists() else ""
+              if START in txt and END in txt:
+                  new = re.sub(rf"{re.escape(START)}.*?{re.escape(END)}", f"{START}\n{block_md}\n{END}", txt, flags=re.S)
+              else:
+                  new = txt.rstrip() + f"\n\n## TaskOps Status\n\n{START}\n{block_md}\n{END}\n"
+              if new != txt:
+                  README.write_text(new, encoding="utf-8")
+
+          def main():
+              ledger = load_ledger()
+              prsafe = PRSAFE.read_text(encoding="utf-8") if PRSAFE.exists() else "_No PR-safe report yet._"
+              block = f"### 🧩 Combined CI Snapshot\n\n_Last updated: {datetime.datetime.utcnow().isoformat()}Z_\n\n"
+              block += "#### TaskOps Ledger (last 15)\n" + render_table(ledger)
+              block += "\n\n#### PR-safe Dispatcher Coverage\n" + prsafe
+              DASH.write_text(block, encoding="utf-8")
+              update_readme(block)
+              print("✅ Linked TaskOps → AutoDocs dashboard generated.")
+          if __name__ == "__main__":
+              main()
+
+  - run_shell:
+      name: Generate combined TaskOps + AutoDocs dashboard
+      script: |
+        set -euo pipefail
+        python -m pip install --disable-pip-version-check --quiet pyyaml
+        python scripts/taskops_autodocs_link.py
+
+  - commit:
+      message: "docs(taskops): link TaskOps ledger and AutoDocs coverage"
