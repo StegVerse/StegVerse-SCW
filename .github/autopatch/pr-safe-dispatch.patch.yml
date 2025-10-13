@@ -1,0 +1,115 @@
+version: 1
+actions:
+  - write_files:
+      # ──────────────────────────────
+      # 1) Composite action wrapper
+      # ──────────────────────────────
+      - path: ".github/actions/pr-safe-dispatch/action.yml"
+        mode: "100644"
+        contents: |
+          name: "PR-safe dispatch"
+          description: "Detect current workflow flavor and run the matching PR-safe handler"
+          runs:
+            using: "composite"
+            steps:
+              - name: Probe flavor
+                id: probe
+                shell: bash
+                run: |
+                  set -euo pipefail
+                  wf="${GITHUB_WORKFLOW,,}"   # lowercase
+                  echo "🔍 Workflow name: $wf"
+                  case "$wf" in
+                    *autopatch*) flavor="autopatch" ;;
+                    *propagate*) flavor="propagate" ;;
+                    *taskops*)   flavor="taskops" ;;
+                    *docs*|*readme*) flavor="docs" ;;
+                    *) flavor="generic" ;;
+                  esac
+                  echo "WORKFLOW_FLAVOR=$flavor" >> "$GITHUB_ENV"
+                  echo "flavor=$flavor" >> "$GITHUB_OUTPUT"
+
+              - name: Run dispatcher
+                shell: bash
+                run: |
+                  set -euo pipefail
+                  echo "▶️ WORKFLOW_FLAVOR=$WORKFLOW_FLAVOR"
+                  if ! command -v python >/dev/null 2>&1; then
+                    echo "::warning title=Python missing::Install Python before this step (actions/setup-python)"
+                  fi
+                  python scripts/pr_safe_dispatcher.py || true
+
+      # ──────────────────────────────
+      # 2) Dispatcher + handlers
+      # ──────────────────────────────
+      - path: "scripts/pr_safe_dispatcher.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import os, subprocess, sys, textwrap, shutil
+
+          flavor = os.getenv("WORKFLOW_FLAVOR", "generic").lower()
+          print(f"🧭 Detected workflow flavor: {flavor}")
+
+          mapping = {
+              "autopatch": "scripts/autopatch_pr_safe.py",
+              "propagate": "scripts/propagate_pr_safe.py",
+              "taskops":   "scripts/taskops_pr_safe.py",
+              "docs":      "scripts/docs_pr_safe.py",
+              "generic":   "scripts/pr_safe_generic.py",
+          }
+          target = mapping.get(flavor, mapping["generic"])
+
+          if not os.path.isfile(target):
+              print(f"ℹ️ Handler {target} not found; falling back to generic.")
+              target = mapping["generic"]
+
+          print(f"→ Executing {target}")
+          try:
+              subprocess.run(["python", target], check=False)
+          except Exception as e:
+              print(f"::warning title=Dispatcher failed::{e}")
+              sys.exit(0)
+
+      - path: "scripts/autopatch_pr_safe.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import os, json
+          print("🔧 autopatch_pr_safe: no-op guard (customize as needed).")
+          # Example: could check manifest health, ensure yamls present, etc.
+          # Exit 0 on purpose to avoid blocking unrelated steps.
+
+      - path: "scripts/propagate_pr_safe.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import os, json
+          print("🚀 propagate_pr_safe: no-op guard (customize to preflight repos, tokens, etc).")
+
+      - path: "scripts/taskops_pr_safe.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import os, json, pathlib
+          print("📒 taskops_pr_safe: ensuring ledger file exists…")
+          p = pathlib.Path(".github/taskops/ledger.jsonl")
+          p.parent.mkdir(parents=True, exist_ok=True)
+          if not p.exists():
+              p.write_text("", encoding="utf-8")
+          print("✅ taskops ledger OK")
+
+      - path: "scripts/docs_pr_safe.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          print("📚 docs_pr_safe: ready (use to pre-check README anchors, etc).")
+
+      - path: "scripts/pr_safe_generic.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          print("ℹ️ generic PR-safe handler: nothing to do.")
+
+  - commit:
+      message: "chore(ci): add PR-safe composite action and dispatcher (auto flavor probe)"
