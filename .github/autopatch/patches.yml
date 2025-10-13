@@ -1,2 +1,4 @@
 version: 1
-patches: []
+patches:
+  - id: readme-badges-unifier
+    path: .github/autopatch/readme-badges-unifier.patch.yml
