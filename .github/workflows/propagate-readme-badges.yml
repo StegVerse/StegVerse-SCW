@@ -1,0 +1,301 @@
+name: propagate-readme-badges
+
+on:
+  workflow_dispatch:
+    inputs:
+      repos_csv:
+        description: "Comma-separated target repos (e.g. StegVerse/hybrid-collab-bridge,StegVerse/AnotherRepo)"
+        required: true
+      push_strategy:
+        description: "direct (push to default branch) or pr (open PR from chore/badges-sync)"
+        required: false
+        default: "pr"
+      target_branch:
+        description: "Target branch (for direct) or PR base (for pr)"
+        required: false
+        default: "main"
+      pr_branch:
+        description: "PR head branch (only for push_strategy=pr)"
+        required: false
+        default: "chore/badges-sync"
+      dry_run:
+        description: "If true, don’t push/PR — just build/check"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read  # we push to other repos using a PAT; this repo just needs read
+  id-token: write
+
+jobs:
+  propagate:
+    runs-on: ubuntu-latest
+    env:
+      REPOS_CSV: ${{ inputs.repos_csv }}
+      PUSH_STRATEGY: ${{ inputs.push_strategy }}
+      TARGET_BRANCH: ${{ inputs.target_branch }}
+      PR_BRANCH: ${{ inputs.pr_branch }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Preflight — token & inputs
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.STEGVERSE_BOT_TOKEN }}" ]; then
+            echo "::error title=Missing PAT::Secret STEGVERSE_BOT_TOKEN is not configured on this repo."
+            echo "Create a fine-grained PAT with repo and workflow permissions; save as STEGVERSE_BOT_TOKEN in this repo’s Actions secrets."
+            exit 1
+          fi
+          if [ -z "${REPOS_CSV}" ]; then
+            echo "::error title=Missing input::You must provide repos_csv (owner/repo,owner/repo)."
+            exit 1
+          fi
+          echo "repos_csv=${REPOS_CSV}"
+          echo "push_strategy=${PUSH_STRATEGY}"
+          echo "target_branch=${TARGET_BRANCH}"
+          echo "pr_branch=${PR_BRANCH}"
+          echo "dry_run=${DRY_RUN}"
+
+      - name: Propagate badges keeper to targets
+        env:
+          GH_TOKEN: ${{ secrets.STEGVERSE_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          PY=$(command -v python3 || command -v python)
+          "$PY" - <<'PY'
+          import os, sys, subprocess, pathlib, json, urllib.request, urllib.error, re, shutil
+
+          token         = os.environ["GH_TOKEN"]
+          repos_csv     = os.environ.get("REPOS_CSV","").strip()
+          push_strategy = (os.environ.get("PUSH_STRATEGY","pr") or "pr").lower()
+          target_branch = os.environ.get("TARGET_BRANCH","main") or "main"
+          pr_branch     = os.environ.get("PR_BRANCH","chore/badges-sync") or "chore/badges-sync"
+          dry_run       = (os.environ.get("DRY_RUN","false") or "false").lower() == "true"
+
+          headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          ensure_badges_py = r"""#!/usr/bin/env python3
+          import os, re, pathlib
+          REPO   = os.getenv("GITHUB_REPOSITORY", "").strip()
+          README = pathlib.Path("README.md")
+          START  = "<!-- badges:start -->"
+          END    = "<!-- badges:end -->"
+          CANONICAL = [
+              ("autopatch-apply",   "AutoPatch Apply"),
+              ("autopatch-reindex", "AutoPatch Reindex"),
+              ("autodocs",          "AutoDocs"),
+              ("docs-badge-sync",   "Badges Keeper"),
+              ("export-hcb",        "Export HCB"),
+          ]
+          def wf_exists(name:str)->bool:
+              p1 = pathlib.Path(f".github/workflows/{name}.yml")
+              p2 = pathlib.Path(f".github/workflows/{name}.yaml")
+              return p1.exists() or p2.exists()
+          def wf_badge(repo:str, name:str, label:str)->str:
+              r = repo or "StegVerse/unknown"
+              return f"[![{label}](https://github.com/{r}/actions/workflows/{name}.yml/badge.svg)](https://github.com/{r}/actions/workflows/{name}.yml)"
+          def unique(seq):
+              out, seen = [], set()
+              for s in seq:
+                  if s not in seen:
+                      seen.add(s); out.append(s)
+              return out
+          def ensure_block(text:str):
+              if START in text and END in text:
+                  return text
+              return f"{START}\n{END}\n\n{text}"
+          def split_badges(block:str):
+              block = re.sub(r"\\)\\s*\\(", ")\\n(", block.strip())
+              return [ln.strip() for ln in block.splitlines() if ln.strip()]
+          def join_badges(lines): return " ".join(lines).strip() + "\\n"
+          def main():
+              if not README.exists():
+                  print("README.md not found; skipping."); return 0
+              text = README.read_text(encoding="utf-8")
+              text = ensure_block(text)
+              head, rest = text.split(START, 1)
+              mid, tail  = rest.split(END, 1)
+              block = mid.strip()
+              badges = split_badges(block) if block else []
+              for wf, _ in CANONICAL:
+                  badges = [b for b in badges if f"actions/workflows/{wf}.yml" not in b and f"actions/workflows/{wf}.yaml" not in b]
+              repo = os.getenv("GITHUB_REPOSITORY","").strip()
+              for wf, label in CANONICAL:
+                  if wf_exists(wf):
+                      badges.insert(0, wf_badge(repo, wf, label))
+              badges = unique(badges)
+              new_block = join_badges(badges)
+              new_text  = f"{head}{START}\\n{new_block}{END}{tail}"
+              if new_text != text:
+                  README.write_text(new_text, encoding="utf-8")
+                  print("README badges updated.")
+              else:
+                  print("README badges already up-to-date.")
+              return 0
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          """
+
+          badge_sync_wf = r"""name: docs-badge-sync
+          on:
+            workflow_dispatch: {}
+            push:
+              branches: [ "main" ]
+              paths:
+                - "README.md"
+                - "scripts/ensure_readme_badges.py"
+                - ".github/workflows/*.yml"
+                - ".github/workflows/*.yaml"
+            schedule:
+              - cron: "11 7 * * *"
+
+          permissions:
+            contents: write
+
+          jobs:
+            normalize-badges:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - name: Ensure README badges
+                  run: |
+                    python3 scripts/ensure_readme_badges.py
+                - name: Commit if changed
+                  run: |
+                    set -e
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add README.md || true
+                    if ! git diff --cached --quiet; then
+                      git commit -m "docs(readme): normalize badges block"
+                      git push
+                    else
+                      echo "No changes to commit."
+          """
+
+          def run(cmd, cwd=None, check=True):
+              print("+", " ".join(cmd))
+              r = subprocess.run(cmd, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              print(r.stdout)
+              if check and r.returncode != 0:
+                  raise SystemExit(r.returncode)
+              return r
+
+          def gh_post(url, data):
+              req = urllib.request.Request(url, data=json.dumps(data).encode(), headers=headers, method="POST")
+              with urllib.request.urlopen(req) as resp:
+                  return resp.getcode(), json.loads(resp.read() or b"{}")
+
+          def gh_get(url):
+              req = urllib.request.Request(url, headers=headers)
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      return resp.getcode(), json.loads(resp.read() or b"{}")
+              except urllib.error.HTTPError as e:
+                  return e.code, json.loads(e.read() or b"{}")
+
+          targets = [x.strip() for x in repos_csv.split(",") if x.strip()]
+          if not targets:
+              print("::error title=No repos provided::Provide repos_csv like owner/repo,owner/repo")
+              sys.exit(1)
+
+          workroot = pathlib.Path("/tmp/prop-badges")
+          if workroot.exists():
+              shutil.rmtree(workroot)
+          workroot.mkdir(parents=True, exist_ok=True)
+
+          for repo in targets:
+              print(f"\n=== {repo} ===")
+
+              # clone
+              dest = workroot / repo.replace("/", "__")
+              run(["git", "clone", f"https://x-access-token:{token}@github.com/{repo}.git", str(dest)])
+
+              # determine/checkout branch
+              run(["git", "-C", str(dest), "config", "user.name", "StegVerse Bot"])
+              run(["git", "-C", str(dest), "config", "user.email", "bot@stegverse.org"])
+
+              branches = subprocess.run(["git", "-C", str(dest), "branch", "-a"], text=True, stdout=subprocess.PIPE).stdout
+              if push_strategy == "direct":
+                  base_branch = target_branch
+                  if f"remotes/origin/{base_branch}" in branches:
+                      run(["git", "-C", str(dest), "checkout", base_branch])
+                  else:
+                      run(["git", "-C", str(dest), "checkout", "--orphan", base_branch])
+                      # create initial commit if empty
+                      for p in dest.iterdir():
+                          if p.name != ".git":
+                              if p.is_dir(): shutil.rmtree(p)
+                              else: p.unlink()
+                      run(["git", "-C", str(dest), "commit", "--allow-empty", "-m", "chore: init branch"])
+              else:
+                  base_branch = target_branch
+                  head_branch = pr_branch
+                  if f"remotes/origin/{base_branch}" in branches:
+                      run(["git", "-C", str(dest), "checkout", base_branch])
+                  else:
+                      run(["git", "-C", str(dest), "checkout", "--orphan", base_branch])
+                      for p in dest.iterdir():
+                          if p.name != ".git":
+                              if p.is_dir(): shutil.rmtree(p)
+                              else: p.unlink()
+                      run(["git", "-C", str(dest), "commit", "--allow-empty", "-m", "chore: init branch"])
+                  run(["git", "-C", str(dest), "checkout", "-B", head_branch])
+
+              # write/overwrite the two files
+              (dest / "scripts").mkdir(parents=True, exist_ok=True)
+              (dest / "scripts" / "ensure_readme_badges.py").write_text(ensure_badges_py, encoding="utf-8")
+              (dest / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+              (dest / ".github" / "workflows" / "docs-badge-sync.yml").write_text(badge_sync_wf, encoding="utf-8")
+
+              # run the normalizer locally to update README immediately
+              readme = dest / "README.md"
+              if readme.exists():
+                  env = os.environ.copy()
+                  env["GITHUB_REPOSITORY"] = repo
+                  r = subprocess.run(["python3", "scripts/ensure_readme_badges.py"], cwd=str(dest), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                  print(r.stdout)
+
+              # stage & commit if changed
+              run(["git", "-C", str(dest), "add", "-A"])
+              changed = subprocess.run(["git", "-C", str(dest), "diff", "--cached", "--quiet"]).returncode != 0
+              if not changed:
+                  print("⏭  No changes needed.")
+                  continue
+
+              run(["git", "-C", str(dest), "commit", "-m", "docs(readme): add self-healing badges keeper + normalize badges block"])
+
+              if dry_run:
+                  print("DRY RUN — skipping push/PR.")
+                  continue
+
+              if push_strategy == "direct":
+                  run(["git", "-C", str(dest), "push", "-u", "origin", base_branch])
+              else:
+                  run(["git", "-C", str(dest), "push", "-u", "origin", head_branch, "--force-with-lease"])
+                  code, data = gh_post(f"https://api.github.com/repos/{repo}/pulls",
+                                       {"title": "docs(readme): badges keeper & normalized badges block",
+                                        "head": head_branch, "base": base_branch,
+                                        "body": "Automated propagation from StegVerse-SCW: adds docs-badge-sync and enforces a unified README badges block."})
+                  if code not in (200,201):
+                      print(f"::warning title=PR open failed for {repo}::HTTP {code} {data}")
+                  else:
+                      print(f"✔ PR opened: {data.get('html_url')}")
+
+          print("\nDone.")
+          PY
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Propagate README Badges — Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- repos_csv: \`${REPOS_CSV}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- strategy: \`${PUSH_STRATEGY}\` → branch: \`${TARGET_BRANCH}\` (PR head: \`${PR_BRANCH}\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- dry_run: \`${DRY_RUN}\`" >> "$GITHUB_STEP_SUMMARY"
