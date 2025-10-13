@@ -5,12 +5,21 @@ actions:
         mode: "100755"
         contents: |
           #!/usr/bin/env python3
+          """
+          AutoPatch: insert_pr_safe_dispatch step across workflows
+
+          - Adds "uses: ./.github/actions/pr-safe-dispatch"
+          - Only inserts if workflow already sets up Python (actions/setup-python)
+          - Idempotent and safe for repeated runs
+          - Logs summary to stdout for TaskOps ledger
+          """
           import sys, os, pathlib
           from copy import deepcopy
+
           try:
               import yaml
           except Exception:
-              print("::error title=Missing PyYAML::pip install pyyaml before running this patch")
+              print("::error title=Missing PyYAML::Install PyYAML before running this patch.")
               sys.exit(1)
 
           ROOT = pathlib.Path(".")
@@ -31,10 +40,17 @@ actions:
                       return True
               return False
 
+          def workflow_uses_python(steps):
+              for s in steps:
+                  if not isinstance(s, dict): continue
+                  uses = str(s.get("uses","")).lower()
+                  if "actions/setup-python@" in uses:
+                      return True
+              return False
+
           def find_insert_index(steps):
-              """Prefer after setup-python, else after checkout, else at end."""
-              setup_idx = None
-              checkout_idx = None
+              """Prefer after setup-python, else after checkout, else end."""
+              setup_idx = checkout_idx = None
               for i, s in enumerate(steps):
                   if not isinstance(s, dict): continue
                   uses = str(s.get("uses","")).lower()
@@ -66,41 +82,41 @@ actions:
 
               changed = False
               for jname, steps in find_steps(doc):
-                  if not has_target_step(steps):
+                  if workflow_uses_python(steps) and not has_target_step(steps):
                       inject_step(steps)
                       changed = True
+                      print(f"✔ Injected → {path} (job: {jname})")
+                  else:
+                      print(f"⏭ Skipped → {path} (no Python setup or already present)")
 
               if changed:
-                  # write back (PyYAML dump is fine for CI files)
                   with path.open("w", encoding="utf-8") as w:
                       yaml.safe_dump(doc, w, sort_keys=False)
-                  print(f"✔ Injected PR-safe step → {path}")
-              else:
-                  print(f"⏭ Already present → {path}")
               return changed
 
           def main():
               if not WF_DIR.exists():
                   print("::warning title=No workflows::.github/workflows not found; skipping")
-                  return 0
+                  return
               any_changed = False
               for p in sorted(WF_DIR.glob("*.y*ml")):
                   any_changed = process_file(p) or any_changed
-              return 0
+              if any_changed:
+                  print("✅ Injection complete.")
+              else:
+                  print("ℹ️ No new insertions needed.")
 
           if __name__ == "__main__":
-              sys.exit(main())
+              main()
 
   - run_shell:
       name: Inject PR-safe dispatcher into workflows
       script: |
         set -euo pipefail
-        python - <<'PY'
-        import subprocess, sys
-        # Ensure PyYAML is available (quiet install)
-        subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--quiet", "pyyaml"], check=True)
-        subprocess.run(["python", "scripts/insert_pr_safe_step.py"], check=False)
-        PY
+        echo "🔧 Installing PyYAML for injector..."
+        python -m pip install --disable-pip-version-check --quiet pyyaml
+        echo "🚀 Running injector..."
+        python scripts/insert_pr_safe_step.py
 
   - commit:
-      message: "chore(ci): auto-insert pr-safe-dispatch step across workflows (idempotent)"
+      message: "chore(ci): auto-insert pr-safe-dispatch step across Python workflows (guarded)"
