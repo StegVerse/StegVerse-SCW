@@ -1,0 +1,102 @@
+name: autopatch-reindex
+
+on:
+  # 1) Manual button
+  workflow_dispatch:
+    inputs:
+      target_workflow:
+        description: "Workflow file to dispatch (autopatch-apply.yml)"
+        default: "autopatch-apply.yml"
+        required: true
+      branch:
+        description: "Branch to dispatch on"
+        default: "main"
+        required: true
+      mode:
+        description: "dispatch-only | commit-only | both"
+        default: "both"
+        required: true
+  # 2) Auto nudge when patch manifest or triggers change
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/autopatch/**"
+      - ".github/trigger/autopatch/**"
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: read
+
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_WF: ${{ inputs.target_workflow || 'autopatch-apply.yml' }}
+      TARGET_BRANCH: ${{ inputs.branch || 'main' }}
+      MODE: ${{ inputs.mode || 'both' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sanity check target workflow presence
+        id: sanity
+        run: |
+          set -euo pipefail
+          WF_PATH=".github/workflows/${TARGET_WF}"
+          if [ ! -f "$WF_PATH" ]; then
+            echo "::warning title=Workflow missing::${WF_PATH} not found in repo"
+            echo "wf_present=false" >> $GITHUB_OUTPUT
+          else
+            echo "Found ${WF_PATH}"
+            echo "wf_present=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Try API dispatch (actions/workflows/dispatches)
+        id: dispatch
+        if: ${{ contains(fromJSON('["both","dispatch-only"]'), env.MODE) }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          OWNER_REPO="${GITHUB_REPOSITORY}"
+          echo "Dispatching ${TARGET_WF} on branch ${TARGET_BRANCH} in ${OWNER_REPO}"
+          code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER_REPO}/actions/workflows/${TARGET_WF}/dispatches" \
+            -d "{\"ref\":\"${TARGET_BRANCH}\",\"inputs\":{}}") || code=0
+
+          echo "HTTP ${code}"
+          if [ "$code" != "204" ]; then
+            echo "::warning title=Dispatch failed::HTTP ${code} — falling back to commit nudge"
+            echo "ok=false" >> $GITHUB_OUTPUT
+          else
+            echo "ok=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fallback: commit a tiny trigger file (reindex nudge)
+        if: ${{ steps.dispatch.outputs.ok != 'true' && contains(fromJSON('["both","commit-only"]'), env.MODE) }}
+        run: |
+          set -euo pipefail
+          mkdir -p .github/trigger/autopatch
+          ts="$(date -u +'%Y%m%dT%H%M%SZ')"
+          echo "reindex ${ts}" > ".github/trigger/autopatch/reindex-${ts}.txt"
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/trigger/autopatch/reindex-${ts}.txt
+          git commit -m "chore(autopatch): reindex nudge ${ts}"
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "Created commit nudge .github/trigger/autopatch/reindex-${ts}.txt"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Autopatch Reindex Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Target workflow: \`${{ env.TARGET_WF }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Branch: \`${{ env.TARGET_BRANCH }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Mode: \`${{ env.MODE }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Present in repo: \`${{ steps.sanity.outputs.wf_present || 'unknown' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Dispatch ok: \`${{ steps.dispatch.outputs.ok || 'n/a' }}\`" >> "$GITHUB_STEP_SUMMARY"
