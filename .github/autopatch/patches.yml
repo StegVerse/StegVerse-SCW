@@ -6,3 +6,5 @@ patches:
       path: .github/autopatch/pr-safe-inject.patch.yml
   - id: autodocs-prsafe-status
       path: .github/autopatch/autodocs-prsafe-status.patch.yml
+  - id: taskops-autodocs-link
+      path: .github/autopatch/taskops-autodocs-link.patch.yml
