@@ -1,0 +1,106 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/insert_pr_safe_step.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import sys, os, pathlib
+          from copy import deepcopy
+          try:
+              import yaml
+          except Exception:
+              print("::error title=Missing PyYAML::pip install pyyaml before running this patch")
+              sys.exit(1)
+
+          ROOT = pathlib.Path(".")
+          WF_DIR = ROOT / ".github" / "workflows"
+          TARGET_USES = "./.github/actions/pr-safe-dispatch"
+
+          def find_steps(doc):
+              """Yield tuples (job_name, steps_list_ref) for each job that has steps."""
+              jobs = (doc or {}).get("jobs") or {}
+              for jname, j in jobs.items():
+                  steps = (j or {}).get("steps")
+                  if isinstance(steps, list):
+                      yield jname, steps
+
+          def has_target_step(steps):
+              for s in steps:
+                  if isinstance(s, dict) and str(s.get("uses","")).strip() == TARGET_USES:
+                      return True
+              return False
+
+          def find_insert_index(steps):
+              """Prefer after setup-python, else after checkout, else at end."""
+              setup_idx = None
+              checkout_idx = None
+              for i, s in enumerate(steps):
+                  if not isinstance(s, dict): continue
+                  uses = str(s.get("uses","")).lower()
+                  if "actions/setup-python@" in uses:
+                      setup_idx = i
+                  if "actions/checkout@" in uses:
+                      checkout_idx = i
+              if setup_idx is not None:
+                  return setup_idx + 1
+              if checkout_idx is not None:
+                  return checkout_idx + 1
+              return len(steps)
+
+          def inject_step(steps):
+              step = {
+                  "name": "PR-safe dispatcher (auto-detect)",
+                  "uses": TARGET_USES,
+              }
+              idx = find_insert_index(steps)
+              steps.insert(idx, step)
+
+          def process_file(path: pathlib.Path):
+              try:
+                  raw = path.read_text(encoding="utf-8")
+                  doc = yaml.safe_load(raw)
+              except Exception as e:
+                  print(f"::warning title=YAML load failed::{path}: {e}")
+                  return False
+
+              changed = False
+              for jname, steps in find_steps(doc):
+                  if not has_target_step(steps):
+                      inject_step(steps)
+                      changed = True
+
+              if changed:
+                  # write back (PyYAML dump is fine for CI files)
+                  with path.open("w", encoding="utf-8") as w:
+                      yaml.safe_dump(doc, w, sort_keys=False)
+                  print(f"✔ Injected PR-safe step → {path}")
+              else:
+                  print(f"⏭ Already present → {path}")
+              return changed
+
+          def main():
+              if not WF_DIR.exists():
+                  print("::warning title=No workflows::.github/workflows not found; skipping")
+                  return 0
+              any_changed = False
+              for p in sorted(WF_DIR.glob("*.y*ml")):
+                  any_changed = process_file(p) or any_changed
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+  - run_shell:
+      name: Inject PR-safe dispatcher into workflows
+      script: |
+        set -euo pipefail
+        python - <<'PY'
+        import subprocess, sys
+        # Ensure PyYAML is available (quiet install)
+        subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--quiet", "pyyaml"], check=True)
+        subprocess.run(["python", "scripts/insert_pr_safe_step.py"], check=False)
+        PY
+
+  - commit:
+      message: "chore(ci): auto-insert pr-safe-dispatch step across workflows (idempotent)"
