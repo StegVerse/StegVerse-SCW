@@ -75,9 +75,14 @@ jobs:
             echo "ok=false" >> $GITHUB_OUTPUT
           else
             echo "ok=true" >> $GITHUB_OUTPUT
+
+          # capture raw response for debugging (optional)
+          if [ -f /tmp/resp.json ]; then
+            echo "resp=$(cat /tmp/resp.json | tr -d '\n' | sed 's/"/\\"/g')" >> $GITHUB_OUTPUT || true
           fi
 
       - name: Fallback: commit a tiny trigger file (reindex nudge)
+        id: nudge
         if: ${{ steps.dispatch.outputs.ok != 'true' && contains(fromJSON('["both","commit-only"]'), env.MODE) }}
         run: |
           set -euo pipefail
@@ -89,7 +94,40 @@ jobs:
           git add .github/trigger/autopatch/reindex-${ts}.txt
           git commit -m "chore(autopatch): reindex nudge ${ts}"
           git push origin HEAD:${TARGET_BRANCH}
-          echo "Created commit nudge .github/trigger/autopatch/reindex-${ts}.txt"
+          echo "nudged=true" >> $GITHUB_OUTPUT
+          echo "nudge_commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      # ------ TaskOps ledger logging ------
+      - name: Append TaskOps ledger entry
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p .github/taskops
+
+          ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          dispatch_ok="${{ steps.dispatch.outputs.ok || 'n/a' }}"
+          nudged="${{ steps.nudge.outputs.nudged || 'false' }}"
+          nudge_commit="${{ steps.nudge.outputs.nudge_commit || '' }}"
+          wf_present="${{ steps.sanity.outputs.wf_present || 'unknown' }}"
+
+          # Write JSONL entry
+          cat > /tmp/taskops_entry.json <<JSON
+{"ts":"${ts}","job":"autopatch-reindex","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${{ env.TARGET_BRANCH }}","mode":"${{ env.MODE }}","target_workflow":"${{ env.TARGET_WF }}","workflow_present":"${wf_present}","dispatch_ok":"${dispatch_ok}","nudged":"${nudged}","nudge_commit":"${nudge_commit}"}
+JSON
+
+          if [ -f ".github/taskops/ledger.jsonl" ]; then
+            cat /tmp/taskops_entry.json >> .github/taskops/ledger.jsonl
+          else
+            cp /tmp/taskops_entry.json .github/taskops/ledger.jsonl
+          fi
+
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/taskops/ledger.jsonl
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(taskops): log reindex run $GITHUB_RUN_ID"
+            git push origin HEAD:${{ env.TARGET_BRANCH }}
+          fi
 
       - name: Summary
         if: always()
@@ -100,3 +138,7 @@ jobs:
           echo "- Mode: \`${{ env.MODE }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Present in repo: \`${{ steps.sanity.outputs.wf_present || 'unknown' }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Dispatch ok: \`${{ steps.dispatch.outputs.ok || 'n/a' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Nudged (commit): \`${{ steps.nudge.outputs.nudged || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${{ steps.nudge.outputs.nudge_commit || '' }}" ]; then
+            echo "- Nudge commit: \`${{ steps.nudge.outputs.nudge_commit }}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
