@@ -1,7 +1,6 @@
 name: autopatch-reindex
 
 on:
-  # 1) Manual button
   workflow_dispatch:
     inputs:
       target_workflow:
@@ -16,7 +15,6 @@ on:
         description: "dispatch-only | commit-only | both"
         default: "both"
         required: true
-  # 2) Auto nudge when patch manifest or triggers change
   push:
     branches: [ "main" ]
     paths:
@@ -76,9 +74,8 @@ jobs:
           else
             echo "ok=true" >> $GITHUB_OUTPUT
 
-          # capture raw response for debugging (optional)
           if [ -f /tmp/resp.json ]; then
-            echo "resp=$(cat /tmp/resp.json | tr -d '\n' | sed 's/"/\\"/g')" >> $GITHUB_OUTPUT || true
+            echo "resp=$(cat /tmp/resp.json | tr -d '\n' | sed 's/\"/\\\"/g')" >> $GITHUB_OUTPUT || true
           fi
 
       - name: Fallback: commit a tiny trigger file (reindex nudge)
@@ -110,14 +107,13 @@ jobs:
           nudge_commit="${{ steps.nudge.outputs.nudge_commit || '' }}"
           wf_present="${{ steps.sanity.outputs.wf_present || 'unknown' }}"
 
-          # Write JSONL entry
           cat > /tmp/taskops_entry.json <<JSON
-{"ts":"${ts}","job":"autopatch-reindex","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${{ env.TARGET_BRANCH }}","mode":"${{ env.MODE }}","target_workflow":"${{ env.TARGET_WF }}","workflow_present":"${wf_present}","dispatch_ok":"${dispatch_ok}","nudged":"${nudged}","nudge_commit":"${nudge_commit}"}
+{"ts":"${ts}","job":"autopatch-reindex","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${GITHUB_REF_NAME}","mode":"${{ env.MODE }}","target_workflow":"${{ env.TARGET_WF }}","workflow_present":"${wf_present}","dispatch_ok":"${dispatch_ok}","nudged":"${nudged}","nudge_commit":"${nudge_commit}"}
 JSON
 
           if [ -f ".github/taskops/ledger.jsonl" ]; then
             cat /tmp/taskops_entry.json >> .github/taskops/ledger.jsonl
-          else
+          else:
             cp /tmp/taskops_entry.json .github/taskops/ledger.jsonl
           fi
 
@@ -126,6 +122,66 @@ JSON
           git add .github/taskops/ledger.jsonl
           if ! git diff --cached --quiet; then
             git commit -m "chore(taskops): log reindex run $GITHUB_RUN_ID"
+            git push origin HEAD:${{ env.TARGET_BRANCH }}
+          fi
+
+      # ------ Ensure README has markers + badge ------
+      - name: Ensure README markers + badge block
+        run: |
+          set -euo pipefail
+          if [ ! -f README.md ]; then
+            echo "README.md not found; skipping badge injection."
+            exit 0
+          fi
+
+          BADGE='[![autopatch-reindex](https://github.com/'"${GITHUB_REPOSITORY}"'/actions/workflows/autopatch-reindex.yml/badge.svg)](https://github.com/'"${GITHUB_REPOSITORY}"'/actions/workflows/autopatch-reindex.yml)'
+
+          if ! grep -q "<!-- reindex-status:start -->" README.md; then
+            {
+              echo ""
+              echo "## CI: AutoPatch Reindex"
+              echo ""
+              echo "${BADGE}"
+              echo ""
+              echo "<!-- reindex-status:start -->"
+              echo "No reindex runs logged yet."
+              echo "<!-- reindex-status:end -->"
+              echo ""
+            } >> README.md
+            echo "Inserted reindex section in README.md"
+          else
+            echo "Reindex markers already present."
+          fi
+
+          # If badge missing, add it right above markers
+          if ! grep -q "autopatch-reindex" README.md; then
+            tmp="$(mktemp)"
+            awk '1;/<!-- reindex-status:start -->/ && !x{print "";print "'"${BADGE}"'"; x=1}' README.md > "$tmp"
+            mv "$tmp" README.md
+            echo "Added badge near markers."
+          fi
+
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add README.md
+          if ! git diff --cached --quiet; then
+            git commit -m "docs(readme): inject reindex badge + markers"
+            git push origin HEAD:${{ env.TARGET_BRANCH }}
+          fi
+
+      # ------ Update README status line from ledger ------
+      - name: Update README reindex status
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip >/dev/null
+          # no extra deps; pure python script
+          python scripts/reindex_status_to_readme.py
+
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add README.md || true
+          if ! git diff --cached --quiet; then
+            git commit -m "docs(readme): refresh reindex status"
             git push origin HEAD:${{ env.TARGET_BRANCH }}
           fi
 
