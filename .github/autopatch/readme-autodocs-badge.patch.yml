@@ -1,0 +1,125 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/ensure_autodocs_badge.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Ensure README has an AutoDocs status badge between:
+            <!-- badges:start --> ... <!-- badges:end -->
+          - If markers are missing, a badges block is inserted at the very top.
+          - The AutoDocs badge is added/updated; other badges in the block are preserved.
+          """
+          import os, re, pathlib
+
+          REPO = os.getenv("GITHUB_REPOSITORY", "").strip()
+          README = pathlib.Path("README.md")
+          START = "<!-- badges:start -->"
+          END = "<!-- badges:end -->"
+
+          def autodocs_badge(repo: str) -> str:
+              if not repo:
+                  repo = "StegVerse/StegVerse-SCW"
+              return f"[![AutoDocs](https://github.com/{repo}/actions/workflows/autodocs.yml/badge.svg)](https://github.com/{repo}/actions/workflows/autodocs.yml)"
+
+          def unique_badges(lines):
+              seen, out = set(), []
+              for t in lines:
+                  t2 = t.strip()
+                  if not t2:
+                      continue
+                  if t2 in seen:
+                      continue
+                  seen.add(t2)
+                  out.append(t2)
+              return out
+
+          def main():
+              if not README.exists():
+                  print("README.md not found; nothing to do.")
+                  return 0
+              text = README.read_text(encoding="utf-8")
+
+              # locate badges block
+              if START in text and END in text:
+                  head, rest = text.split(START, 1)
+                  mid, tail = rest.split(END, 1)
+                  block = mid.strip("\n")
+              else:
+                  # Insert a badges block at the very top
+                  head, tail, block = "", text, ""
+
+              # split existing badges into lines
+              badge_lines = []
+              if block:
+                  # try to split on either spaces between links or newlines
+                  # normalize by turning ")(" separation into ")\n("
+                  block_norm = re.sub(r"\)\s*\(", ")\n(", block)
+                  badge_lines = [b.strip() for b in block_norm.splitlines() if b.strip()]
+
+              # ensure autodocs badge present/updated
+              ad_badge = autodocs_badge(REPO)
+              # remove any existing autodocs badges (by matching its target path)
+              badge_lines = [b for b in badge_lines if "actions/workflows/autodocs.yml" not in b]
+              badge_lines.insert(0, ad_badge)
+
+              # dedupe and rebuild block on one line separated by spaces
+              badge_lines = unique_badges(badge_lines)
+              new_block = " ".join(badge_lines).strip() + "\n"
+
+              new_text = f"{head}{START}\n{new_block}{END}{tail}" if (START in text and END in text) else f"{START}\n{new_block}{END}\n{tail}"
+
+              if new_text != text:
+                  README.write_text(new_text, encoding="utf-8")
+                  print("README updated with AutoDocs badge.")
+              else:
+                  print("README already up to date.")
+              return 0
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+
+      - path: ".github/workflows/docs-autodocs-badge.yml"
+        mode: "100644"
+        contents: |
+          name: docs-autodocs-badge
+          on:
+            workflow_dispatch: {}
+            push:
+              branches: [ "main" ]
+              paths:
+                - "README.md"
+                - "scripts/ensure_autodocs_badge.py"
+                - ".github/workflows/autodocs.yml"
+                - ".github/workflows/docs-autodocs-badge.yml"
+
+          permissions:
+            contents: write
+
+          jobs:
+            ensure-badge:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - name: Ensure AutoDocs badge
+                  run: |
+                    python3 scripts/ensure_autodocs_badge.py
+                - name: Commit if changed
+                  run: |
+                    set -e
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add README.md || true
+                    if ! git diff --cached --quiet; then
+                      git commit -m "docs(readme): ensure AutoDocs status badge"
+                      git push
+                    else
+                      echo "No changes to commit."
+
+      - path: ".github/autopatch/.applied_readme_autodocs_badge"
+        mode: "100644"
+        contents: "applied"
+
+  - commit:
+      message: "docs(readme): bootstrap AutoDocs status badge (+ keeper workflow)"
