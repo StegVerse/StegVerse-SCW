@@ -1,2 +1,4 @@
 version: 1
-patches: []
+patches:
+  - id: pr-safe-dispatch
+    path: .github/autopatch/pr-safe-dispatch.patch.yml
