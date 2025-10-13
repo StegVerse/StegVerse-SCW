@@ -1,0 +1,147 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/ensure_readme_badges.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Normalize README badges inside:
+            <!-- badges:start --> ... <!-- badges:end -->
+
+          - Creates the badges block at the very top if missing.
+          - Ensures these badges exist (if their workflows exist in the repo):
+              * autopatch-apply
+              * autopatch-reindex
+              * autodocs
+              * docs-readme-badges (optional)
+              * export-hcb (optional)
+          - Preserves any other badges already in the block; de-duplicates; stable order.
+          """
+
+          import os, re, pathlib
+
+          REPO   = os.getenv("GITHUB_REPOSITORY", "").strip() or "StegVerse/StegVerse-SCW"
+          README = pathlib.Path("README.md")
+          START  = "<!-- badges:start -->"
+          END    = "<!-- badges:end -->"
+
+          CANONICAL = [
+              ("autopatch-apply",   "AutoPatch Apply"),
+              ("autopatch-reindex", "AutoPatch Reindex"),
+              ("autodocs",          "AutoDocs"),
+              ("docs-readme-badges","Badges Keeper"),   # present if you added the keeper job
+              ("export-hcb",        "Export HCB"),      # optional
+          ]
+
+          def wf_exists(workflow: str) -> bool:
+              # best-effort: check file present locally or referenced in README already
+              return pathlib.Path(f".github/workflows/{workflow}.yml").exists() or \
+                     pathlib.Path(f".github/workflows/{workflow}.yaml").exists()
+
+          def wf_badge(repo: str, workflow: str, label: str) -> str:
+              return f"[![{label}](https://github.com/{repo}/actions/workflows/{workflow}.yml/badge.svg)](https://github.com/{repo}/actions/workflows/{workflow}.yml)"
+
+          def unique(seq):
+              seen, out = set(), []
+              for s in seq:
+                  if s not in seen:
+                      seen.add(s)
+                      out.append(s)
+              return out
+
+          def ensure_block(text: str):
+              """Ensure badges markers exist at very top; return (text_with_block, had_block)."""
+              if START in text and END in text:
+                  return text, True
+              return f"{START}\n{END}\n\n{text}", False
+
+          def split_badges(block: str):
+              # normalize ")(" to line split
+              block = re.sub(r"\)\s*\(", ")\n(", block.strip())
+              return [ln.strip() for ln in block.splitlines() if ln.strip()]
+
+          def join_badges(lines):
+              return " ".join(lines).strip() + "\n"
+
+          def main():
+              if not README.exists():
+                  print("README.md not found; nothing to do.")
+                  return 0
+
+              text = README.read_text(encoding="utf-8")
+              text, had = ensure_block(text)
+
+              head, rest = text.split(START, 1)
+              mid, tail  = rest.split(END, 1)
+              block = mid.strip()
+              badges = split_badges(block) if block else []
+
+              # drop any old copies of canonical workflows (we'll re-add in canonical order)
+              for wf, _ in CANONICAL:
+                  badges = [b for b in badges if f"actions/workflows/{wf}.yml" not in b and f"actions/workflows/{wf}.yaml" not in b]
+
+              # add canonical badges if the workflow exists in the repo
+              for wf, label in CANONICAL:
+                  if wf_exists(wf):
+                      badges.insert(0, wf_badge(REPO, wf, label))
+
+              badges = unique(badges)
+              new_block = join_badges(badges)
+              new_text  = f"{head}{START}\n{new_block}{END}{tail}"
+
+              if new_text != text:
+                  README.write_text(new_text, encoding="utf-8")
+                  print("README badges updated.")
+              else:
+                  print("README already up to date.")
+              return 0
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+
+      - path: ".github/workflows/docs-badge-sync.yml"
+        mode: "100644"
+        contents: |
+          name: docs-badge-sync
+          on:
+            workflow_dispatch: {}   # ← gives you the Run workflow button
+            push:
+              branches: [ "main" ]
+              paths:
+                - "README.md"
+                - "scripts/ensure_readme_badges.py"
+                - ".github/workflows/*.yml"
+                - ".github/workflows/*.yaml"
+            schedule:
+              - cron: "11 7 * * *"   # daily tidy
+
+          permissions:
+            contents: write
+
+          jobs:
+            normalize-badges:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - name: Ensure README badges
+                  run: |
+                    python3 scripts/ensure_readme_badges.py
+                - name: Commit if changed
+                  run: |
+                    set -e
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add README.md || true
+                    if ! git diff --cached --quiet; then
+                      git commit -m "docs(readme): normalize badges block"
+                      git push
+                    else
+                      echo "No changes to commit."
+
+      - path: ".github/autopatch/.applied_readme_badges_autopatch"
+        mode: "100644"
+        contents: "applied"
+
+  - commit:
+      message: "docs(readme): self-healing badges (keeper workflow + normalizer)"
