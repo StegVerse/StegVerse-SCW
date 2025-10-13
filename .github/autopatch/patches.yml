@@ -4,3 +4,5 @@ patches:
       path: .github/autopatch/pr-safe-dispatch.patch.yml
   - id: pr-safe-inject
       path: .github/autopatch/pr-safe-inject.patch.yml
+  - id: autodocs-prsafe-status
+      path: .github/autopatch/autodocs-prsafe-status.patch.yml
