@@ -1,0 +1,185 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/autodocs_generate.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          AutoDocs generator
+          - Reads .github/taskops/ledger.jsonl
+          - Updates README.md between <!-- autodocs:start --> … <!-- autodocs:end -->
+          - Writes .github/docs/TASKOPS_STATUS.md and LEDGER_LAST_20.md
+          - Safe to re-run; no change = no commit by workflow
+          """
+          import json, pathlib, datetime
+          from collections import Counter
+
+          LEDGER = pathlib.Path(".github/taskops/ledger.jsonl")
+          DOCS_DIR = pathlib.Path(".github/docs")
+          README = pathlib.Path("README.md")
+          START = "<!-- autodocs:start -->"
+          END = "<!-- autodocs:end -->"
+          NOW = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          def read_ledger():
+              if not LEDGER.exists():
+                  return []
+              items = []
+              for line in LEDGER.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  line = line.strip()
+                  if not line: 
+                      continue
+                  try:
+                      j = json.loads(line)
+                      j.setdefault("ts", "")
+                      j.setdefault("job", "unknown")
+                      items.append(j)
+                  except Exception:
+                      continue
+              items.sort(key=lambda x: x.get("ts", ""))
+              return items
+
+          def summarize(items):
+              by_job = Counter(x["job"] for x in items)
+              last10 = list(reversed(items))[:10]
+              agg = {"applied":0,"noop":0,"skipped":0,"blocked":0,"error":0}
+              for x in items:
+                  if x.get("job") == "autopatch-apply":
+                      for k in agg:
+                          try:
+                              agg[k] += int(str(x.get(k, "0") or "0"))
+                          except ValueError:
+                              pass
+              return by_job, last10, agg
+
+          def ensure_readme_markers():
+              if not README.exists():
+                  return False
+              txt = README.read_text(encoding="utf-8")
+              if START in txt and END in txt:
+                  return True
+              with README.open("a", encoding="utf-8") as w:
+                  w.write("\n\n## AutoDocs (TaskOps summary)\n\n")
+                  w.write(f"{START}\n_No data yet — run AutoDocs to populate._\n{END}\n")
+              return True
+
+          def render_readme_block(by_job, last10, agg):
+              lines = []
+              lines.append(f"_Last updated: **{NOW}**_  \n")
+              if sum(agg.values()) > 0:
+                  lines.append(f"- AutoPatch totals → ✅ applied **{agg['applied']}** · ⏭ noop **{agg['noop']}** · ⚠️ skipped **{agg['skipped']}** · ⛔ blocked **{agg['blocked']}** · ❌ error **{agg['error']}**")
+              if by_job:
+                  job_str = " · ".join(f"`{k}`: {v}" for k,v in by_job.most_common())
+                  lines.append(f"- Jobs seen → {job_str}")
+              if last10:
+                  lines.append("\n**Latest 10 ledger entries**\n")
+                  lines.append("| ts (UTC) | job | branch | run_id | extras |")
+                  lines.append("|---|---|---:|---:|---|")
+                  for x in last10:
+                      ts = x.get("ts","")
+                      job = x.get("job","")
+                      branch = x.get("branch","")
+                      run_id = str(x.get("run_id",""))
+                      extras = []
+                      for k in ("dispatch_ok","nudged","applied","noop","skipped","blocked","error"):
+                          if k in x and str(x[k]) not in ("", "0", "false", "None"):
+                              extras.append(f"{k}={x[k]}")
+                      lines.append(f"| {ts} | `{job}` | `{branch}` | {run_id} | {'; '.join(extras) if extras else '—'} |")
+              return "\n".join(lines) + "\n"
+
+          def update_readme(block):
+              txt = README.read_text(encoding="utf-8")
+              if START not in txt or END not in txt:
+                  return False
+              head, rest = txt.split(START, 1)
+              mid, tail = rest.split(END, 1)
+              new_txt = f"{head}{START}\n{block}{END}{tail}"
+              if new_txt != txt:
+                  README.write_text(new_txt, encoding="utf-8")
+                  return True
+              return False
+
+          def write_docs(items, by_job, agg):
+              DOCS_DIR.mkdir(parents=True, exist_ok=True)
+              # summary doc
+              out = [f"# TaskOps Status\n_Generated: {NOW}Z_\n"]
+              if by_job:
+                  out.append("## Jobs count")
+                  for k,v in by_job.most_common():
+                      out.append(f"- **{k}**: {v}")
+                  out.append("")
+              if sum(agg.values())>0:
+                  out.append("## AutoPatch totals")
+                  for k,v in agg.items():
+                      out.append(f"- {k}: **{v}**")
+                  out.append("")
+              out.append("## Last 50 ledger entries")
+              for x in list(reversed(items))[:50]:
+                  extra = "; ".join(f"{k}={x[k]}" for k in ("applied","noop","skipped","blocked","error") if k in x)
+                  out.append(f"- {x.get('ts','')} — {x.get('job','')} {('('+extra+')') if extra else ''}")
+              (DOCS_DIR/"TASKOPS_STATUS.md").write_text("\n".join(out), encoding="utf-8")
+
+          def main():
+              if not ensure_readme_markers():
+                  print("No README found")
+                  return
+              items = read_ledger()
+              by_job, last10, agg = summarize(items)
+              block = render_readme_block(by_job, last10, agg)
+              changed = update_readme(block)
+              write_docs(items, by_job, agg)
+              print("AutoDocs complete. README updated?", changed)
+
+          if __name__ == "__main__":
+              main()
+
+      - path: ".github/workflows/autodocs.yml"
+        mode: "100644"
+        contents: |
+          name: autodocs
+
+          on:
+            workflow_dispatch: {}
+            push:
+              branches: [ "main" ]
+              paths:
+                - ".github/taskops/ledger.jsonl"
+                - "scripts/autodocs_generate.py"
+                - ".github/workflows/autodocs.yml"
+            schedule:
+              - cron: "0 6 * * *"
+
+          permissions:
+            contents: write
+
+          jobs:
+            generate:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.x"
+                - name: Run generator
+                  run: |
+                    python -m pip install --upgrade pip >/dev/null
+                    python scripts/autodocs_generate.py
+                - name: Commit changes if updated
+                  run: |
+                    git config user.name "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add README.md .github/docs/*.md || true
+                    if ! git diff --cached --quiet; then
+                      git commit -m "docs(autodocs): update TaskOps summaries"
+                      git push
+                    else
+                      echo "No changes."
+
+      - path: ".github/docs/.gitkeep"
+        mode: "100644"
+        contents: ""
+
+  - commit:
+      message: "docs(autodocs): bootstrap AutoDocs system (README + .github/docs + workflow)"
