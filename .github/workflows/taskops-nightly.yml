@@ -1,0 +1,26 @@
+name: taskops-nightly
+on:
+  schedule:
+    - cron: "0 5 * * *"  # every day at 05:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refresh AutoDocs + TaskOps dashboard
+        run: |
+          python -m pip install --disable-pip-version-check --quiet pyyaml
+          python scripts/autodocs_probe_pr_safe.py
+          python scripts/taskops_autodocs_link.py
+      - name: Commit updates
+        run: |
+          git config user.name "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add README.md .github/docs/
+          git diff --cached --quiet || git commit -m "chore(taskops): nightly AutoDocs dashboard refresh"
+          git push origin HEAD:main
