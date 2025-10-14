@@ -11,7 +11,7 @@ on:
         description: "If a token is obtained, immediately seed default config"
         required: false
         default: "false"
-
+        
 permissions:
   contents: read
   actions: write   # to upload artifacts
