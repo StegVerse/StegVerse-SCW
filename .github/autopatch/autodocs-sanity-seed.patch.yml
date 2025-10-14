@@ -1,0 +1,55 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/autodocs_generate.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          # Minimal guard to ensure README markers and basic docs exist.
+          import json, pathlib, datetime
+          from collections import Counter
+
+          LEDGER = pathlib.Path(".github/taskops/ledger.jsonl")
+          DOCS = pathlib.Path(".github/docs")
+          README = pathlib.Path("README.md")
+          START = "<!-- autodocs:start -->"
+          END = "<!-- autodocs:end -->"
+          NOW = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          def ensure_readme_markers():
+            if not README.exists():
+              return
+            txt = README.read_text(encoding="utf-8")
+            if START in txt and END in txt:
+              return
+            README.write_text(txt + "\n\n## AutoDocs (TaskOps summary)\n\n" + START + "\n_No data yet._\n" + END + "\n", encoding="utf-8")
+
+          def read_ledger():
+            items=[]
+            if LEDGER.exists():
+              for line in LEDGER.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line=line.strip()
+                if not line: continue
+                try: items.append(json.loads(line))
+                except: pass
+            return items
+
+          def write_docs():
+            DOCS.mkdir(parents=True, exist_ok=True)
+            status = ["# TaskOps Status","","Updated: "+NOW,""]
+            (DOCS / "TASKOPS_STATUS.md").write_text("\n".join(status)+"\n", encoding="utf-8")
+            (DOCS / "LEDGER_LAST_20.md").write_text("# Last 20 ledger entries\n\n", encoding="utf-8")
+
+          ensure_readme_markers()
+          write_docs()
+      - path: "scripts/env_diff.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import json, pathlib
+          ENV_DIR = pathlib.Path(".github/docs/env"); ENV_DIR.mkdir(parents=True, exist_ok=True)
+          (ENV_DIR / "ENV_DIFF_LATEST.md").write_text("# Environment Drift (Latest)\n\n_No snapshots yet._\n", encoding="utf-8")
+          (ENV_DIR / "TASKOPS_ENV_DIFF.json").write_text(json.dumps({"ok": True, "status": "seed"}), encoding="utf-8")
+
+  - commit:
+      message: "chore(autodocs): ensure AutoDocs+env scripts present (sanity seed)"
