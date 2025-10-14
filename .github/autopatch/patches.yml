@@ -1,5 +1,2 @@
 version: 1
-patches:
-  - id: fix-autodocs-output
-    path: .github/autopatch/fix-autodocs-output.patch.yml
-    when: always
+patches: []
