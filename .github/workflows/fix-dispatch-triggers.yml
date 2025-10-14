@@ -4,11 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Only report files that would change (no commit)"
+        description: "Only report changes (no commit)"
         required: false
         default: "false"
         type: choice
         options: ["false","true"]
+  push:
+    paths:
+      - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
 
 permissions:
   contents: write
@@ -29,15 +33,15 @@ jobs:
         run: python -m pip install --upgrade pip pyyaml
 
       - name: Normalize workflow_dispatch in all workflows
-        id: normalize
         env:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           python scripts/patches/normalize_dispatch.py --dir ".github/workflows" ${DRY_RUN:+--dry-run}
 
+      # We don’t rely on step outputs; we look for a marker file created by the script.
       - name: Commit & push (if changed)
-        if: steps.normalize.outputs.changed == 'true' && inputs.dry_run != 'true'
+        if: hashFiles('self_healing_out/NORMALIZE_CHANGED') != ''
         run: |
           set -euo pipefail
           git config user.name  "${GITHUB_ACTOR}"
@@ -46,7 +50,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes staged."
           else
-            git commit -m "chore(workflows): normalize root on: block and inject workflow_dispatch"
+            git commit -m "chore(workflows): normalize root 'on:' and inject 'workflow_dispatch'"
             git push
           fi
 
