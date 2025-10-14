@@ -1,0 +1,70 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/workflows/autodocs-verify.yml"
+        mode: "100644"
+        contents: |
+          name: AutoDocs Verify & Commit
+          on:
+            workflow_dispatch: {}
+            push:
+              branches: [ "main" ]
+              paths:
+                - ".github/workflows/**"
+                - "scripts/autodocs_generate.py"
+
+          permissions:
+            contents: write
+            actions: read
+
+          jobs:
+            autodocs:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with:
+                    fetch-depth: 0
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.11"
+
+                - name: Run AutoDocs generator
+                  run: |
+                    set -euo pipefail
+                    mkdir -p .github/docs/logs
+                    LOG=.github/docs/logs/autodocs_run_$(date +%s).log
+                    echo "[INFO] Starting autodocs_generate.py" | tee -a $LOG
+                    if [ -f scripts/autodocs_generate.py ]; then
+                      python scripts/autodocs_generate.py | tee -a $LOG
+                    else
+                      echo "[ERROR] Missing scripts/autodocs_generate.py" | tee -a $LOG
+                      exit 1
+                    fi
+
+                - name: Verify docs output
+                  run: |
+                    set -euo pipefail
+                    if [ ! -f ".github/docs/README-HCB-AUTOMATION.md" ]; then
+                      echo "::error title=Missing output file::.github/docs/README-HCB-AUTOMATION.md not found"
+                      exit 1
+                    fi
+                    echo "✅ Found generated docs:"
+                    ls -lah .github/docs
+
+                - name: Commit & push if updated
+                  run: |
+                    set -euo pipefail
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add .github/docs || true
+                    if ! git diff --cached --quiet; then
+                      git commit -m "docs: update autodocs outputs"
+                      git push origin HEAD:main
+                    else
+                      echo "No new docs to commit."
+                    fi
+  - commit:
+      message: "fix(autodocs): ensure log, verify docs output, commit changes"
