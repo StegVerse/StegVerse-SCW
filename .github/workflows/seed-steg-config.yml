@@ -1,73 +1,119 @@
 name: Seed Steg Config (self-healing)
 
 on:
-  workflow_dispatch: {}
-  workflow_call:
+  workflow_dispatch:
     inputs:
       api_url:
+        description: "Base API URL (e.g., https://scw-api.onrender.com)"
         required: true
-        type: string
-      config_path:
+        default: "https://scw-api.onrender.com"
+      seed_after_bootstrap:
+        description: "If a token is obtained, immediately seed default config"
         required: false
-        type: string
-        default: ".github/config/steg.json"
-      bootstrap_allowed:
-        required: false
-        type: boolean
-        default: true
+        default: "false"
 
 permissions:
   contents: read
+  actions: write   # to upload artifacts
 
 jobs:
   seed:
     runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ inputs.api_url }}
+      # If you already created a repo secret ADMIN_TOKEN, we'll use it.
+      ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Set -euo pipefail
+        run: echo "Shell safety on"; set -euo pipefail
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - name: Show target
+        run: |
+          echo "API_URL=${API_URL}"
+          echo "ADMIN_TOKEN present? $([[ -n "${ADMIN_TOKEN:-}" ]] && echo yes || echo no)"
 
-      - name: Ensure deps
+      - name: Probe health (best-effort)
+        continue-on-error: true
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip >/dev/null
+          curl -fsSL -m 10 "${API_URL%/}/health" || echo "Health probe non-fatal."
 
-      - name: Write helper (if missing)
+      # --- Bootstrap path: only if we do NOT already have a token
+      - name: Try bootstrap (obtain admin token)
+        id: bootstrap
+        if: env.ADMIN_TOKEN == ''
+        continue-on-error: true
         run: |
           set -euo pipefail
-          mkdir -p scripts/ops self_healing_out
-          if [ ! -f scripts/ops/seed_config.py ]; then
-            echo "::error::scripts/ops/seed_config.py not found"
-            exit 2
+          echo "Attempting bootstrap…"
+          # Expect JSON: {"token":"..."} or similar
+          resp="$(curl -sS -X POST -H 'Content-Type: application/json' \
+                   "${API_URL%/}/admin/bootstrap" \
+                   -d '{}')"
+          echo "Raw bootstrap response: ${resp}" | sed 's/["\\]/_/g'
+          token="$(printf '%s' "$resp" | python3 -c "import sys,json; import re
+try:
+    d=json.load(sys.stdin)
+    print(d.get('token',''))
+except Exception:
+    print('')")"
+          if [ -n "$token" ]; then
+            echo "$token" > /tmp/NEW_ADMIN_TOKEN.txt
+            echo "new_token=1" >> "$GITHUB_OUTPUT"
+            echo "Bootstrap acquired token."
+          else
+            echo "new_token=0" >> "$GITHUB_OUTPUT"
+            echo "No token in bootstrap response (likely disabled, or requires different endpoint)."
           fi
-          chmod +x scripts/ops/seed_config.py
 
-      - name: Seed config (auto-heal on 403)
-        id: seed
-        env:
-          API_URL: ${{ inputs.api_url || secrets.API_URL }}
-          CONFIG_PATH: ${{ inputs.config_path }}
-          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
-          BOOTSTRAP_ALLOWED: ${{ inputs.bootstrap_allowed }}
-        run: |
-          set -euo pipefail
-          python scripts/ops/seed_config.py
-
-      - name: Mask new token (if produced)
-        if: always()
-        run: |
-          if [ -f self_healing_out/NEW_ADMIN_TOKEN.txt ]; then
-            echo "::add-mask::$(cat self_healing_out/NEW_ADMIN_TOKEN.txt)"
-          fi
-
-      - name: Upload seeding artifacts (optional)
-        if: always()
+      - name: Upload new token artifact (if obtained)
+        if: steps.bootstrap.outputs.new_token == '1'
         uses: actions/upload-artifact@v4
         with:
-          name: seed-config-${{ github.run_id }}
-          path: self_healing_out/*
-          if-no-files-found: ignore
+          name: NEW_ADMIN_TOKEN
+          path: /tmp/NEW_ADMIN_TOKEN.txt
+          retention-days: 1
+
+      # Pick a token to use for seeding if requested:
+      - name: Resolve token for seeding (if any)
+        id: tok
+        run: |
+          set -euo pipefail
+          if [ -n "${ADMIN_TOKEN:-}" ]; then
+            echo "Resolved token from repo secret."
+            echo "token_src=secret" >> "$GITHUB_OUTPUT"
+            echo "::add-mask::$ADMIN_TOKEN"
+            echo "token=$ADMIN_TOKEN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f /tmp/NEW_ADMIN_TOKEN.txt ]; then
+            t="$(cat /tmp/NEW_ADMIN_TOKEN.txt)"
+            if [ -n "$t" ]; then
+              echo "Resolved token from bootstrap artifact (in-memory only)."
+              echo "::add-mask::$t"
+              echo "token_src=bootstrap" >> "$GITHUB_OUTPUT"
+              echo "token=$t" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "No token available to seed."
+          echo "token_src=none" >> "$GITHUB_OUTPUT"
+          echo "token=" >> "$GITHUB_OUTPUT"
+
+      - name: Seed default config (optional)
+        if: ${{ inputs.seed_after_bootstrap == 'true' && steps.tok.outputs.token_src != 'none' }}
+        run: |
+          set -euo pipefail
+          TOKEN="${{ steps.tok.outputs.token }}"
+          echo "Seeding default config…"
+          # Replace this payload with your real bootstrap config when ready:
+          cat > /tmp/seed.json <<JSON
+{"name":"stegverse-sample","env":"prod","features":{"autopatch":true,"docs":true}}
+JSON
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/seed.json \
+            "${API_URL%/}/config/seed" | sed 's/["\\]/_/g'
+          echo "Seed request sent."
