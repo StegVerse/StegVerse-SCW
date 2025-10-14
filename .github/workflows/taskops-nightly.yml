@@ -24,3 +24,12 @@ jobs:
           git add README.md .github/docs/
           git diff --cached --quiet || git commit -m "chore(taskops): nightly AutoDocs dashboard refresh"
           git push origin HEAD:main
+      - name: Refresh CI Dashboard block
+        run: python scripts/readme_ci_dashboard.py || true
+      - name: Commit dashboard updates
+        run: |
+          git config user.name "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add README.md .github/docs/
+          git diff --cached --quiet || git commit -m "docs(readme): nightly CI dashboard refresh"
+          git push origin HEAD:main
