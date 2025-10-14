@@ -1,0 +1,67 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/workflows/kick-autopatch-apply.yml"
+        mode: "100644"
+        contents: |
+          name: Kick Autopatch Apply
+
+          on:
+            workflow_dispatch: {}
+
+          permissions:
+            contents: write
+            actions: write
+
+          env:
+            TARGET_WORKFLOW: autopatch_apply.yml
+            GITHUB_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+
+          jobs:
+            kick:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+
+                - name: Try triggering Autopatch Apply
+                  uses: actions/github-script@v7
+                  with:
+                    github-token: ${{ env.GITHUB_TOKEN }}
+                    script: |
+                      const target = process.env.TARGET_WORKFLOW;
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+
+                      try {
+                        await github.rest.actions.createWorkflowDispatch({
+                          owner,
+                          repo,
+                          workflow_id: target,
+                          ref: "main",
+                        });
+                        console.log(`✅ Triggered ${target} successfully.`);
+                      } catch (err) {
+                        console.error(`⚠️ Primary dispatch failed: ${err.message}`);
+                        console.log("Attempting fallback via REST API...");
+
+                        const fetch = require('node-fetch');
+                        const resp = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/${target}/dispatches`, {
+                          method: 'POST',
+                          headers: {
+                            'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+                            'Accept': 'application/vnd.github+json',
+                          },
+                          body: JSON.stringify({ ref: "main" })
+                        });
+                        if (!resp.ok) {
+                          throw new Error(`Fallback failed: ${resp.status} ${resp.statusText}`);
+                        }
+                        console.log("✅ Fallback REST dispatch succeeded.");
+                      }
+
+                - name: Log status
+                  run: echo "Kick completed successfully."
+
+  - commit:
+      message: "fix(kick): add actions:write + fallback REST dispatch for autopatch trigger"
