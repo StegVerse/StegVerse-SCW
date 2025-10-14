@@ -1,4 +1,2 @@
 version: 1
-patches:
-  - id: autodocs-sanity-seed
-    path: .github/autopatch/autodocs-sanity-seed.patch.yml
+patches: []
