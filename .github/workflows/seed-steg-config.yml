@@ -1,0 +1,73 @@
+name: Seed Steg Config (self-healing)
+
+on:
+  workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      api_url:
+        required: true
+        type: string
+      config_path:
+        required: false
+        type: string
+        default: ".github/config/steg.json"
+      bootstrap_allowed:
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ensure deps
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip >/dev/null
+
+      - name: Write helper (if missing)
+        run: |
+          set -euo pipefail
+          mkdir -p scripts/ops self_healing_out
+          if [ ! -f scripts/ops/seed_config.py ]; then
+            echo "::error::scripts/ops/seed_config.py not found"
+            exit 2
+          fi
+          chmod +x scripts/ops/seed_config.py
+
+      - name: Seed config (auto-heal on 403)
+        id: seed
+        env:
+          API_URL: ${{ inputs.api_url || secrets.API_URL }}
+          CONFIG_PATH: ${{ inputs.config_path }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          BOOTSTRAP_ALLOWED: ${{ inputs.bootstrap_allowed }}
+        run: |
+          set -euo pipefail
+          python scripts/ops/seed_config.py
+
+      - name: Mask new token (if produced)
+        if: always()
+        run: |
+          if [ -f self_healing_out/NEW_ADMIN_TOKEN.txt ]; then
+            echo "::add-mask::$(cat self_healing_out/NEW_ADMIN_TOKEN.txt)"
+          fi
+
+      - name: Upload seeding artifacts (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seed-config-${{ github.run_id }}
+          path: self_healing_out/*
+          if-no-files-found: ignore
