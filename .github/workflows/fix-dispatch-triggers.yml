@@ -1,0 +1,61 @@
+name: Fix dispatch triggers (one-shot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only report files that would change (no commit)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false","true"]
+
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Normalize workflow_dispatch in all workflows
+        id: normalize
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          python scripts/patches/normalize_dispatch.py --dir ".github/workflows" ${DRY_RUN:+--dry-run}
+
+      - name: Commit & push (if changed)
+        if: steps.normalize.outputs.changed == 'true' && inputs.dry_run != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name  "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git add .github/workflows/*.yml .github/workflows/*.yaml || true
+          if git diff --cached --quiet; then
+            echo "No changes staged."
+          else
+            git commit -m "chore(workflows): normalize root on: block and inject workflow_dispatch"
+            git push
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Fix-dispatch summary" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f self_healing_out/NORMALIZE_REPORT.md ]; then
+            cat self_healing_out/NORMALIZE_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No report generated._" >> "$GITHUB_STEP_SUMMARY"
+          fi
