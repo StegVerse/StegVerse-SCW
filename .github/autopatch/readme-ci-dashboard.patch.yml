@@ -1,0 +1,92 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/readme_ci_dashboard.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          CI Health & Status Dashboard injector for README.md
+          - Reads .github/docs/TASKOPS_STATUS.md (combined) + .github/docs/PR_SAFE_STATUS.md
+          - Inserts/updates the section between <!-- ci-dashboard:start --> ... <!-- ci-dashboard:end -->
+          - Idempotent: only writes when content changes
+          """
+          import pathlib, re, datetime
+
+          ROOT = pathlib.Path(".")
+          README = ROOT / "README.md"
+          TASKOPS = ROOT / ".github" / "docs" / "TASKOPS_STATUS.md"
+          PRSAFE  = ROOT / ".github" / "docs" / "PR_SAFE_STATUS.md"
+
+          START = "<!-- ci-dashboard:start -->"
+          END   = "<!-- ci-dashboard:end -->"
+
+          def read_or_placeholder(p: pathlib.Path, label: str) -> str:
+              if p.exists():
+                  return p.read_text(encoding="utf-8").strip()
+              return f"_{label} not available yet — run AutoPatch/TaskOps nightlies or the on-demand workflows._"
+
+          def ensure_readme():
+              if not README.exists():
+                  # Create a minimal README with markers
+                  title = ROOT.resolve().name
+                  README.write_text(f"# {title}\n\n{START}\n{END}\n", encoding="utf-8")
+
+          def build_block():
+              now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+              taskops_md = read_or_placeholder(TASKOPS, "TaskOps dashboard")
+              prsafe_md  = read_or_placeholder(PRSAFE, "PR-safe coverage")
+
+              # A compact, good-looking status block for the README
+              block = []
+              block.append("## 🚦 CI Health & Status Dashboard\n")
+              block.append(f"_Last updated: **{now}**_\n")
+              block.append("\n")
+              block.append("> **Legend**: ✅ healthy · ⏭ skipped/noop · ⚠️ attention · ❌ error\n")
+              block.append("\n")
+              block.append("### 📊 TaskOps & AutoPatch Snapshot\n")
+              block.append(taskops_md)
+              block.append("\n\n")
+              block.append("### 🛡️ PR-safe Dispatcher Coverage\n")
+              block.append(prsafe_md)
+              block.append("\n")
+              block.append("> _This section auto-updates via AutoPatch & TaskOps. Do not edit between markers._")
+              return "\n".join(block).strip()
+
+          def write_if_changed(path: pathlib.Path, new: str) -> bool:
+              old = path.read_text(encoding="utf-8") if path.exists() else ""
+              if old == new:
+                  return False
+              path.write_text(new, encoding="utf-8")
+              return True
+
+          def upsert_block():
+              ensure_readme()
+              content = README.read_text(encoding="utf-8")
+              block = build_block()
+              if START in content and END in content:
+                  new = re.sub(
+                      rf"{re.escape(START)}.*?{re.escape(END)}",
+                      f"{START}\n{block}\n{END}",
+                      content,
+                      flags=re.S
+                  )
+              else:
+                  # Append to the end with spacing
+                  sep = "\n\n" if content.strip() else ""
+                  new = content + f"{sep}{START}\n{block}\n{END}\n"
+              return write_if_changed(README, new)
+
+          if __name__ == "__main__":
+              changed = upsert_block()
+              print("README updated." if changed else "README unchanged (no diff).")
+
+  - run_shell:
+      name: Insert/refresh CI Dashboard in README
+      script: |
+        set -euo pipefail
+        python -m pip install --disable-pip-version-check --quiet pyyaml
+        python scripts/readme_ci_dashboard.py
+
+  - commit:
+      message: "docs(readme): add/refresh CI Health & Status Dashboard (AutoPatch)"
