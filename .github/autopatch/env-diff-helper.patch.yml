@@ -11,10 +11,9 @@ actions:
           - Writes:
               .github/docs/env/ENV_DIFF_LATEST.md
               .github/docs/env/TASKOPS_ENV_DIFF.json
-          - Appends a drift log line to README.md env block (optional, idempotent)
-          - Emits compact JSON summary to stdout
+          - Optionally appends a note to README.md env block (idempotent)
           """
-          import json, os, re, pathlib, datetime
+          import json, os, re, pathlib
           from typing import Any, Dict, List, Tuple
 
           ROOT = pathlib.Path(".")
@@ -36,12 +35,10 @@ actions:
                 snaps.append((ts, data))
               except Exception:
                 pass
-            # sort by timestamp string (UTC ISO) — files use compact ts too, safe enough
-            snaps.sort(key=lambda x: x[0])
+            snaps.sort(key=lambda x: x[0])  # ascending
             return snaps
 
           def extract_keys(s: Dict[str, Any]) -> Dict[str, Any]:
-            # Pull a small, comparable surface
             return {
               "os.platform": s.get("os", {}).get("platform"),
               "os.release": s.get("os", {}).get("release"),
@@ -65,7 +62,7 @@ actions:
                 out.append((k, a.get(k), b.get(k)))
             return out
 
-          def write_diff_md(prev_ts: str, prev: Dict[str, Any], cur_ts: str, cur: Dict[str, Any], changes: List[Tuple[str, Any, Any]]) -> None:
+          def write_diff_md(prev_ts: str, prev: Dict[str, Any], cur_ts: str, cur: Dict[str, Any], changes):
             lines = []
             lines.append("# Environment Drift (Latest)")
             lines.append(f"_Prev: **{prev_ts}**, Cur: **{cur_ts}**_")
@@ -81,13 +78,12 @@ actions:
             DIFF_MD.parent.mkdir(parents=True, exist_ok=True)
             DIFF_MD.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
-          def maybe_append_readme_note(cur_ts: str, changes_cnt: int) -> None:
+          def maybe_append_readme_note(cur_ts: str, changes_cnt: int):
             if not README.exists():
               return
             txt = README.read_text(encoding="utf-8")
-            block = f"_Drift check (UTC {cur_ts}): **{changes_cnt}** changes detected in runner/tool surface._"
+            block = f"_Drift check (UTC {cur_ts}): **{changes_cnt}** change(s) detected in runner/tool surface._"
             if START in txt and END in txt:
-              # append 1-line note just above END, if not already present for same ts
               pat = re.compile(re.escape(START) + r"(.*)" + re.escape(END), re.S)
               m = pat.search(txt)
               if not m:
@@ -103,7 +99,7 @@ actions:
           def main():
             snaps = load_snapshots()
             if len(snaps) < 2:
-              DIFF_JSON.write_text(json.dumps({"ok": True, "note": "not-enough-snapshots"}, indent=2), encoding="utf-8")
+              DIFF_JSON.write_text(json.dumps({"ok": True, "status": "not-enough-snapshots"}, indent=2), encoding="utf-8")
               print(json.dumps({"ok": True, "status": "not-enough-snapshots"}))
               return
 
@@ -115,11 +111,9 @@ actions:
             maybe_append_readme_note(cur_ts, len(changes))
 
             summary = {
-              "ok": True,
-              "prev": prev_ts,
-              "cur": cur_ts,
+              "ok": True, "prev": prev_ts, "cur": cur_ts,
               "changes_count": len(changes),
-              "changes": [{"key": k, "prev": p, "cur": c} for (k, p, c) in changes],
+              "changes": [{"key": k, "prev": p, "cur": c} for (k,p,c) in changes],
             }
             DIFF_JSON.write_text(json.dumps(summary, indent=2), encoding="utf-8")
             print(json.dumps(summary))
@@ -133,10 +127,9 @@ actions:
           #!/usr/bin/env python3
           """
           env_guard.py
-          - Warns (non-fatal) when Python minor version or runner image drifts outside policy.
-          - Policy via env:
-              ALLOW_PY_MINORS="3.10,3.11,3.12"  (defaults to current minor only)
-          - Writes a small marker to .github/docs/env/GUARD_LAST.json
+          - Warns (non-fatal) if Python minor version is outside policy.
+          - ALLOW_PY_MINORS (env): e.g. "3.11,3.12" (defaults to current minor only)
+          - Writes .github/docs/env/GUARD_LAST.json for traceability
           """
           import sys, json, os, pathlib, platform, datetime
 
@@ -164,35 +157,34 @@ actions:
         mode: "100644"
         contents: |
           # Environment Policy (Drift + Guard)
-          This complements `ENV_COMPATIBILITY_POLICY.md` and defines the guard behavior and tagging.
-          
-          - Guard: `scripts/env_guard.py` checks Python minor drift based on `ALLOW_PY_MINORS`.
-          - Diff: `scripts/env_diff.py` compares the latest two snapshots and summarizes drift.
-          - Tagging: on snapshot, we apply lightweight `env/YYYYMMDD-<ImageOS>-<ImageVersion>` tags (best-effort).
-          
+          Complements `ENV_COMPATIBILITY_POLICY.md`:
+          - Guard: `scripts/env_guard.py` validates Python minor against `ALLOW_PY_MINORS`.
+          - Diff:  `scripts/env_diff.py` summarizes runner/tool differences between the last two snapshots.
+          - Tags:   best-effort `env/YYYYMMDD-<ImageOS>-<ImageVersion>` tag on snapshot runs.
+
           ## Updating Policy
-          - To allow a new Python minor, set `ALLOW_PY_MINORS` in the workflow env or repository vars.
-          - For deeper breaks (FastAPI/Pydantic major jumps), use a Translation Patch per the compatibility policy.
+          - Set `ALLOW_PY_MINORS` in workflow env or repo vars to admit new Python minors.
+          - For major library/runner changes, create a Translation Patch per the compatibility policy.
 
       - path: ".github/docs/env/.keep"
         mode: "100644"
         contents: "keep"
 
   - run_shell:
-      name: Env guard + diff + tag (best-effort)
+      name: Env guard + ensure snapshot + diff + tag (best-effort)
       script: |
         set -euo pipefail
         python -m pip install --disable-pip-version-check --quiet pyyaml
-        # guard (non-fatal)
+        # 1) guard (non-fatal)
         python scripts/env_guard.py || true
-        # if we already have capture_env.py from env-capture patch, run it to ensure a current snapshot exists
+        # 2) ensure a fresh snapshot IF capture script exists
         if [ -f scripts/capture_env.py ]; then
           python scripts/capture_env.py || true
         fi
-        # diff (non-fatal if <2 snapshots)
+        # 3) diff (non-fatal)
         python scripts/env_diff.py || true
 
-        # lightweight tagging (best-effort, ignore failure if permissions prevent tag push)
+        # 4) best-effort tag push (ignore if token lacks tag perms)
         TS="$(date -u +'%Y%m%d')"
         IMG_OS="${ImageOS:-unknownOS}"
         IMG_VER="${ImageVersion:-unknownVer}"
@@ -200,16 +192,15 @@ actions:
         git tag -f "$TAG" || true
         git push -f origin "refs/tags/$TAG" || true
 
-        # append TaskOps ledger line
+        # 5) TaskOps ledger line
         mkdir -p .github/taskops
-        # pull changes count from json if present
         CHANGES="0"
         if [ -f .github/docs/env/TASKOPS_ENV_DIFF.json ]; then
           CHANGES="$(python - <<'PY'
-import json,sys
+import json
 try:
   j=json.load(open(".github/docs/env/TASKOPS_ENV_DIFF.json"))
-  print(j.get("changes_count",0))
+  print(j.get("changes_count", 0))
 except Exception:
   print("0")
 PY
