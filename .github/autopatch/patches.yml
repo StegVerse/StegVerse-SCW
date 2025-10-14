@@ -1,22 +1,2 @@
 version: 1
-patches:
-  - id: pr-safe-dispatch
-    path: .github/autopatch/pr-safe-dispatch.patch.yml
-  - id: pr-safe-inject
-    path: .github/autopatch/pr-safe-inject.patch.yml
-  - id: autodocs-prsafe-status
-    path: .github/autopatch/autodocs-prsafe-status.patch.yml
-  - id: taskops-autodocs-link
-    path: .github/autopatch/taskops-autodocs-link.patch.yml
-  - id: readme-ci-dashboard
-    path: .github/autopatch/readme-ci-dashboard.patch.yml
-  - id: autopatch-probe-runner
-    path: .github/autopatch/autopatch-probe-runner.patch.yml
-  - id: env-capture
-    path: .github/autopatch/env-capture.patch.yml
-  - id: env-compat-policy
-    path: .github/autopatch/env-compat-policy.patch.yml
-  - id: env-diff-helper
-    path: .github/autopatch/env-diff-helper.patch.yml
-  - id: autodocs-drift-badge
-    path: .github/autopatch/autodocs-drift-badge.patch.yml  
+patches: []
