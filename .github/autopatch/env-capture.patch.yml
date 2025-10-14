@@ -1,0 +1,166 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/capture_env.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Environment Snapshot (CI + local-safe)
+
+          Outputs:
+            - .github/docs/env/ENV_SNAPSHOT_<UTC>.json
+            - .github/docs/env/ENVIRONMENT_LOG.jsonl (append-only)
+            - .github/docs/ENVIRONMENT.md (latest table + how-to)
+            - README.md (optional block between <!-- env-matrix:start --> ... <!-- env-matrix:end -->)
+
+          Notes:
+            - Robust to missing tools (docker/node/etc).
+            - Captures GitHub runner image info if present (ImageOS/ImageVersion).
+          """
+          import subprocess, json, pathlib, os, datetime, re, shutil
+
+          ROOT = pathlib.Path(".")
+          DOC_ENV_DIR = ROOT / ".github" / "docs" / "env"
+          DOC_ENV_FILE = ROOT / ".github" / "docs" / "ENVIRONMENT.md"
+          LOG_FILE = DOC_ENV_DIR / "ENVIRONMENT_LOG.jsonl"
+          README = ROOT / "README.md"
+          START = "<!-- env-matrix:start -->"
+          END   = "<!-- env-matrix:end -->"
+
+          def run_cmd(cmd):
+              try:
+                  out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
+                  return out.strip()
+              except Exception as e:
+                  return f"NA ({e.__class__.__name__})"
+
+          def maybe(cmd):
+              exe = cmd[0]
+              if shutil.which(exe) is None:
+                  return "NA (not installed)"
+              return run_cmd(cmd)
+
+          def snapshot():
+              now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+              snap = {
+                  "ts": now,
+                  "os": {
+                      "platform": run_cmd(["uname","-s"]),
+                      "release": run_cmd(["uname","-r"]),
+                      "runner_ImageOS": os.getenv("ImageOS",""),
+                      "runner_ImageVersion": os.getenv("ImageVersion",""),
+                  },
+                  "python": {
+                      "python_version": run_cmd(["python","--version"]),
+                      "pip_version": maybe(["pip","--version"]),
+                      "pip_freeze": maybe(["pip","freeze"]),
+                  },
+                  "tools": {
+                      "git": maybe(["git","--version"]),
+                      "node": maybe(["node","--version"]),
+                      "npm": maybe(["npm","--version"]),
+                      "pnpm": maybe(["pnpm","--version"]),
+                      "yarn": maybe(["yarn","--version"]),
+                      "docker": maybe(["docker","--version"]),
+                    },
+                  "project": {
+                      "requirements_txt": "",
+                      "hybrid_api_deps": [],
+                  },
+                  "ci": {
+                      "repo": os.getenv("GITHUB_REPOSITORY",""),
+                      "run_id": os.getenv("GITHUB_RUN_ID",""),
+                      "ref_name": os.getenv("GITHUB_REF_NAME",""),
+                      "actor": os.getenv("GITHUB_ACTOR",""),
+                  }
+              }
+
+              # Pull important project files if present
+              req = pathlib.Path("hybrid-collab-bridge/api/requirements.txt")
+              if req.exists():
+                  snap["project"]["requirements_txt"] = req.read_text(encoding="utf-8")
+                  # try to extract pins of key libs
+                  lines = [l.strip() for l in snap["project"]["requirements_txt"].splitlines() if l.strip()]
+                  snap["project"]["hybrid_api_deps"] = [l for l in lines if any(p in l for p in ["fastapi","uvicorn","httpx","pydantic","pyyaml","orjson"])]
+
+              return snap
+
+          def ensure_dirs():
+              DOC_ENV_DIR.mkdir(parents=True, exist_ok=True)
+
+          def write_files(snap):
+              ts = snap["ts"].replace(":","").replace("-","")
+              js_path = DOC_ENV_DIR / f"ENV_SNAPSHOT_{ts}.json"
+              js_path.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+
+              # append to JSONL log
+              with LOG_FILE.open("a", encoding="utf-8") as w:
+                  w.write(json.dumps(snap, ensure_ascii=False) + "\n")
+
+              # Write/refresh ENVIRONMENT.md
+              table = [
+                  "| Area | Key | Value |",
+                  "|---|---|---|",
+                  f"| OS | Platform | `{snap['os']['platform']}` |",
+                  f"| OS | Release | `{snap['os']['release']}` |",
+                  f"| Runner | ImageOS | `{snap['os']['runner_ImageOS']}` |",
+                  f"| Runner | ImageVersion | `{snap['os']['runner_ImageVersion']}` |",
+                  f"| Python | Version | `{snap['python']['python_version']}` |",
+                  f"| Python | Pip | `{snap['python']['pip_version']}` |",
+                  f"| Tools | Git | `{snap['tools']['git']}` |",
+                  f"| Tools | Node | `{snap['tools']['node']}` |",
+                  f"| Tools | npm | `{snap['tools']['npm']}` |",
+                  f"| Tools | pnpm | `{snap['tools']['pnpm']}` |",
+                  f"| Tools | yarn | `{snap['tools']['yarn']}` |",
+                  f"| Tools | Docker | `{snap['tools']['docker']}` |",
+              ]
+              proj = [
+                  "```txt",
+                  snap["project"]["requirements_txt"] or "(no hybrid-collab-bridge/api/requirements.txt found)",
+                  "```"
+              ]
+              md = []
+              md.append("# Environment Reference\n")
+              md.append(f"_Last captured (UTC): **{snap['ts']}**_\n")
+              md.append("## Matrix (Latest)\n")
+              md.append("\n".join(table))
+              md.append("\n\n## Project Requirements (as committed)\n")
+              md.append("\n".join(proj))
+              md.append("\n\n## Log\n")
+              md.append("A rolling JSONL log is maintained in `.github/docs/env/ENVIRONMENT_LOG.jsonl` for diffing across time.")
+              DOC_ENV_FILE.write_text("\n".join(md).strip()+"\n", encoding="utf-8")
+
+              # Optional: README injection block (idempotent)
+              if README.exists():
+                  txt = README.read_text(encoding="utf-8")
+                  block = []
+                  block.append("## 🧪 Environment Matrix (latest)")
+                  block.append(f"_Captured (UTC): **{snap['ts']}**_")
+                  block.append("")
+                  block.extend(table)
+                  new_block = "\n".join(block).strip()
+                  if START in txt and END in txt:
+                      new = re.sub(rf"{re.escape(START)}.*?{re.escape(END)}", f"{START}\n{new_block}\n{END}", txt, flags=re.S)
+                  else:
+                      new = txt.rstrip()+"\n\n"+START+"\n"+new_block+"\n"+END+"\n"
+                  if new != txt:
+                      README.write_text(new, encoding="utf-8")
+
+              return str(js_path)
+
+          if __name__ == "__main__":
+              ensure_dirs()
+              snap = snapshot()
+              path = write_files(snap)
+              print(f"✅ Environment snapshot written: {path}")
+
+  - run_shell:
+      name: Capture environment (safe during AutoPatch run)
+      script: |
+        set -euo pipefail
+        python -m pip install --disable-pip-version-check --quiet pyyaml
+        python scripts/capture_env.py
+
+  - commit:
+      message: "docs(env): capture environment snapshot + update ENVIRONMENT.md and log"
