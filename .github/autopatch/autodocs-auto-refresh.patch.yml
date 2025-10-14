@@ -1,31 +1,65 @@
 version: 1
 actions:
-  - run_shell:
-      name: Run AutoDocs generator after patch apply
-      script: |
-        set -euo pipefail
-        if [ -f scripts/autodocs_generate.py ]; then
-          echo "[AutoDocs] Regenerating TaskOps docs..."
-          python scripts/autodocs_generate.py || true
-        else
-          echo "[AutoDocs] No autodocs_generate.py found — skipping."
-        fi
+  - write_files:
+      - path: ".github/workflows/autodocs-on-change.yml"
+        mode: "100644"
+        contents: |
+          name: AutoDocs (on-change)
 
-        # Upload generated docs if they exist
-        mkdir -p .github/docs
-        echo "Listing .github/docs/ after generation:"
-        ls -R .github/docs || true
+          on:
+            workflow_dispatch: {}
+            push:
+              branches: [ "main" ]
+              paths:
+                - ".github/workflows/**"
+                - ".github/autopatch/**"
+                - "scripts/autodocs_generate.py"
+                - ".github/taskops/ledger.jsonl"
 
-        # Commit any changes to docs
-        git config user.name  "StegVerse Bot"
-        git config user.email "bot@stegverse.org"
-        git add .github/docs/*.md 2>/dev/null || true
-        if ! git diff --cached --quiet; then
-          git commit -m "docs(autodocs): refresh TaskOps + env drift docs"
-          git push origin HEAD:main
-        else
-          echo "[AutoDocs] No doc changes detected."
-        fi
+          permissions:
+            contents: write
+            actions: read
 
+          jobs:
+            run:
+              runs-on: ubuntu-latest
+
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with:
+                    fetch-depth: 0
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.11"
+
+                - name: Generate docs (README + .github/docs/*)
+                  run: |
+                    set -euo pipefail
+                    python - <<'PY'
+                    import subprocess, sys, pathlib
+                    root = pathlib.Path(".")
+                    gen = root / "scripts" / "autodocs_generate.py"
+                    if not gen.exists():
+                        print("::error title=Missing generator::scripts/autodocs_generate.py not found")
+                        sys.exit(1)
+                    r = subprocess.run([sys.executable, str(gen)], text=True)
+                    sys.exit(r.returncode)
+                    PY
+
+                - name: Commit changes (if any)
+                  run: |
+                    set -euo pipefail
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    if ! git diff --quiet; then
+                      git add -A
+                      git commit -m "docs(autodocs): auto-refresh after workflow/manifest change"
+                      git push origin HEAD:main
+                    else
+                      echo "No changes to commit."
+                    fi
   - commit:
-      message: "ci(autopatch): run AutoDocs refresh after patch application"
+      message: "chore(autodocs): add on-change auto-refresh workflow (push + manual)"
