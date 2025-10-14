@@ -5,7 +5,8 @@ on:
 
 permissions:
   contents: write
-
+  workflows: write
+  
 jobs:
   seed:
     runs-on: ubuntu-latest
