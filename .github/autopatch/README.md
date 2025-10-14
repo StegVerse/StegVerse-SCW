@@ -30,3 +30,16 @@ AutoPatch can be applied by **any** of these workflows/scripts (depending on wha
 - Keep patches **small** and **idempotent**.
 - Put a **marker file** in your patch (e.g., `.applied_xyz`) if you want an easy “was this applied?” check.
 - Add a short comment header to `patches.yml` explaining what’s enabled and why (see example in that file).
+
+
+# Autopatch System
+
+**Goal:** keep operational workflows healthy while all surgical logic lives in `scripts/` and patches.
+
+- `.github/autopatch/` = meta layer (patch manifests, runner scripts, ledgers).
+- `.github/workflows/` = operational workflows (build, docs, export, etc.).
+- **Autopatch drives Workflows**: it fixes/rewrites workflows as needed. Workflows don’t depend directly on autopatch.
+
+## How to run things manually
+
+- Use **Actions → Ops Console → Run workflow** and list targets, e.g.:
