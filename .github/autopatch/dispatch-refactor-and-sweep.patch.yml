@@ -1,0 +1,197 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/ensure_workflow_dispatch.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import argparse, sys, pathlib, yaml
+
+          ROOT = pathlib.Path(".")
+          WF_DIR = ROOT / ".github" / "workflows"
+
+          def load_yaml(p: pathlib.Path):
+              try:
+                  return yaml.safe_load(p.read_text(encoding="utf-8"))
+              except Exception:
+                  return None
+
+          def save_yaml(p: pathlib.Path, data):
+              p.write_text(
+                  yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False),
+                  encoding="utf-8",
+              )
+
+          def to_map(v):
+              if v is None: return {}
+              if isinstance(v, dict): return v
+              if isinstance(v, list): return {k:{} for k in v if isinstance(k,str)}
+              if isinstance(v, str):  return {v:{}}
+              return {}
+
+          def reusable_only(m): return bool(m) and list(m.keys()) == ["workflow_call"]
+
+          def ensure_dispatch(d):
+              if not isinstance(d, dict): return False
+              m = to_map(d.get("on"))
+              if reusable_only(m) or "workflow_dispatch" in m: return False
+              m["workflow_dispatch"] = {}
+              d["on"] = m
+              return True
+
+          def main():
+              ap = argparse.ArgumentParser()
+              ap.add_argument("--fix",   action="store_true", help="Add workflow_dispatch where missing.")
+              ap.add_argument("--check", action="store_true", help="Exit nonzero if any are missing.")
+              args = ap.parse_args()
+
+              if not WF_DIR.exists():
+                  print("[dispatch] No .github/workflows/"); return 0
+
+              missing, changed = [], []
+              for p in sorted(WF_DIR.glob("*.y*ml")):
+                  data = load_yaml(p)
+                  if data is None:
+                      print(f"[dispatch] WARN parse: {p}"); continue
+                  m = to_map(data.get("on"))
+                  if reusable_only(m): continue
+                  if "workflow_dispatch" not in m:
+                      missing.append(str(p))
+                      if args.fix and ensure_dispatch(data):
+                          save_yaml(p, data); changed.append(str(p))
+
+              if args.check:
+                  if missing:
+                      print("[dispatch] Missing workflow_dispatch:"); print("\n".join(f"  - {x}" for x in missing))
+                      return 2
+                  print("[dispatch] OK"); return 0
+
+              if args.fix:
+                  print("[dispatch] Added to:\n" + "\n".join(f"  - {x}" for x in changed) if changed else "[dispatch] No changes.")
+                  return 0
+
+              print("[dispatch] Missing:\n" + "\n".join(f"  - {x}" for x in missing) if missing else "[dispatch] All OK.")
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+      - path: "scripts/taskops/ci_refactor_dispatch.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Refactor/clean old injector references and enforce workflow_dispatch.
+
+          - Replaces references to scripts/patches/inject_workflow_dispatch.py
+            with scripts/ensure_workflow_dispatch.py --fix
+          - Removes any AutoPatch entries that point to inject-workflow-dispatch.patch.yml
+          - Deletes the deprecated injector *iff* there are no remaining references
+          - Runs the canonical sweeper to add workflow_dispatch everywhere needed
+          - Writes a JSON report to self_healing_out/DISPATCH_REFACTOR_REPORT.json
+          """
+          import os, sys, json, re, pathlib, shutil, subprocess
+          from typing import List
+
+          ROOT = pathlib.Path(".")
+          OUT = ROOT / "self_healing_out"
+          OUT.mkdir(parents=True, exist_ok=True)
+
+          OLD_SCRIPT = "scripts/patches/inject_workflow_dispatch.py"
+          NEW_SCRIPT_CALL = "scripts/ensure_workflow_dispatch.py --fix"
+          OLD_PATCH_NAME = "inject-workflow-dispatch.patch.yml"
+
+          TEXT_EXTS = {".yml",".yaml",".md",".py",".sh",".txt",".json",".toml",".cfg",".ini",".env",".workflow",".github"}
+
+          def is_text_file(p: pathlib.Path) -> bool:
+              if p.is_dir(): return False
+              if p.name.startswith(".git"): return False
+              return p.suffix.lower() in TEXT_EXTS or p.suffix == ""  # be liberal
+
+          def replace_in_file(p: pathlib.Path, pattern: str, repl: str) -> bool:
+              try:
+                  txt = p.read_text(encoding="utf-8", errors="ignore")
+              except Exception:
+                  return False
+              if pattern not in txt:
+                  return False
+              new = txt.replace(pattern, repl)
+              if new != txt:
+                  p.write_text(new, encoding="utf-8")
+                  return True
+              return False
+
+          def grep_repo(needle: str) -> List[str]:
+              hits = []
+              for path in ROOT.rglob("*"):
+                  if ".git" in path.parts: continue
+                  if not is_text_file(path): continue
+                  try:
+                      txt = path.read_text(encoding="utf-8", errors="ignore")
+                  except Exception:
+                      continue
+                  if needle in txt:
+                      hits.append(str(path))
+              return hits
+
+          def scrub_manifest_entries():
+              changed_files = []
+              for mf in (ROOT / ".github" / "autopatch").glob("*.y*ml"):
+                  try:
+                      txt = mf.read_text(encoding="utf-8", errors="ignore")
+                  except Exception:
+                      continue
+                  if OLD_PATCH_NAME in txt:
+                      # Remove lines mentioning the old patch
+                      new = "\n".join(
+                          line for line in txt.splitlines()
+                          if OLD_PATCH_NAME not in line
+                      )
+                      if new != txt:
+                          mf.write_text(new, encoding="utf-8")
+                          changed_files.append(str(mf))
+              return changed_files
+
+          def main():
+              report = {"replaced": [], "manifests_scrubbed": [], "deleted": [], "swept": False}
+
+              # 1) Replace callsites to old injector
+              for p in ROOT.rglob("*"):
+                  if ".git" in p.parts: continue
+                  if not is_text_file(p): continue
+                  if replace_in_file(p, OLD_SCRIPT, NEW_SCRIPT_CALL):
+                      report["replaced"].append(str(p))
+
+              # 2) Remove manifest references to the old patch file
+              report["manifests_scrubbed"] = scrub_manifest_entries()
+
+              # 3) If no more references, delete the deprecated injector file
+              still_refs = grep_repo(OLD_SCRIPT)
+              if not still_refs and (ROOT / OLD_SCRIPT).exists():
+                  (ROOT / OLD_SCRIPT).unlink(missing_ok=True)
+                  report["deleted"].append(OLD_SCRIPT)
+
+              # 4) Ensure all workflows have workflow_dispatch
+              # (call the canonical script we ship in this patch)
+              try:
+                  subprocess.run([sys.executable, "scripts/ensure_workflow_dispatch.py", "--fix"], check=True)
+                  report["swept"] = True
+              except Exception as e:
+                  report["swept"] = False
+                  report["sweep_error"] = str(e)
+
+              (OUT / "DISPATCH_REFACTOR_REPORT.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+              print(json.dumps(report, indent=2))
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+  - run_shell:
+      name: Run refactor + sweep
+      script: |
+        set -euo pipefail
+        python -m pip install --upgrade pip pyyaml >/dev/null
+        python scripts/taskops/ci_refactor_dispatch.py
+
+  - commit:
+      message: "chore(ci,autopatch): refactor injector calls, remove old patch refs, sweep workflow_dispatch"
