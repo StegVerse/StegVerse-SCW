@@ -8,3 +8,5 @@ patches:
       path: .github/autopatch/autodocs-prsafe-status.patch.yml
   - id: taskops-autodocs-link
       path: .github/autopatch/taskops-autodocs-link.patch.yml
+  - id: readme-ci-dashboard
+    path: .github/autopatch/readme-ci-dashboard.patch.yml
