@@ -1,0 +1,64 @@
+name: Repair bad workflow YAML (one-shot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only (no writes/commit)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true","false"]
+  push:
+    paths:
+      - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip pyyaml
+
+      - name: Run YAML repair pass
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          python scripts/patches/repair_workflow_yaml.py --dir ".github/workflows" ${DRY_RUN:+--dry-run}
+
+      - name: Commit & push repaired files (if any)
+        if: hashFiles('self_healing_out/YAML_REPAIR_CHANGED') != ''
+        run: |
+          set -euo pipefail
+          git config user.name  "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git add .github/workflows/*.yml .github/workflows/*.yaml || true
+          if git diff --cached --quiet; then
+            echo "No changes staged."
+          else
+            git commit -m "chore(workflows): auto-repair malformed YAML in workflows"
+            git push
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Bad YAML Repair Report" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f self_healing_out/YAML_REPAIR_REPORT.md ]; then
+            cat self_healing_out/YAML_REPAIR_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No report generated._" >> "$GITHUB_STEP_SUMMARY"
