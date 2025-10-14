@@ -1,0 +1,81 @@
+name: AutoDocs (on-demand)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write    # commit docs to the repo
+  actions: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ensure docs dirs
+        run: |
+          set -euo pipefail
+          mkdir -p .github/docs .github/docs/env
+
+      - name: Optional: env drift (best-effort)
+        run: |
+          set -euo pipefail
+          if [ -f scripts/env_guard.py ]; then
+            echo "[env] running env_guard.py"
+            python scripts/env_guard.py || true
+          fi
+          if [ -f scripts/capture_env.py ]; then
+            echo "[env] running capture_env.py"
+            python scripts/capture_env.py || true
+          fi
+          if [ -f scripts/env_diff.py ]; then
+            echo "[env] running env_diff.py"
+            python scripts/env_diff.py || true
+          fi
+
+      - name: Run AutoDocs generator
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/autodocs_generate.py ]; then
+            echo "::error title=AutoDocs missing::scripts/autodocs_generate.py not found."
+            echo "Tip: ensure the autodocs patches were applied or re-apply them via autopatch."
+            exit 1
+          fi
+          python scripts/autodocs_generate.py
+
+      - name: Show generated docs
+        run: |
+          echo "---- .github/docs tree ----"
+          ls -la .github/docs || true
+          echo "---- .github/docs/env tree ----"
+          ls -la .github/docs/env || true
+          echo "---- Status preview ----"
+          sed -n '1,120p' .github/docs/TASKOPS_STATUS.md 2>/dev/null || true
+          sed -n '1,40p' .github/docs/env/ENV_DIFF_LATEST.md 2>/dev/null || true
+
+      - name: Commit docs (if changed)
+        run: |
+          set -euo pipefail
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/docs || true
+          if ! git diff --cached --quiet; then
+            git commit -m "docs(autodocs): refresh TaskOps status and env drift pages"
+            git push origin HEAD:main
+          else
+            echo "No doc changes to commit."
+          fi
+
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: autodocs-${{ github.run_id }}
+          path: .github/docs
+          if-no-files-found: warn
