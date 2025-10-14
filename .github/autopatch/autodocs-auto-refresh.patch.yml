@@ -1,0 +1,31 @@
+version: 1
+actions:
+  - run_shell:
+      name: Run AutoDocs generator after patch apply
+      script: |
+        set -euo pipefail
+        if [ -f scripts/autodocs_generate.py ]; then
+          echo "[AutoDocs] Regenerating TaskOps docs..."
+          python scripts/autodocs_generate.py || true
+        else
+          echo "[AutoDocs] No autodocs_generate.py found — skipping."
+        fi
+
+        # Upload generated docs if they exist
+        mkdir -p .github/docs
+        echo "Listing .github/docs/ after generation:"
+        ls -R .github/docs || true
+
+        # Commit any changes to docs
+        git config user.name  "StegVerse Bot"
+        git config user.email "bot@stegverse.org"
+        git add .github/docs/*.md 2>/dev/null || true
+        if ! git diff --cached --quiet; then
+          git commit -m "docs(autodocs): refresh TaskOps + env drift docs"
+          git push origin HEAD:main
+        else
+          echo "[AutoDocs] No doc changes detected."
+        fi
+
+  - commit:
+      message: "ci(autopatch): run AutoDocs refresh after patch application"
