@@ -1,0 +1,238 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/autopatch_probe_runner.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Smart Runner Probe for AutoPatch / CI visibility
+
+          What it does (safe & idempotent):
+          1) Scans .github/workflows/*.y*ml to find workflows missing 'workflow_dispatch' (esp. autopatch-apply).
+          2) If the Actions UI appears to "lose" the Run button, writes a tiny 'nudge' file under .github/trigger/autopatch/
+             to trigger re-indexing and your autopatch path filters (no workflow file edits required).
+          3) If a workflow lacks 'workflow_dispatch', prepares a one-line YAML fix and:
+             - Tries to open a PR with the change (branch: chore/ci-dispatch-<date>).
+             - If PR open fails (permissions), opens an Issue explaining what to enable.
+          4) Appends a compact record to .github/taskops/ledger.jsonl
+
+          It never force-pushes and never edits workflow files on main directly.
+          """
+
+          import os, sys, json, pathlib, datetime, re, subprocess, textwrap, urllib.request, urllib.error
+          try:
+              import yaml
+          except Exception:
+              print("::error title=Missing PyYAML::pip install pyyaml before running probe")
+              sys.exit(1)
+
+          ROOT = pathlib.Path(".")
+          WF_DIR = ROOT / ".github" / "workflows"
+          TRIGGER_DIR = ROOT / ".github" / "trigger" / "autopatch"
+          LEDGER = ROOT / ".github" / "taskops" / "ledger.jsonl"
+          OUTDIR = ROOT / "self_healing_out"
+          OUTDIR.mkdir(parents=True, exist_ok=True)
+
+          REPO = os.environ.get("GITHUB_REPOSITORY","")
+          RUN_ID = os.environ.get("GITHUB_RUN_ID","")
+          REF = os.environ.get("GITHUB_REF_NAME","")
+          NOW = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          # Prefer bot token if present; fallback to GITHUB_TOKEN
+          TOKEN = os.environ.get("STEGVERSE_BOT_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+
+          def gh_req(method, url, data=None):
+              if not TOKEN:
+                  return 0, {"error":"no token"}
+              headers = {
+                  "Authorization": f"token {TOKEN}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              }
+              body = None
+              if data is not None:
+                  body = json.dumps(data).encode()
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      raw = r.read()
+                      return r.getcode(), json.loads(raw or b"{}")
+              except urllib.error.HTTPError as e:
+                  payload = e.read()
+                  try:
+                      j = json.loads(payload or b"{}")
+                  except Exception:
+                      j = {"error": payload.decode(errors="ignore")}
+                  return e.code, j
+              except Exception as e:
+                  return 0, {"error": str(e)}
+
+          def list_workflows():
+              rows = []
+              if not WF_DIR.exists():
+                  return rows
+              for wf in sorted(WF_DIR.glob("*.y*ml")):
+                  try:
+                      data = yaml.safe_load(wf.read_text(encoding="utf-8"))
+                  except Exception as e:
+                      rows.append({"file": wf.name, "parse_error": str(e)})
+                      continue
+                  rows.append({"file": wf.name, "data": data})
+              return rows
+
+          def has_dispatch(on_block):
+              # Handles both map and list style 'on:'
+              if isinstance(on_block, dict):
+                  return "workflow_dispatch" in on_block
+              if isinstance(on_block, list):
+                  return "workflow_dispatch" in on_block
+              return False
+
+          def inject_dispatch_map(on_block):
+              if isinstance(on_block, dict):
+                  if "workflow_dispatch" not in on_block:
+                      on_block["workflow_dispatch"] = {}
+              return on_block
+
+          def prepare_branch_and_open_pr(file_path, updated_yaml, branch_name, title, body):
+              # Create branch with the minimal YAML fix and open PR (best-effort).
+              if not TOKEN or not REPO:
+                  return False, "no token or repo in environment"
+              repo_dir = pathlib.Path("/tmp/ci-fix")
+              if repo_dir.exists():
+                  subprocess.run(["rm","-rf", str(repo_dir)], check=False)
+              url = f"https://x-access-token:{TOKEN}@github.com/{REPO}.git"
+              subprocess.run(["git","clone", url, str(repo_dir)], check=True)
+              subprocess.run(["git","-C", str(repo_dir), "checkout", "-b", branch_name], check=True)
+              target = repo_dir / file_path
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(updated_yaml, encoding="utf-8")
+              subprocess.run(["git","-C", str(repo_dir), "add", str(target)], check=True)
+              subprocess.run(["git","-C", str(repo_dir), "config","user.name","StegVerse Bot"], check=True)
+              subprocess.run(["git","-C", str(repo_dir), "config","user.email","bot@stegverse.org"], check=True)
+              subprocess.run(["git","-C", str(repo_dir), "commit","-m", title], check=True)
+              # Push and open PR
+              subprocess.run(["git","-C", str(repo_dir), "push", "-u", "origin", branch_name], check=True)
+              code, resp = gh_req("POST", f"https://api.github.com/repos/{REPO}/pulls",
+                                  {"title": title, "head": branch_name, "base": "main", "body": body})
+              if code in (200,201):
+                  return True, resp.get("html_url")
+              return False, f"PR open failed ({code}): {resp}"
+
+          def open_issue(title, body):
+              if not TOKEN or not REPO:
+                  return False, "no token or repo in environment"
+              code, resp = gh_req("POST", f"https://api.github.com/repos/{REPO}/issues",
+                                  {"title": title, "body": body})
+              if code in (200,201):
+                  return True, resp.get("html_url")
+              return False, f"Issue open failed ({code}): {resp}"
+
+          def write_nudge():
+              TRIGGER_DIR.mkdir(parents=True, exist_ok=True)
+              nudger = TRIGGER_DIR / f"nudge-{NOW.replace(':','').replace('-','').replace('T','_').replace('Z','')}.txt"
+              nudger.write_text(f"autopatch reindex nudge @ {NOW}\n", encoding="utf-8")
+              return str(nudger)
+
+          def append_ledger(record: dict):
+              LEDGER.parent.mkdir(parents=True, exist_ok=True)
+              with LEDGER.open("a", encoding="utf-8") as w:
+                  w.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+          def main():
+              missing = []
+              scanned = list_workflows()
+              for row in scanned:
+                  file = row["file"]
+                  data = row.get("data")
+                  if not isinstance(data, dict):
+                      continue
+                  on_block = data.get("on")
+                  if not has_dispatch(on_block):
+                      missing.append(file)
+
+              # Always create a nudge (safe + tiny) to wake indexers and path filters
+              nudged_file = write_nudge()
+
+              actions = []
+              pr_links = []
+              issue_links = []
+
+              if missing:
+                  for wf in missing:
+                      path = f".github/workflows/{wf}"
+                      try:
+                          orig = yaml.safe_load((WF_DIR / wf).read_text(encoding="utf-8"))
+                      except Exception:
+                          continue
+                      orig = orig or {}
+                      if "on" not in orig:
+                          orig["on"] = {}
+                      orig["on"] = inject_dispatch_map(orig["on"])
+                      updated_yaml = yaml.safe_dump(orig, sort_keys=False)
+                      branch = f"chore/ci-dispatch-{datetime.datetime.utcnow().strftime('%Y%m%d-%H%M')}"
+                      title = f"ci: add workflow_dispatch to {wf}"
+                      body = textwrap.dedent(f"""
+                      This PR adds `workflow_dispatch: {{}}` to `{wf}` so it can be run manually from the Actions UI.
+
+                      If this repo is enforced by an org GitHub App with `workflows` permission disabled for pushes,
+                      merging this PR is the safe path (no direct workflow writes from CI).
+                      """).strip()
+                      ok, link = prepare_branch_and_open_pr(path, updated_yaml, branch, title, body)
+                      if ok:
+                          pr_links.append((wf, link))
+                      else:
+                          # fall back: open an issue so the need is visible
+                          ok2, link2 = open_issue(
+                              f"Enable 'Run workflow' for {wf}",
+                              f"Please ensure `{wf}` contains `workflow_dispatch: {{}}`.\n\nDetails: {link}"
+                          )
+                          if ok2:
+                              issue_links.append((wf, link2))
+
+              # Write probe result for artifact + summary
+              result = {
+                  "ts": NOW,
+                  "repo": REPO,
+                  "run_id": RUN_ID,
+                  "branch": REF,
+                  "nudged_file": nudged_file,
+                  "missing_dispatch": missing,
+                  "prs_opened": pr_links,
+                  "issues_opened": issue_links,
+              }
+              (OUTDIR / "PROBE_AUTOPATCH.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+              # Append a compact TaskOps record
+              append_ledger({
+                  "ts": NOW,
+                  "job": "autopatch-probe",
+                  "repo": REPO,
+                  "branch": REF,
+                  "nudged": bool(nudged_file),
+                  "missing_dispatch_count": len(missing),
+                  "prs_opened": len(pr_links),
+                  "issues_opened": len(issue_links),
+              })
+
+              # Emit summary to stdout (nice in GH summary)
+              print("=== Smart Runner Probe ===")
+              print(json.dumps(result, indent=2))
+
+          if __name__ == "__main__":
+              main()
+
+      - path: ".github/trigger/autopatch/.keep"
+        mode: "100644"
+        contents: "keep"
+
+  - run_shell:
+      name: Run Smart Runner Probe (no workflow edits on main)
+      script: |
+        set -euo pipefail
+        python -m pip install --disable-pip-version-check --quiet pyyaml
+        python scripts/autopatch_probe_runner.py || true
+
+  - commit:
+      message: "chore(ci): add Smart Runner Probe (nudge + PR for workflow_dispatch; ledger logging)"
