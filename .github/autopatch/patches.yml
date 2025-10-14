@@ -16,3 +16,5 @@ patches:
       path: .github/autopatch/env-capture.patch.yml
   - id: env-compat-policy
       path: .github/autopatch/env-compat-policy.patch.yml
+  - id: env-diff-helper
+      path: .github/autopatch/env-diff-helper.patch.yml
