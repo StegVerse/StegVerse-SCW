@@ -1,0 +1,45 @@
+version: 1
+actions:
+  - write_files:
+      - path: "docs/ENV_COMPATIBILITY_POLICY.md"
+        mode: "100644"
+        contents: |
+          # Environment Compatibility Policy
+
+          This document defines how we handle environment changes (runners, language/toolchain upgrades, library major versions)
+          so we can _translate_ older baselines to newer ones with minimal downtime.
+
+          ## Goals
+          - Reproducibility: every important CI run has a companion environment snapshot.
+          - Traceability: changes to runner images or key tool versions are logged and diffable.
+          - Translation: we can auto-generate a “migration patch” when deltas exceed safe bounds.
+
+          ## Sources of Truth
+          - Latest snapshot/table: `.github/docs/ENVIRONMENT.md`
+          - Rolling log: `.github/docs/env/ENVIRONMENT_LOG.jsonl`
+          - Project pins: `hybrid-collab-bridge/api/requirements.txt` (and future lockfiles)
+
+          ## Triggers for a Translation Patch
+          - Runner image changed (ImageOS or ImageVersion).
+          - Python minor/patch jump that breaks a dependency.
+          - FastAPI/Uvicorn/HTTPX/Pydantic/Orjson/PyYAML major version increments.
+          - Docker-in-Docker changes where applicable.
+
+          ## Translation Patch Workflow (Playbook)
+          1. **Detect**: `scripts/capture_env.py` writes a new snapshot; TaskOps/AutoDocs highlights a significant delta.
+          2. **Plan**: Add a targeted patch to `.github/autopatch/`:
+             - Pin + bump specific libraries as needed.
+             - Add compatibility flags (e.g., Pydantic v2 model syntax).
+             - Gate “new runner only” code with environment guards where feasible.
+          3. **Validate**: CI functional tests + smoke tests + human sign-off.
+          4. **Record**: Append a section to `docs/ENVIRONMENT.md` noting the resolved translation.
+
+          ## Checklist (per translation)
+          - [ ] Snapshots before/after captured.
+          - [ ] Breaking deltas reviewed (runner image, python, key libs).
+          - [ ] Patch authored under `.github/autopatch/`.
+          - [ ] CI green with new baseline.
+          - [ ] ENVIRONMENT.md updated with a summary.
+
+  - commit:
+      message: "docs(policy): add Environment Compatibility Policy + translation checklist"
