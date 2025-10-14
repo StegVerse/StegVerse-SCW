@@ -1,4 +1,2 @@
 version: 1
-patches:
-  - id: autodocs-auto-refresh
-    path: .github/autopatch/autodocs-auto-refresh.patch.yml
+patches: []
