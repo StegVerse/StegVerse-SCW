@@ -1,2 +1,4 @@
 version: 1
-patches: []
+patches:
+  - id: workflow-first-aid-bootstrap
+    path: .github/autopatch/workflow-first-aid.patch.yml
