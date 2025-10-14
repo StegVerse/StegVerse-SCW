@@ -1,4 +1,2 @@
 version: 1
-patches:
-  - id: dispatch-refactor-and-sweep
-    path: .github/autopatch/dispatch-refactor-and-sweep.patch.yml
+patches: []
