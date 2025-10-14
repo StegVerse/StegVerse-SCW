@@ -1,2 +1,5 @@
 version: 1
-patches: []
+patches:
+  - id: docs-first-autodocs
+    path: .github/autopatch/docs-first-autodocs.patch.yml
+    when: always
