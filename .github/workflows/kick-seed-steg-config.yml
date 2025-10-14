@@ -1,0 +1,26 @@
+name: Kick Seed Steg Config
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  kick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const ref = 'main';
+            const wf  = 'seed-steg-config.yml';
+            core.info(`Dispatching ${wf} on ${ref}…`);
+            await github.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: wf,
+              ref
+            });
+            core.info('OK – dispatch created.');
