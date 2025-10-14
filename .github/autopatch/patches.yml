@@ -1,5 +1,2 @@
 version: 1
-patches:
-  - id: fix-kick-dispatch
-    path: .github/autopatch/fix-kick-dispatch.patch.yml
-    when: always
+patches: []
