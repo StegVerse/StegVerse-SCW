@@ -1,0 +1,245 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/patches/repair_workflow_yaml.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Pre-repair malformed workflow YAML so the normalizer can parse them later.
+
+          Fixes (idempotent, best-effort):
+            1) Convert accidental top-level `workflow:` to `on:` (if no `on:` exists).
+            2) Replace tabs with spaces; strip BOM; normalize EOLs.
+            3) Convert `on:` list -> map (e.g., `- push` to `push: {}`).
+            4) Lift accidentally-indented top-level keys (name/on/jobs/permissions/...).
+            5) If `on:` exists but lacks `workflow_dispatch`, add it.
+            6) Fix `workflow_dispatch: []` -> `{}`.
+
+          Writes:
+            - self_healing_out/YAML_REPAIR_REPORT.md (report)
+            - self_healing_out/YAML_REPAIR_CHANGED (marker if any file modified)
+          """
+          import argparse, io, pathlib, re
+          from typing import Tuple
+          import yaml
+
+          ROOT = pathlib.Path(".")
+          OUT_DIR = ROOT / "self_healing_out"
+          REPORT = OUT_DIR / "YAML_REPAIR_REPORT.md"
+          CHANGED = OUT_DIR / "YAML_REPAIR_CHANGED"
+
+          TOP_KEYS = ("name:", "on:", "workflow:", "jobs:", "permissions:", "env:", "concurrency:", "defaults:")
+
+          def read_text(p: pathlib.Path) -> str:
+              t = p.read_text(encoding="utf-8", errors="ignore")
+              if t.startswith("\ufeff"): t = t.lstrip("\ufeff")
+              t = t.replace("\r\n","\n").replace("\r","\n").replace("\t","  ")
+              return t
+
+          def lift_top_keys(txt: str) -> Tuple[str,bool]:
+              lines = txt.split("\n")
+              for i, line in enumerate(lines):
+                  if not line.strip(): continue
+                  m = re.match(r"^(\s+)(\S.*)$", line)
+                  if not m: return txt, False
+                  if any(m.group(2).startswith(k) for k in TOP_KEYS):
+                      width = min(len(m.group(1)), 4)
+                      new = []
+                      for L in lines:
+                          new.append(L[width:] if L.startswith(" " * width) else L)
+                      return "\n".join(new), True
+                  return txt, False
+              return txt, False
+
+          def fix_workflow_to_on(txt: str) -> Tuple[str,bool]:
+              if re.search(r"(?m)^\s*on\s*:", txt): return txt, False
+              if re.search(r"(?m)^\s*workflow\s*:\s*$", txt):
+                  return re.sub(r"(?m)^\s*workflow\s*:\s*$", "on:", txt), True
+              return txt, False
+
+          def list_on_to_map_on(txt: str) -> Tuple[str,bool]:
+              m = re.search(r"(?m)^(on\s*:\s*\n(?:\s*-\s*\w+.*\n)+)", txt)
+              if not m: return txt, False
+              block = m.group(1)
+              events = re.findall(r"(?m)^\s*-\s*([a-zA-Z_]+)\s*$", block)
+              if not events: return txt, False
+              new = "on:\n" + "\n".join(f"  {ev}: {{}}" for ev in events) + "\n"
+              return txt.replace(block, new), True
+
+          def ensure_dispatch(txt: str) -> Tuple[str,bool]:
+              if not re.search(r"(?m)^\s*on\s*:", txt): return txt, False
+              ch = False
+              txt2 = re.sub(r"(?m)^(\s*on\s*:\s*\{\s*\}\s*)$", r"on:\n  workflow_dispatch: {}", txt)
+              ch = ch or (txt2 != txt); txt = txt2
+              txt2 = re.sub(r"(?m)^\s*workflow_dispatch\s*:\s*\[\s*\]\s*$", "workflow_dispatch: {}", txt)
+              ch = ch or (txt2 != txt); txt = txt2
+              m = re.search(r"(?ms)^on\s*:\s*(.*?)(^\S|\Z)", txt)
+              if m:
+                  block = m.group(1)
+                  if not re.search(r"(?m)^\s*workflow_dispatch\s*:", block):
+                      ins = "  workflow_dispatch: {}\n"
+                      new_block = ("\n" + ins) if block.strip()=="" else (block + ("\n" if not block.endswith("\n") else "") + ins)
+                      txt = txt.replace(block, new_block); ch = True
+              return txt, ch
+
+          def try_parse(txt: str):
+              try:
+                  yaml.safe_load(txt); return True
+              except Exception: return False
+
+          def process(p: pathlib.Path, dry: bool):
+              orig = read_text(p); txt = orig; changes = []
+              txt, c = lift_top_keys(txt);          changes += ["lift-top-keys"] if c else []
+              txt, c = fix_workflow_to_on(txt);     changes += ["workflow->on"] if c else []
+              txt, c = list_on_to_map_on(txt);      changes += ["on-list->map"] if c else []
+              txt, c = ensure_dispatch(txt);        changes += ["ensure-dispatch"] if c else []
+              if not try_parse(txt):
+                  # one last gentle nudge
+                  txt2 = re.sub(r"(?m)^  ", "", txt)
+                  if try_parse(txt2): txt = txt2; changes += ["global-deindent"]
+                  else: return False, "UNFIXED (still invalid YAML)"
+              if dry:
+                  return True, ("ok" if txt==orig else f"would-fix: {', '.join(changes)}")
+              if txt != orig:
+                  p.write_text(txt, encoding="utf-8")
+                  return True, f"fixed: {', '.join(changes)}"
+              return True, "ok"
+
+          def main():
+              ap = argparse.ArgumentParser()
+              ap.add_argument("--dir", default=".github/workflows")
+              ap.add_argument("--dry-run", action="store_true")
+              args = ap.parse_args()
+              OUT_DIR.mkdir(parents=True, exist_ok=True)
+              files = sorted(list(pathlib.Path(args.dir).glob("*.yml")) + list(pathlib.Path(args.dir).glob("*.yaml")))
+              rows = []; changed = False
+              for p in files:
+                  ok, msg = process(p, args.dry_run)
+                  m = f"- {'✅' if ok and msg.startswith('fixed:') else ('⏭' if ok else '❌')} `{p}` — {msg}"
+                  rows.append(m); changed = changed or (ok and msg.startswith("fixed:"))
+              (OUT_DIR/"YAML_REPAIR_REPORT.md").write_text("## Workflow YAML Repair Report\n\n" + "\n".join(rows) + "\n", encoding="utf-8")
+              if changed and not args.dry_run:
+                  (OUT_DIR/"YAML_REPAIR_CHANGED").write_text("changed", encoding="utf-8")
+              return 0
+          if __name__ == "__main__":
+              raise SystemExit(main())
+      - path: "scripts/patches/ensure_workflow_dispatch.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Ensure each workflow has `workflow_dispatch` (skip pure reusable ones).
+          """
+          import pathlib, yaml
+          WF_DIR = pathlib.Path(".github/workflows")
+          def norm_on(v):
+              if v is None: return {}
+              if isinstance(v, dict): return v
+              if isinstance(v, list): return {k:{} for k in v if isinstance(k,str)}
+              if isinstance(v, str):  return {v:{}}
+              return {}
+          def run():
+              changed = []
+              for p in sorted(list(WF_DIR.glob("*.yml")) + list(WF_DIR.glob("*.yaml"))):
+                  try:
+                      data = yaml.safe_load(p.read_text(encoding="utf-8"))
+                  except Exception:
+                      continue  # let the repair pass fix these first
+                  if not isinstance(data, dict): continue
+                  on = norm_on(data.get("on"))
+                  # skip pure reusable workflows
+                  if list(on.keys()) == ["workflow_call"]: continue
+                  if "workflow_dispatch" in on: continue
+                  on["workflow_dispatch"] = {}
+                  data["on"] = on
+                  p.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+                  changed.append(str(p))
+              return changed
+          if __name__ == "__main__":
+              ch = run()
+              if ch:
+                  pathlib.Path("self_healing_out").mkdir(parents=True, exist_ok=True)
+                  pathlib.Path("self_healing_out/DISPATCH_INJECTED.txt").write_text("\n".join(ch), encoding="utf-8")
+      - path: ".github/workflows/workflows-first-aid.yml"
+        mode: "100644"
+        contents: |
+          name: Workflows First Aid (repair + dispatch)
+
+          on:
+            workflow_dispatch:
+              inputs:
+                repair_mode:
+                  description: "dry-run or apply"
+                  required: false
+                  default: "apply"
+                  type: choice
+                  options: ["dry-run","apply"]
+
+          permissions:
+            contents: write
+
+          jobs:
+            first_aid:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.11"
+
+                - name: Install deps
+                  run: |
+                    python -m pip install --upgrade pip pyyaml
+
+                - name: Repair malformed YAML (pre-pass)
+                  run: |
+                    set -euo pipefail
+                    python scripts/patches/repair_workflow_yaml.py --dir ".github/workflows" $([ "${{ inputs.repair_mode }}" = "dry-run" ] && echo "--dry-run" || true)
+
+                - name: Commit repaired files (if any)
+                  if: ${{ inputs.repair_mode != 'dry-run' && hashFiles('self_healing_out/YAML_REPAIR_CHANGED') != '' }}
+                  run: |
+                    set -euo pipefail
+                    git config user.name  "${GITHUB_ACTOR}"
+                    git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+                    git add .github/workflows/*.yml .github/workflows/*.yaml || true
+                    if git diff --cached --quiet; then
+                      echo "No repaired files to commit."
+                    else
+                      git commit -m "chore(workflows): auto-repair malformed YAML (first-aid)"
+                      git push
+                    fi
+
+                - name: Inject workflow_dispatch where missing
+                  run: |
+                    set -euo pipefail
+                    python scripts/patches/ensure_workflow_dispatch.py
+
+                - name: Commit dispatch injections (if any)
+                  if: hashFiles('self_healing_out/DISPATCH_INJECTED.txt') != ''
+                  run: |
+                    set -euo pipefail
+                    git config user.name  "${GITHUB_ACTOR}"
+                    git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+                    git add .github/workflows/*.yml .github/workflows/*.yaml || true
+                    if git diff --cached --quiet; then
+                      echo "No dispatch changes to commit."
+                    else
+                      git commit -m "chore(workflows): ensure workflow_dispatch on all non-reusable workflows"
+                      git push
+                    fi
+
+                - name: Summary
+                  if: always()
+                  run: |
+                    echo "### First-Aid Summary" >> "$GITHUB_STEP_SUMMARY"
+                    if [ -f self_healing_out/YAML_REPAIR_REPORT.md ]; then
+                      cat self_healing_out/YAML_REPAIR_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+                    else
+                      echo "_No repair report found._" >> "$GITHUB_STEP_SUMMARY"
+  - commit:
+      message: "chore(first-aid): add workflow YAML repair + dispatch injector (via AutoPatch)"
