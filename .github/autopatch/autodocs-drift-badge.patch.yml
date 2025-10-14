@@ -1,0 +1,168 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/autodocs_generate.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          AutoDocs generator (with env-drift badge)
+          - Reads .github/taskops/ledger.jsonl
+          - Updates README.md between <!-- autodocs:start --> … <!-- autodocs:end -->
+          - Writes .github/docs/TASKOPS_STATUS.md and LEDGER_LAST_20.md
+          - If present, reads .github/docs/env/TASKOPS_ENV_DIFF.json and shows a "Last drift" line.
+          Idempotent: no changes => no commit by workflow.
+          """
+          import json, pathlib, datetime, itertools
+          from collections import Counter
+
+          LEDGER = pathlib.Path(".github/taskops/ledger.jsonl")
+          DOCS_DIR = pathlib.Path(".github/docs")
+          READ_ME = pathlib.Path("README.md")
+          START = "<!-- autodocs:start -->"
+          END = "<!-- autodocs:end -->"
+          NOW = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+          ENV_DIFF_JSON = pathlib.Path(".github/docs/env/TASKOPS_ENV_DIFF.json")
+
+          def read_ledger():
+            if not LEDGER.exists():
+              return []
+            items = []
+            with LEDGER.open("r", encoding="utf-8", errors="ignore") as f:
+              for line in f:
+                line = line.strip()
+                if not line: continue
+                try:
+                  j = json.loads(line)
+                except Exception:
+                  continue
+                j["ts"] = j.get("ts") or ""
+                j["job"] = j.get("job") or "unknown"
+                items.append(j)
+            items.sort(key=lambda x: x.get("ts",""))
+            return items
+
+          def summarize(items):
+            by_job = Counter(x["job"] for x in items)
+            last10 = list(reversed(items))[:10]
+            # Aggregate AutoPatch metrics if available
+            agg = {"applied":0,"noop":0,"skipped":0,"blocked":0,"error":0}
+            for x in items:
+              if x.get("job") == "autopatch-apply":
+                for k in agg.keys():
+                  try:
+                    agg[k] += int(str(x.get(k,"0") or "0"))
+                  except Exception:
+                    pass
+            return by_job, last10, agg
+
+          def read_env_drift():
+            if not ENV_DIFF_JSON.exists():
+              return None
+            try:
+              j = json.loads(ENV_DIFF_JSON.read_text(encoding="utf-8"))
+              return {
+                "cur": j.get("cur",""),
+                "changes": j.get("changes_count", 0)
+              }
+            except Exception:
+              return None
+
+          def ensure_readme_markers():
+            if not READ_ME.exists():
+              return False
+            txt = READ_ME.read_text(encoding="utf-8")
+            if START in txt and END in txt:
+              return True
+            with READ_ME.open("a", encoding="utf-8") as w:
+              w.write("\n\n## AutoDocs (TaskOps summary)\n\n")
+              w.write("<!-- autodocs:start -->\n")
+              w.write("_No data yet — run AutoDocs or TaskOps to populate._\n")
+              w.write("<!-- autodocs:end -->\n")
+            return True
+
+          def render_readme_block(by_job, last10, agg, drift):
+            lines = []
+            lines.append(f"_Last updated: **{NOW}**_")
+            # topline autopatch totals (if any)
+            if sum(agg.values()) > 0:
+              lines.append(f"- AutoPatch totals → ✅ **{agg['applied']}** · ⏭ **{agg['noop']}** · ⚠️ **{agg['skipped']}** · ⛔ **{agg['blocked']}** · ❌ **{agg['error']}**")
+            # env drift line (if present)
+            if drift:
+              when = drift.get("cur","")
+              cnt = drift.get("changes",0)
+              lines.append(f"- Env drift → **{cnt}** change(s) (UTC {when})")
+            # jobs histogram
+            if by_job:
+              job_str = " · ".join(f"`{k}`: {v}" for k,v in by_job.most_common())
+              lines.append(f"- Jobs seen → {job_str}")
+            # latest table
+            if last10:
+              lines.append("")
+              lines.append("**Latest 10 ledger entries**")
+              lines.append("")
+              lines.append("| ts (UTC) | job | branch | run_id | extras |")
+              lines.append("|---|---|---:|---:|---|")
+              for x in last10:
+                ts = x.get("ts","")
+                job = x.get("job","")
+                branch = x.get("branch","")
+                run_id = x.get("run_id","")
+                extras = []
+                for k in ("applied","noop","skipped","blocked","error","changes"):
+                  if str(x.get(k,"0")) not in ("0","", "None"):
+                    extras.append(f"{k}={x.get(k)}")
+                lines.append(f"| {ts} | `{job}` | {branch or ''} | {run_id or ''} | {'; '.join(extras)} |")
+            return "\n".join(lines).strip() + "\n"
+
+          def write_status_docs(by_job, last10, agg, drift):
+            DOCS_DIR.mkdir(parents=True, exist_ok=True)
+            # TASKOPS_STATUS.md
+            status = ["# TaskOps Status", "", f"Updated: {NOW}", ""]
+            if sum(agg.values())>0:
+              status.append(f"- AutoPatch totals: applied={agg['applied']} noop={agg['noop']} skipped={agg['skipped']} blocked={agg['blocked']} error={agg['error']}")
+            if drift:
+              status.append(f"- Env drift: {drift.get('changes',0)} change(s) at {drift.get('cur','')}")
+            status.append("")
+            (DOCS_DIR / "TASKOPS_STATUS.md").write_text("\n".join(status), encoding="utf-8")
+
+            # LEDGER_LAST_20.md
+            last20 = list(reversed(read_ledger()))[:20]
+            lines = ["# Last 20 ledger entries", ""]
+            lines += ["| ts (UTC) | job | branch | run_id | extras |", "|---|---|---:|---:|---|"]
+            for x in last20:
+              ts = x.get("ts","")
+              job = x.get("job","")
+              branch = x.get("branch","")
+              run_id = x.get("run_id","")
+              extras = []
+              for k in ("applied","noop","skipped","blocked","error","changes"):
+                if str(x.get(k,"0")) not in ("0","", "None"):
+                  extras.append(f"{k}={x.get(k)}")
+              lines.append(f"| {ts} | `{job}` | {branch or ''} | {run_id or ''} | {'; '.join(extras)} |")
+            (DOCS_DIR / "LEDGER_LAST_20.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          def main():
+            if not ensure_readme_markers():
+              return
+            items = read_ledger()
+            by_job, last10, agg = summarize(items)
+            drift = read_env_drift()
+            new_block = render_readme_block(by_job, last10, agg, drift)
+
+            txt = READ_ME.read_text(encoding="utf-8")
+            if START in txt and END in txt:
+              pre, rest = txt.split(START, 1)
+              inner, post = rest.split(END, 1)
+              inner = "\n" + new_block + "\n"
+              updated = pre + START + inner + END + post
+              if updated != txt:
+                READ_ME.write_text(updated, encoding="utf-8")
+
+            write_status_docs(by_job, last10, agg, drift)
+
+          if __name__ == "__main__":
+            main()
+
+  - commit:
+      message: "docs(autodocs): show env drift line in README AutoDocs block and write status pages"
