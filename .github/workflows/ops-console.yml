@@ -4,32 +4,90 @@ on:
   workflow_dispatch:
     inputs:
       workflow:
-        description: "Workflow file name in .github/workflows (e.g. seed-steg-config.yml)"
-        required: true
+        description: "Workflow file in .github/workflows (e.g. seed-steg-config.yml)"
+        required: false
+        default: "seed-steg-config.yml"
       ref:
         description: "Git ref to run on"
         required: false
         default: "main"
 
 permissions:
-  actions: write
   contents: read
+  actions: write
 
 jobs:
   kick:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: List workflows & show which have Run button
+        id: list
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "### Available workflows" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| file | has \`workflow_dispatch\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|:--:|" >> "$GITHUB_STEP_SUMMARY"
+          found_any=false
+          shopt -s nullglob
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            found_any=true
+            if grep -qE '(^|\s)workflow_dispatch\s*:' "$f"; then
+              mark="✓"
+            else
+              mark="—"
+            fi
+            echo "| \`$(basename "$f")\` | $mark |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          if [ "$found_any" = false ]; then
+            echo "_No workflow files found in \`.github/workflows\`._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> Tip: copy a filename from the table above into the **workflow** input next time." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate inputs
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          WF="${{ github.event.inputs.workflow }}"
+          REF="${{ github.event.inputs.ref }}"
+          if [ -z "${WF:-}" ]; then
+            echo "::error title=Missing input::Input 'workflow' was empty. Provide a file that exists in .github/workflows (see run summary for options)."
+            exit 1
+          fi
+          PATH_CAND=".github/workflows/${WF}"
+          if [ ! -f "$PATH_CAND" ]; then
+            echo "::error title=Not found::'$WF' does not exist under .github/workflows (see run summary)."
+            exit 1
+          fi
+          if ! grep -qE '(^|\s)workflow_dispatch\s*:' "$PATH_CAND"; then
+            echo "::warning title=No manual trigger::'$WF' does not define 'workflow_dispatch'. Dispatch will still work via API, but the Run button won't show. Consider running your dispatch-guardian to add it."
+          fi
+          echo "wf=$WF" >> "$GITHUB_OUTPUT"
+          echo "ref=${REF:-main}" >> "$GITHUB_OUTPUT"
+
       - name: Dispatch target workflow
         uses: actions/github-script@v7
         with:
           script: |
-            const wf = core.getInput('workflow', { required: true });
-            const ref = core.getInput('ref') || 'main';
+            const wf = core.getInput('wf', { required: false }) || '${{ steps.validate.outputs.wf }}';
+            const ref = core.getInput('ref', { required: false }) || '${{ steps.validate.outputs.ref }}';
             core.info(`Dispatching ${wf} on ref ${ref}…`);
-            await github.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+            await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: wf,
               ref
             });
-            core.info('OK – dispatch created.');
+            core.summary
+              .addHeading('Dispatch created')
+              .addTable([
+                [{data: 'workflow', header: true}, {data: 'ref', header: true}],
+                [wf, ref]
+              ])
+              .write();
