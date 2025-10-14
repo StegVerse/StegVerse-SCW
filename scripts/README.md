@@ -1,5 +1,13 @@
 # scripts/ — Utility + Self-Healing Scripts
 
+> See the full operator guide: `.github/docs/AUTOPATCH_GUIDE.md`  
+> Quick status is below.
+
+## Ops status
+<!-- autodocs:start -->
+_No data yet — run **AutoDocs (on-demand)**._
+<!-- autodocs:end -->
+
 This folder holds the **brains of the self-healing system**.  
 Each script is designed to run standalone from CI (or locally) and produces
 machine-readable and human-readable reports.
