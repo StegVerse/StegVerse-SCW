@@ -9,6 +9,10 @@ patches:
   - id: taskops-autodocs-link
       path: .github/autopatch/taskops-autodocs-link.patch.yml
   - id: readme-ci-dashboard
-    path: .github/autopatch/readme-ci-dashboard.patch.yml
+      path: .github/autopatch/readme-ci-dashboard.patch.yml
   - id: autopatch-probe-runner
-    path: .github/autopatch/autopatch-probe-runner.patch.yml
+      path: .github/autopatch/autopatch-probe-runner.patch.yml
+  - id: env-capture
+      path: .github/autopatch/env-capture.patch.yml
+  - id: env-compat-policy
+      path: .github/autopatch/env-compat-policy.patch.yml
