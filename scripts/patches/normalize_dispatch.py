@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-Normalize all workflow files so GitHub recognizes the manual "Run workflow" button:
+Normalize all workflow files so GitHub shows the 'Run workflow' button:
 
 - Ensure top-level `on:` is a mapping (dict), converting from list/string if needed.
 - Inject `workflow_dispatch: {}` at the root (unless the file is reusable-only with only `workflow_call`).
 - Skip files that fail YAML parse (report them).
-- Preserve key order (PyYAML safe_dump with sort_keys=False).
-- Write a markdown report to self_healing_out/NORMALIZE_REPORT.md
-- Emit GitHub Actions outputs: `changed=true|false`.
+- Preserve key order (sort_keys=False).
+- Write a markdown report to self_healing_out/NORMALIZE_REPORT.md.
+- If any file changed, create self_healing_out/NORMALIZE_CHANGED as a marker.
 """
 
-import argparse, pathlib, sys, io, json
-from typing import Tuple, Dict, Any, List
+import argparse
+import io
+import os
+import pathlib
+from typing import Any, Dict, Tuple, List
 
 import yaml
 
@@ -19,6 +22,8 @@ ROOT = pathlib.Path(".")
 WF_DIR_DEFAULT = ROOT / ".github" / "workflows"
 OUT_DIR = ROOT / "self_healing_out"
 REPORT_MD = OUT_DIR / "NORMALIZE_REPORT.md"
+CHANGED_MARKER = OUT_DIR / "NORMALIZE_CHANGED"
+
 
 def load_yaml(path: pathlib.Path):
     try:
@@ -27,6 +32,7 @@ def load_yaml(path: pathlib.Path):
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
 
+
 def dump_yaml(data: Any) -> str:
     return yaml.safe_dump(
         data,
@@ -34,6 +40,7 @@ def dump_yaml(data: Any) -> str:
         allow_unicode=True,
         default_flow_style=False,
     )
+
 
 def to_mapping(on_val) -> Dict[str, Any]:
     """Normalize `on` into a dict: supports string or list of strings."""
@@ -51,9 +58,11 @@ def to_mapping(on_val) -> Dict[str, Any]:
         return {on_val: {}}
     return {}
 
+
 def reusable_only(on_map: Dict[str, Any]) -> bool:
     keys = list(on_map.keys())
     return len(keys) == 1 and keys[0] == "workflow_call"
+
 
 def ensure_dispatch(d: dict) -> Tuple[bool, str]:
     """
@@ -61,32 +70,29 @@ def ensure_dispatch(d: dict) -> Tuple[bool, str]:
     Returns (changed?, reason)
     """
     if not isinstance(d, dict):
-        return False, "not a mapping at root"
+        return False, "root is not a mapping"
 
     on_map = to_mapping(d.get("on"))
-    changed = False
-    reason_msgs: List[str] = []
-
-    # If file is reusable-only, skip
+    # Skip reusable-only files
     if reusable_only(on_map):
         return False, "reusable-only (workflow_call)"
 
-    # Inject dispatch if missing
+    changed = False
+    reasons: List[str] = []
+
     if "workflow_dispatch" not in on_map:
         on_map["workflow_dispatch"] = {}
         changed = True
-        reason_msgs.append("added workflow_dispatch")
+        reasons.append("added workflow_dispatch")
 
-    # Replace root on:
     if d.get("on") != on_map:
         d["on"] = on_map
-        # mark changed only if this replacement is a type normalization
         if not changed:
             changed = True
-            reason_msgs.append("normalized on: structure")
+        reasons.append("normalized 'on:' structure")
 
-    reason = ", ".join(reason_msgs) if reason_msgs else "no-op"
-    return changed, reason
+    return changed, ", ".join(reasons) if reasons else "no-op"
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -101,7 +107,8 @@ def main():
     rows = []
     errors = []
 
-    for p in sorted(list(wf_dir.glob("*.yml")) + list(wf_dir.glob("*.yaml"))):
+    files = sorted(list(wf_dir.glob("*.yml")) + list(wf_dir.glob("*.yaml")))
+    for p in files:
         data, err = load_yaml(p)
         if err:
             errors.append((str(p), err))
@@ -109,16 +116,16 @@ def main():
             continue
 
         changed, reason = ensure_dispatch(data)
+
         if changed and not args.dry_run:
             p.write_text(dump_yaml(data), encoding="utf-8")
             changed_any = True
             rows.append(f"- ✅ `{p}` — {reason}")
         else:
-            icon = "⏭" if not changed else "🧪"
             note = reason if changed else "no change needed"
-            rows.append(f"- {icon} `{p}` — {note}")
+            rows.append(f"- ⏭ `{p}` — {note}")
 
-    # Write report
+    # Report
     md = io.StringIO()
     md.write("## Workflow Dispatch Normalization Report\n\n")
     md.write(f"- Directory: `{wf_dir}`\n")
@@ -132,16 +139,12 @@ def main():
         md.write("\n")
     REPORT_MD.write_text(md.getvalue(), encoding="utf-8")
 
-    # Emit output for the workflow step
-    gha_out = ROOT / os.environ.get("GITHUB_OUTPUT", "GITHUB_OUTPUT_NOT_SET")
-    # If GITHUB_OUTPUT is not available (local run), just print.
-    out_line = f"changed={'true' if changed_any else 'false'}"
-    if gha_out.exists():
-        with gha_out.open("a", encoding="utf-8") as f:
-            f.write(out_line + "\n")
-    else:
-        print(out_line)
+    # Marker for the workflow to decide whether to commit
+    if changed_any:
+        CHANGED_MARKER.write_text("changed", encoding="utf-8")
+
+    return 0
+
 
 if __name__ == "__main__":
-    import os
-    sys.exit(main())
+    raise SystemExit(main())
