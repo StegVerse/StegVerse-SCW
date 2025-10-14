@@ -1,14 +1,13 @@
-name: Ops Console
+name: Ops Console (dispatch any workflow)
 
 on:
   workflow_dispatch:
     inputs:
-      targets:
-        description: "Comma-separated workflow files to run (from .github/workflows)"
+      workflow:
+        description: "Workflow file name in .github/workflows (e.g. seed-steg-config.yml)"
         required: true
-        default: "autopatch_apply.yml,autodocs-on-demand.yml"
       ref:
-        description: "Git ref to run on (branch or tag)"
+        description: "Git ref to run on"
         required: false
         default: "main"
 
@@ -17,39 +16,20 @@ permissions:
   contents: read
 
 jobs:
-  dispatch:
+  kick:
     runs-on: ubuntu-latest
     steps:
-      - name: Show plan
-        run: |
-          echo "Targets: ${{ github.event.inputs.targets }}"
-          echo "Ref     : ${{ github.event.inputs.ref }}"
-      - name: Trigger selected workflows
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGETS: ${{ github.event.inputs.targets }}
-          REF: ${{ github.event.inputs.ref }}
-        run: |
-          set -euo pipefail
-          IFS=',' read -ra WF <<< "$TARGETS"
-          owner="${GITHUB_REPOSITORY%/*}"
-          repo="${GITHUB_REPOSITORY#*/}"
-          ref="${REF:-main}"
-
-          for raw in "${WF[@]}"; do
-            wf="$(echo "$raw" | xargs)"  # trim
-            echo "==> Dispatching $wf on $ref"
-            # POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches
-            code=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" \
-              -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${owner}/${repo}/actions/workflows/${wf}/dispatches" \
-              -d "{\"ref\":\"${ref}\",\"inputs\":{}}")
-            if [ "$code" != "204" ]; then
-              echo "::error title=Dispatch failed::${wf} -> HTTP ${code}"
-              cat /tmp/resp.txt || true
-              exit 1
-            fi
-            echo "Dispatched ${wf}"
-          done
+      - name: Dispatch target workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const wf = core.getInput('workflow', { required: true });
+            const ref = core.getInput('ref') || 'main';
+            core.info(`Dispatching ${wf} on ref ${ref}…`);
+            await github.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: wf,
+              ref
+            });
+            core.info('OK – dispatch created.');
