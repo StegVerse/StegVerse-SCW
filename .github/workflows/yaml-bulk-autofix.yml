@@ -8,42 +8,8 @@ on:
       - ".github/workflows/**"
       - "scripts/**"
 
-StegVerse-SCW
-
-Self-healing CI + runtime harness for StegTalk and related services.
-
-Quick Start (mobile-friendly)
-
-Trigger checks by adding a file:
-
-echo go > .github/trigger/supercheck/run-1.txt (runs One-Button Supercheck)
-echo go > .github/trigger/preflight/run-1.txt (runs Workflow Preflight)
-echo go > .github/trigger/autopatch/run-1.txt (runs Auto Patch)
-Or run from Actions → Run workflow.
-
-Workflows
-
-One-Button Supercheck: YAML corrector → known-issue auto-fix → runtime diagnostics → repo audit → drift → auto-triage → bundles.
-Universal Fix-It: precision + sweep fixers for YAML and common CI nits; generates sweep bundle.
-Preflight: validates workflows and normalizes them before big changes.
-Rebuild Kit: produces a zero-secret archive of all critical files for disaster recovery.
-Nightly Snapshot: rolls up state for time-series tracking.
-Auto Patch: applies patches/manifest.json across workflows; logs changes.
-See docs/WORKFLOWS.md for details.
-
-Self-Healing / Autonomy
-
-YAML Corrector & Auto-Fix repair common syntax/structure errors automatically.
-Auto-Triage moves extras to ATTIC/, scaffolds missing files, removes forbidden files.
-Telemetry & last-two summaries capture outcomes for quick status on mobile.
-Disaster Recovery
-
-Download the latest Rebuild Kit from Actions → Artifacts → rebuild_kit_bundle.
-Unpack on a fresh environment to restore workflows/scripts/docs quickly.
-Contributing
-
-Use topic tags in commit messages: [topic:supercheck], [topic:scaffolding], etc.
-Ideas/experiments can be tagged with @idea:<slug> inside files; extras are parked in ATTIC/.
+permissions:
+  contents: write
 
 jobs:
   fix:
@@ -70,176 +36,117 @@ jobs:
           OUTDIR = ROOT/".github/autopatch_out"
           OUTDIR.mkdir(parents=True, exist_ok=True)
 
-          # Heuristics for "this looks like script at column 1"
-          SCRIPT_LEADERS = tuple([
-            "import ", "from ", "set -e", "set -eu", "set -euo pipefail",
-            "#!/usr/bin/env", "python ", "bash ", "sh ", "node ",
-            "ROOT=", "SHA=", "git ", "curl ", "jq ", "ts=", "echo ",
-            "{", "}", "if [", "fi", "YML", "JSON",
-          ])
-
-          # Files we should not treat as workflows even if present here
-          SKIP = set([
-            "setup-common-python.yml",  # should be a composite action, not a workflow
-          ])
+          SCRIPT_LEADERS = (
+            "import ","from ","set -e","set -eu","set -euo pipefail",
+            "#!/usr/bin/env","python ","bash ","sh ","node ",
+            "ROOT=","SHA=","git ","curl ","jq ","ts=","echo ",
+            "{","}","if [","fi","YML","JSON",
+          )
+          SKIP = {"setup-common-python.yml"}
 
           def looks_like_step_start(line):
             return bool(re.match(r'^\s*-\s+name:\s', line))
 
           def looks_like_section_start(line):
-            # e.g., 'jobs:', 'steps:', top-level keys
-            return bool(re.match(r'^[A-Za-z0-9_\-]+\s*:', line))
+            return bool(re.match(r'^[A-Za-z0-9_\-]+\s*:\s*$', line))
 
-          def is_probably_script_line(line):
-            s = line.lstrip()
-            # column-1 script: first non-space char is a letter or # and matches leaders
-            return s.startswith(SCRIPT_LEADERS)
+          def is_scriptish(line):
+            return line.lstrip().startswith(SCRIPT_LEADERS)
 
           def needs_run_insertion(lines, i):
-            """If a script-ish line appears where YAML expects a key, we should inject run: | above."""
-            # Don’t touch comments-only regions
-            if lines[i].lstrip().startswith("#"):
-              return False
-            # If line already within a run block (previous non-empty line has 'run:'), skip
+            if lines[i].lstrip().startswith("#"): return False
             for j in range(i-1, max(-1, i-20), -1):
               t = lines[j].strip()
-              if not t: 
-                continue
-              if re.match(r'^\s*run\s*:\s*\|?', t):
-                return False
-              if looks_like_step_start(lines[j]):
-                # We hit the step header without seeing run: — so yes, we need to insert it
-                return True
-              # If we hit another mapping key at column 1, we’re likely at top-level; still OK to insert
-              if looks_like_section_start(lines[j]):
-                return True
+              if not t: continue
+              if re.match(r'^\s*run\s*:\s*\|?', t): return False
+              if looks_like_step_start(lines[j]): return True
+              if looks_like_section_start(lines[j]): return True
             return True
 
-          def indent_of(line):
-            return len(line) - len(line.lstrip(' '))
+          def indent_of(line): return len(line) - len(line.lstrip(' '))
 
           def inject_run_block(lines, i):
-            # Find a reasonable indent (use current line indent if any, else 4)
             cur_indent = indent_of(lines[i])
             ins_indent = max(2, cur_indent)
-            # Walk back to a good insertion point (ideally right after a "- name:" in this step)
             insert_at = i
             for j in range(i-1, max(-1, i-20), -1):
               if looks_like_step_start(lines[j]):
-                insert_at = j+1
-                ins_indent = indent_of(lines[j]) + 2
-                break
+                insert_at = j+1; ins_indent = indent_of(lines[j]) + 2; break
               if lines[j].strip().startswith("steps:"):
-                insert_at = j+1
-                ins_indent = indent_of(lines[j]) + 2
-                break
-
-            # Insert 'run: |' with proper indent
-            run_line = " " * ins_indent + "run: |\n"
-            lines.insert(insert_at, run_line)
-
-            # Now indent all subsequent "scriptish" lines until next step/section (best-effort)
+                insert_at = j+1; ins_indent = indent_of(lines[j]) + 2; break
+            lines.insert(insert_at, " " * ins_indent + "run: |\n")
             k = insert_at + 1
             while k < len(lines):
               line = lines[k]
-              if looks_like_step_start(line) or re.match(r'^\S', line):  # new step or new top-level key
-                break
+              if looks_like_step_start(line) or re.match(r'^\S', line): break
               if line.strip() and not line.lstrip().startswith("#"):
                 lines[k] = " " * (ins_indent + 2) + line.lstrip(" ")
               k += 1
             return True
 
           def normalize_inline_env(lines):
-            # Fix "env: { API: ${{ ... }} }" → proper multi-line mapping
             out = []
             for line in lines:
               m = re.match(r'^(\s*)env:\s*\{\s*([^}]+)\s*\}\s*$', line)
               if m and "${{" in line:
                 base = m.group(1)
                 out.append(f"{base}env:\n")
-                # split pairs by comma
                 inner = m.group(2)
                 for part in inner.split(","):
                   part = part.strip()
-                  if not part:
-                    continue
-                  if ":" in part:
+                  if part and ":" in part:
                     k,v = part.split(":",1)
                     out.append(f"{base}  {k.strip()}: {v.strip()}\n")
               else:
                 out.append(line)
             return out
 
-          fixed_files = []
-          failed_files = []
-
+          fixed = []
           for p in sorted(WF.glob("*.y*ml")):
-            if p.name in SKIP:
-              continue
+            if p.name in SKIP: continue
             text = p.read_text(encoding="utf-8", errors="ignore")
-            lines = text.splitlines(keepends=True)
-
-            # quick normalize of a few patterns
-            lines = normalize_inline_env(lines)
-
+            lines = normalize_inline_env(text.splitlines(keepends=True))
             changed = False
             for idx, line in enumerate(list(lines)):
-              # lines that clearly shouldn't start at column 1 in YAML
-              if is_probably_script_line(line) and needs_run_insertion(lines, idx):
+              if is_scriptish(line) and needs_run_insertion(lines, idx):
                 try:
                   inject_run_block(lines, idx)
                   changed = True
                 except Exception:
                   pass
-
             if changed:
               p.write_text("".join(lines), encoding="utf-8")
-              fixed_files.append(str(p))
-            else:
-              # leave it; may already be good or too weird
-              pass
+              fixed.append(str(p))
 
-          # Ensure composite action exists (and remove mistaken workflow file if present)
+          # ensure composite action exists (and quarantine misfiled workflow)
           actions_dir = ROOT/".github/actions/setup-common-python"
           actions_dir.mkdir(parents=True, exist_ok=True)
           action_yml = actions_dir/"action.yml"
           if not action_yml.exists():
-            action_yml.write_text("""name: Setup common Python
-description: Standard Python setup with optional caching + extra pkgs
-inputs:
-  python-version:
-    required: false
-    default: "3.11"
-  cache:
-    required: false
-    default: "pip"
-  extra-packages:
-    required: false
-    default: ""
-runs:
-  using: "composite"
-  steps:
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ inputs.python-version }}
-        cache: ${{ inputs.cache }}
-    - shell: bash
-      run: |
-        set -euo pipefail
-        python -m pip install --upgrade pip
-        if [ -n "${{ inputs.extra-packages }}" ]; then
-          pip install ${{ inputs.extra-packages }}
-        fi
-""", encoding="utf-8")
+            action_yml.write_text(
+              'name: Setup common Python\n'
+              'description: Standard Python setup with optional caching + extra pkgs\n'
+              'inputs:\n'
+              '  python-version:\n    required: false\n    default: "3.11"\n'
+              '  cache:\n    required: false\n    default: "pip"\n'
+              '  extra-packages:\n    required: false\n    default: ""\n'
+              'runs:\n  using: "composite"\n  steps:\n'
+              '    - uses: actions/setup-python@v5\n'
+              '      with:\n        python-version: ${{ inputs.python-version }}\n'
+              '        cache: ${{ inputs.cache }}\n'
+              '    - shell: bash\n      run: |\n'
+              '        set -euo pipefail\n'
+              '        python -m pip install --upgrade pip\n'
+              '        if [ -n "${{ inputs.extra-packages }}" ]; then\n'
+              '          pip install ${{ inputs.extra-packages }}\n'
+              '        fi\n', encoding="utf-8")
 
           bad_wf = WF/"setup-common-python.yml"
           if bad_wf.exists():
-            # Rename instead of delete (in case you want to review)
-            shutil.move(str(bad_wf), str(bad_wf.with_suffix(".yml.broken")))
+            bad_wf.rename(bad_wf.with_suffix(".yml.broken"))
 
-          print("[autofix] Fixed files:", len(fixed_files))
-          (OUTDIR/"YAML_AUTOFIX_FIXED.txt").write_text("\n".join(fixed_files), encoding="utf-8")
-
+          (OUTDIR/"YAML_AUTOFIX_FIXED.txt").write_text("\n".join(fixed), encoding="utf-8")
+          print(f"[autofix] fixed {len(fixed)} files")
           PY
 
       - name: Commit changes (if any)
