@@ -11,6 +11,12 @@ Self-healing CI + runtime harness for StegTalk and related services.
 
 - Or run from **Actions → Run workflow**.
 
+> **Note:** Some self-healing and dispatch workflows (like YAML Bulk Autofix, AutoDocs Verify, and AutoPatch Apply)
+> now require a **Personal Access Token (PAT)** or **GitHub App token** with `workflow` and `contents` write scopes.
+> Add it under **Settings → Secrets and variables → Actions → New repository secret**
+> with the name `PAT_WORKFLOW`.  
+> The system will automatically detect and use it if available.
+
 ## Workflows
 
 - **One-Button Supercheck**: YAML corrector → known-issue auto-fix → runtime diagnostics → repo audit → drift → auto-triage → bundles.
@@ -32,6 +38,21 @@ See `docs/WORKFLOWS.md` for details.
 
 - Download the latest **Rebuild Kit** from Actions → Artifacts → `rebuild_kit_bundle`.
 - Unpack on a fresh environment to restore workflows/scripts/docs quickly.
+
+## Maintenance & Self-Repair
+
+StegVerse-SCW includes first-aid and self-repair workflows:
+
+| Workflow | Purpose | Notes |
+|-----------|----------|-------|
+| **fix-dispatch-triggers.yml** | Scans and normalizes `workflow_dispatch` blocks. | Run after adding new workflows. |
+| **yaml-bulk-autofix.yml** | Automatically repairs parse errors and indentation issues. | Requires `PAT_WORKFLOW` for commit access. |
+| **workflows-first-aid.yml** | Ensures all Actions remain runnable after upstream GitHub changes. | Runs nightly. |
+| **actions-permission-check.yml** | Verifies token scopes and repo permissions. | Should show `403` only if `PAT_WORKFLOW` is missing. |
+
+**Tip:** If a self-healing workflow fails with  
+`Resource not accessible by integration` or `Workflow does not have 'workflow_dispatch' trigger`,  
+add a token with the `workflow` scope and rerun `fix-dispatch-triggers.yml`.
 
 ## Contributing
 
