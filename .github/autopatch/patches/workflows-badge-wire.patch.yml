@@ -1,0 +1,71 @@
+version: 1
+id: workflows-badge-wire
+about: >
+  Ensure README has the workflows status badge + status block markers.
+
+actions:
+  - write_files:
+      - path: "scripts/patches/wire_workflows_badge.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import pathlib, re
+
+          ROOT    = pathlib.Path(".")
+          README  = ROOT/"README.md"
+          BADGE   = "[![workflows](.github/badges/workflows.svg)](.github/docs/WORKFLOWS_STATUS.md)"
+          START   = "<!-- workflows:status -->"
+          END     = "<!-- /workflows:status -->"
+
+          def ensure_file(path: pathlib.Path):
+            if not path.exists():
+              path.write_text("# Repository\n\n", encoding="utf-8")
+
+          def insert_badge_line(txt: str) -> str:
+            # Put badge on the first “badges line” (line with ](badge.svg))
+            lines = txt.splitlines()
+            placed = False
+            for i, line in enumerate(lines[:12]):  # look only near the top
+              if "badge" in line or "](" in line:
+                if BADGE not in line:
+                  # append with a space
+                  lines[i] = line.rstrip() + (" " if line.strip() else "") + BADGE
+                placed = True
+                break
+            if not placed:
+              # insert under title if present, else at top
+              if lines and lines[0].startswith("# "):
+                lines.insert(1, BADGE)
+              else:
+                lines.insert(0, BADGE)
+            return "\n".join(lines) + ("\n" if not txt.endswith("\n") else "")
+
+          def ensure_status_block(txt: str) -> str:
+            block = f"{START}\n{BADGE}\n\n(First run will populate counts here.)\n{END}"
+            if START in txt and END in txt:
+              return txt  # keep whatever the badge workflow will maintain
+            # Add a small section near the bottom
+            return txt.rstrip() + "\n\n## Workflows Status\n" + block + "\n"
+
+          def main():
+            ensure_file(README)
+            txt = README.read_text(encoding="utf-8")
+            txt2 = insert_badge_line(txt)
+            txt3 = ensure_status_block(txt2)
+            if txt3 != txt:
+              README.write_text(txt3, encoding="utf-8")
+              print("README updated with workflows badge + block.")
+            else:
+              print("README already contains workflows badge + block.")
+
+          if __name__ == "__main__":
+            main()
+
+  - run_shell:
+      name: Wire workflows badge into README
+      script: |
+        set -euo pipefail
+        python scripts/patches/wire_workflows_badge.py
+
+  - commit:
+      message: "docs(readme): add Workflows Status badge + status block"
