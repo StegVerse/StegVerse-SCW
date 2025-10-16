@@ -1,7 +1,7 @@
 name: Workflows Status Badges
 
 on:
-  workflow_dispatch: {}        # allows “Run workflow” + API dispatch
+  workflow_dispatch: {}        # allows Run button + API trigger
   push:
     branches: [ "main" ]
     paths:
@@ -24,7 +24,6 @@ jobs:
       - name: Determine totals (files on disk)
         id: disk
         run: |
-          set -euo pipefail
           total=$(ls .github/workflows/*.y*ml 2>/dev/null | wc -l | tr -d ' ')
           echo "total=$total" >> "$GITHUB_OUTPUT"
 
@@ -38,7 +37,6 @@ jobs:
               repo: context.repo.repo,
               per_page: 100
             });
-            // Only registered, valid workflows show up here
             core.setOutput('active', String(all.length));
 
       - name: Compute invalid count
@@ -51,39 +49,38 @@ jobs:
           echo "invalid=$invalid" >> "$GITHUB_OUTPUT"
           echo "total=$total"     >> "$GITHUB_OUTPUT"
 
-      - name: Write badge SVG
+      - name: Generate badge
         run: |
-          set -euo pipefail
           mkdir -p .github/badges
           active=${{ steps.math.outputs.active }}
           total=${{ steps.math.outputs.total }}
           invalid=${{ steps.math.outputs.invalid }}
-          # Simple shield-style SVG
           cat > .github/badges/workflows.svg <<'SVG'
-          <svg xmlns="http://www.w3.org/2000/svg" width="220" height="20" role="img" aria-label="workflows">
-            <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
-            <mask id="m"><rect width="220" height="20" rx="3" fill="#fff"/></mask>
+          <svg xmlns="http://www.w3.org/2000/svg" width="190" height="20" role="img" aria-label="workflows">
+            <linearGradient id="s" x2="0" y2="100%">
+              <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+              <stop offset="1" stop-opacity=".1"/>
+            </linearGradient>
+            <mask id="m"><rect width="190" height="20" rx="3" fill="#fff"/></mask>
             <g mask="url(#m)">
-              <rect width="110" height="20" fill="#555"/>
-              <rect x="110" width="110" height="20" fill="#007ec6"/>
-              <rect width="220" height="20" fill="url(#s)"/>
+              <rect width="95" height="20" fill="#555"/>
+              <rect x="95" width="95" height="20" fill="#007ec6"/>
+              <rect width="190" height="20" fill="url(#s)"/>
             </g>
             <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">
-              <text x="55" y="14">workflows</text>
-              <text id="val" x="165" y="14">ACTIVE/TOTAL (invalid INVALID)</text>
+              <text x="48" y="14">workflows</text>
+              <text id="val" x="142" y="14">ACTIVE/TOTAL (-INVALID)</text>
             </g>
           </svg>
           SVG
-          # Inject numbers
           sed -i \
-            -e "s/ACTIVE/$active/" \
-            -e "s/TOTAL/$total/" \
-            -e "s/INVALID/$invalid/" \
+            -e "s/ACTIVE/${active}/" \
+            -e "s/TOTAL/${total}/" \
+            -e "s/INVALID/${invalid}/" \
             .github/badges/workflows.svg
 
-      - name: Commit badge (if changed)
+      - name: Commit badge
         run: |
-          set -euo pipefail
           git config user.name  "StegVerse Bot"
           git config user.email "bot@stegverse.org"
           git add .github/badges/workflows.svg
