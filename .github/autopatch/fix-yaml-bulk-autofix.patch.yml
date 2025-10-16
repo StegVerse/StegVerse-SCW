@@ -1,0 +1,206 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/workflows/yaml-bulk-autofix.yml"
+        mode: "100644"
+        contents: |
+          name: YAML Bulk Autofix
+
+          on:
+            workflow_dispatch: {}
+            push:
+              branches: [ "main" ]
+              paths:
+                - ".github/workflows/**"
+                - "scripts/**"
+
+          permissions:
+            contents: write
+
+          jobs:
+            fix:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with:
+                    fetch-depth: 0
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.11"
+
+                - name: Run bulk YAML autofix
+                  run: |
+                    set -euo pipefail
+                    python - <<'PY'
+                    import re, sys, pathlib, shutil
+
+                    ROOT = pathlib.Path(".")
+                    WF = ROOT/".github/workflows"
+                    OUTDIR = ROOT/".github/autopatch_out"
+                    OUTDIR.mkdir(parents=True, exist_ok=True)
+
+                    SCRIPT_LEADERS = tuple([
+                      "import ", "from ", "set -e", "set -eu", "set -euo pipefail",
+                      "#!/usr/bin/env", "python ", "bash ", "sh ", "node ",
+                      "ROOT=", "SHA=", "git ", "curl ", "jq ", "ts=", "echo ",
+                      "{", "}", "if [", "fi", "YML", "JSON",
+                    ])
+
+                    SKIP = set([
+                      "setup-common-python.yml",
+                    ])
+
+                    def looks_like_step_start(line):
+                      return bool(re.match(r'^\s*-\s+name:\s', line))
+
+                    def looks_like_section_start(line):
+                      return bool(re.match(r'^[A-Za-z0-9_\-]+\s*:', line))
+
+                    def is_probably_script_line(line):
+                      s = line.lstrip()
+                      return s.startswith(SCRIPT_LEADERS)
+
+                    def needs_run_insertion(lines, i):
+                      if lines[i].lstrip().startswith("#"):
+                        return False
+                      for j in range(i-1, max(-1, i-20), -1):
+                        t = lines[j].strip()
+                        if not t:
+                          continue
+                        if re.match(r'^\s*run\s*:\s*\|?', t):
+                          return False
+                        if looks_like_step_start(lines[j]):
+                          return True
+                        if looks_like_section_start(lines[j]):
+                          return True
+                      return True
+
+                    def indent_of(line):
+                      return len(line) - len(line.lstrip(' '))
+
+                    def inject_run_block(lines, i):
+                      cur_indent = indent_of(lines[i])
+                      ins_indent = max(2, cur_indent)
+                      insert_at = i
+                      for j in range(i-1, max(-1, i-20), -1):
+                        if looks_like_step_start(lines[j]):
+                          insert_at = j+1
+                          ins_indent = indent_of(lines[j]) + 2
+                          break
+                        if lines[j].strip().startswith("steps:"):
+                          insert_at = j+1
+                          ins_indent = indent_of(lines[j]) + 2
+                          break
+
+                      run_line = " " * ins_indent + "run: |\n"
+                      lines.insert(insert_at, run_line)
+
+                      k = insert_at + 1
+                      while k < len(lines):
+                        line = lines[k]
+                        if looks_like_step_start(line) or re.match(r'^\S', line):
+                          break
+                        if line.strip() and not line.lstrip().startswith("#"):
+                          lines[k] = " " * (ins_indent + 2) + line.lstrip(" ")
+                        k += 1
+                      return True
+
+                    def normalize_inline_env(lines):
+                      out = []
+                      for line in lines:
+                        m = re.match(r'^(\s*)env:\s*\{\s*([^}]+)\s*\}\s*$', line)
+                        if m and "${{" in line:
+                          base = m.group(1)
+                          out.append(f"{base}env:\n")
+                          inner = m.group(2)
+                          for part in inner.split(","):
+                            part = part.strip()
+                            if not part:
+                              continue
+                            if ":" in part:
+                              k,v = part.split(":",1)
+                              out.append(f"{base}  {k.strip()}: {v.strip()}\n")
+                        else:
+                          out.append(line)
+                      return out
+
+                    fixed_files = []
+
+                    for p in sorted(WF.glob("*.y*ml")):
+                      if p.name in SKIP:
+                        continue
+                      text = p.read_text(encoding="utf-8", errors="ignore")
+                      lines = text.splitlines(keepends=True)
+
+                      lines = normalize_inline_env(lines)
+
+                      changed = False
+                      for idx, line in enumerate(list(lines)):
+                        if is_probably_script_line(line) and needs_run_insertion(lines, idx):
+                          try:
+                            inject_run_block(lines, idx)
+                            changed = True
+                          except Exception:
+                            pass
+
+                      if changed:
+                        p.write_text("".join(lines), encoding="utf-8")
+                        fixed_files.append(str(p))
+
+                    actions_dir = ROOT/".github/actions/setup-common-python"
+                    actions_dir.mkdir(parents=True, exist_ok=True)
+                    action_yml = actions_dir/"action.yml"
+                    if not action_yml.exists():
+                      action_yml.write_text("""name: Setup common Python
+description: Standard Python setup with optional caching + extra pkgs
+inputs:
+  python-version:
+    required: false
+    default: "3.11"
+  cache:
+    required: false
+    default: "pip"
+  extra-packages:
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: ${{ inputs.cache }}
+    - shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+        if [ -n "${{ inputs.extra-packages }}" ]; then
+          pip install ${{ inputs.extra-packages }}
+        fi
+""", encoding="utf-8")
+
+                    bad_wf = WF/"setup-common-python.yml"
+                    if bad_wf.exists():
+                      shutil.move(str(bad_wf), str(bad_wf.with_suffix(".yml.broken")))
+
+                    (OUTDIR/"YAML_AUTOFIX_FIXED.txt").write_text("\n".join(fixed_files), encoding="utf-8")
+                    print("[autofix] Fixed files:", len(fixed_files))
+                    PY
+
+                - name: Commit changes (if any)
+                  run: |
+                    set -euo pipefail
+                    if [ -s ".github/autopatch_out/YAML_AUTOFIX_FIXED.txt" ] || ls .github/workflows/*.broken >/dev/null 2>&1; then
+                      git config user.name  "StegVerse Bot"
+                      git config user.email "bot@stegverse.org"
+                      git add .github/workflows .github/actions || true
+                      git commit -m "chore(workflows): bulk YAML auto-fix + move composite action" || echo "Nothing to commit"
+                      git push origin HEAD:main || true
+                    else
+                      echo "No YAML autofixes to commit."
+                    fi
+  - commit:
+      message: "autopatch: ensure yaml-bulk-autofix.yml is dispatchable + valid"
