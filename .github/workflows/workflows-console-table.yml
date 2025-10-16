@@ -7,102 +7,198 @@ on:
     paths:
       - ".github/workflows/**"
       - "README.md"
+      - "web/**"
+      - ".github/docs/**"
 
 permissions:
-  contents: write
+  contents: write        # commit README/docs/badges
+  actions: write         # allow API dispatch
+  workflows: write       # (belt-and-suspenders) for workflow API
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-table:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
 
-      - name: Install PyYAML (guard)
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyyaml
+      # Retry the package install to avoid transient network hiccups
+      - name: Install deps (retry)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install pyyaml
 
-      - name: Build table & update README
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import pathlib, yaml, datetime, re
-
-          ROOT = pathlib.Path(".")
-          WFD  = ROOT/".github/workflows"
-          README = ROOT/"README.md"
-
-          def load(p):
+      # Build/refresh the console table(s) and README section
+      # Includes a last-resort self-heal that installs PyYAML if import fails
+      - name: Build tables & update README (retry)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            set -euo pipefail
+            python - <<'PY'
+            import sys, subprocess
             try:
-              return yaml.safe_load(p.read_text(encoding="utf-8"))
-            except Exception as e:
-              return e
+                import yaml  # noqa
+            except Exception:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "pyyaml"])
+                import yaml  # noqa
 
-          def has_dispatch(d):
-            if not isinstance(d, dict): return False
-            on = d.get("on")
-            if on is None: return False
-            if isinstance(on, str): return on == "workflow_dispatch"
-            if isinstance(on, list): return "workflow_dispatch" in on
-            if isinstance(on, dict):
-              if set(on.keys()) == {"workflow_call"}: return False
-              return "workflow_dispatch" in on
-            return False
+            import pathlib, datetime, re, json
+            ROOT   = pathlib.Path(".")
+            WF_DIR = ROOT/".github/workflows"
+            README = ROOT/"README.md"
+            WEB    = ROOT/"web"
+            WEB.mkdir(parents=True, exist_ok=True)
 
-          rows = []
-          broken = 0
-          for p in sorted(WFD.glob("*.y*ml")):
-            data = load(p)
-            state = "❌ broken" if isinstance(data, Exception) else ("✅ ok" if has_dispatch(data) else "➖ no-dispatch")
-            if isinstance(data, Exception): broken += 1
-            # Links:
-            actions_link = f"./actions/workflows/{p.name}"
-            view_link    = f".github/workflows/{p.name}"
-            run_link     = f"./issues/new?template=run-workflow.yml&title=Run%20workflow:%20{p.name}"
-            rows.append((p.name, state, actions_link, view_link, run_link))
+            def load_yaml(p):
+                try:
+                    return yaml.safe_load(p.read_text(encoding="utf-8"))
+                except Exception as e:
+                    return e
 
-          now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-          table = ["| Workflow | State | Actions |",
-                   "|---|---|---|"]
-          for name, state, actions_link, view_link, run_link in rows:
-            actions_cell = f"[View]({actions_link}) · [File]({view_link}) · [▶︎ Run]({run_link})"
-            table.append(f"| `{name}` | {state} | {actions_cell} |")
-          block = "\n".join(table) + f"\n\n_Last updated: **{now}**_"
+            def has_dispatch(d):
+                if not isinstance(d, dict): return False
+                on = d.get("on")
+                if on is None: return False
+                if isinstance(on, str): return on == "workflow_dispatch"
+                if isinstance(on, list): return "workflow_dispatch" in on
+                if isinstance(on, dict):
+                    if set(on.keys()) == {"workflow_call"}:
+                        return False
+                    return "workflow_dispatch" in on
+                return False
 
-          start = "<!-- ops-console:start -->"
-          end   = "<!-- ops-console:end -->"
+            rows = []
+            ok = nodisp = broken = 0
+            for p in sorted(WF_DIR.glob("*.y*ml")):
+                data = load_yaml(p)
+                state = ""
+                note  = ""
+                if isinstance(data, Exception):
+                    broken += 1
+                    state = "❌ broken"
+                    note  = type(data).__name__
+                else:
+                    if has_dispatch(data):
+                        ok += 1
+                        state = "✅ ok"
+                    else:
+                        nodisp += 1
+                        state = "➖ no-dispatch"
+                rows.append((p.name, state, note))
 
-          if README.exists():
-            txt = README.read_text(encoding="utf-8")
-          else:
-            txt = "# Repository\n\n"
+            total = ok + nodisp + broken
+            now   = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-          # Ensure section header & markers
-          block_all = f"{start}\n{block}\n{end}"
-          if start in txt and end in txt:
-            new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}", block_all, txt, flags=re.S)
-          else:
-            new = txt.rstrip() + "\n\n## Ops Console\n\n" + block_all + "\n"
+            # --- Build README console table with deep links (View | File | ► Run)
+            owner = "${{ github.repository_owner }}"
+            repo  = "${{ github.event.repository.name }}"
+            def row_md(n, s, note):
+                view = f"https://github.com/{owner}/{repo}/actions/workflows/{n}"
+                file = f"https://github.com/{owner}/{repo}/blob/main/.github/workflows/{n}"
+                run_issue = (
+                  f"https://github.com/{owner}/{repo}/issues/new"
+                  f"?template=run-workflow.yml&title=Run%20{n}"
+                  f"&workflow={n}&ref=main"
+                )
+                return f"| `{n}` | {s} | [View]({view}) · [File]({file}) · [► Run]({run_issue}) | {note} |"
 
-          if new != txt:
-            README.write_text(new, encoding="utf-8")
-            print("UPDATED: README Ops Console table")
-          else:
-            print("NO-CHANGE: README Ops Console table")
-          PY
+            table = [
+              "<!-- ops-console:table -->",
+              "",
+              "| Workflow | State | Actions | Note |",
+              "|---|---|---|---|"
+            ] + [row_md(n, s, note) for n,s,note in rows] + [
+              "",
+              f"_Summary: **{ok}/{total} OK**, **{nodisp}** no-dispatch, **{broken}** broken — {now}_",
+              "",
+              "<!-- /ops-console:table -->"
+            ]
 
+            # Update README block (insert if missing)
+            if README.exists():
+                txt = README.read_text(encoding="utf-8")
+            else:
+                txt = "# Repository\n\n"
+
+            start = "<!-- ops-console:table -->"
+            end   = "<!-- /ops-console:table -->"
+            block = "\n".join(table)
+            if start in txt and end in txt:
+                new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}", block, txt, flags=re.S)
+            else:
+                # place under "Contributing" if present, else append at end
+                if "## Contributing" in txt:
+                    new = txt.replace("## Contributing", "## Contributing\n\n" + block + "\n\n")
+                else:
+                    new = txt.rstrip() + "\n\n## Ops Console\n\n" + block + "\n"
+            if new != txt:
+                README.write_text(new, encoding="utf-8")
+
+            # Also publish a markdown view in /web for easy linking if you like
+            (WEB/"ops-console.md").write_text("\n".join(table), encoding="utf-8")
+
+            print(json.dumps({"ok": ok, "nodisp": nodisp, "broken": broken, "total": total}, indent=2))
+            PY
+
+      # Commit using a plain shell step (avoids heredoc parsing pitfalls)
       - name: Commit (if changed)
+        shell: bash
         run: |
           set -euo pipefail
           git config user.name  "StegVerse Bot"
           git config user.email "bot@stegverse.org"
-          git add README.md
+          git add README.md web/ops-console.md .github/docs/WORKFLOWS_STATUS.md .github/badges/workflows.svg 2>/dev/null || true
           if ! git diff --cached --quiet; then
-            git commit -m "docs(ops-console): auto-update workflows table with ▶︎ Run links"
-            git push origin HEAD:main
+            git commit -m "docs(ops-console): update tables + badge [skip ci]"
+            BR="${GITHUB_HEAD_REF:-${GITHUB_REF##refs/heads/}}"
+            git push origin "HEAD:${BR}"
           else
             echo "No changes to commit."
           fi
+
+  # One-shot full run retry if the first attempt failed (uses Actions API)
+  retry-once:
+    needs: [build-table]
+    if: ${{ failure() && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-dispatch this workflow (one time)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split("/");
+            const ref = process.env.GITHUB_REF.replace("refs/heads/","") || "main";
+            // Find this workflow's ID by name, then dispatch it
+            const name = process.env.GITHUB_WORKFLOW; // "Workflows Console Table"
+            const list = await github.request("GET /repos/{owner}/{repo}/actions/workflows", { owner, repo });
+            const wf = list.data.workflows.find(w => w.name === name);
+            if (!wf) {
+              core.setFailed(`Cannot find workflow id for: ${name}`);
+              return;
+            }
+            await github.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
+              owner, repo, workflow_id: wf.id, ref
+            });
+            core.info(`Re-dispatched '${name}' (id: ${wf.id}) on ref ${ref}`);
