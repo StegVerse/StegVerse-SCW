@@ -1,0 +1,163 @@
+name: README Nudge - Kick Status (universal)
+
+on:
+  # Manual run if you want to test it
+  workflow_dispatch:
+    inputs:
+      workflow_name:
+        description: "Workflow name to update (e.g., Kick YAML Bulk Autofix)"
+        required: false
+      status:
+        description: "Status (success, failure, neutral, cancelled, skipped, timed_out, action_required)"
+        required: false
+        default: "success"
+
+  # Universal path: any workflow can ping this via repository_dispatch
+  repository_dispatch:
+    types: [kick-complete]
+
+  # Bridge path (until all Kicks emit repository_dispatch)
+  workflow_run:
+    workflows:
+      - Kick YAML Bulk Autofix
+      - Kick AutoPatch Apply
+      - Kick AutoPatch
+      - Kick Seed Steg Config
+      - Kick Rebuild Kit
+      - Kick Self-Healing Scan
+      - Kick Workflows First Aid
+      - Kick Ops Console Table
+      - Kick Export HCB
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Determine Source + Payload
+        id: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="${{ github.event_name }}"
+
+          WF_NAME=""
+          STATUS=""
+
+          if [ "$SRC" = "repository_dispatch" ]; then
+            WF_NAME="${{ github.event.client_payload.workflow || '' }}"
+            STATUS="${{ github.event.client_payload.status || '' }}"
+          elif [ "$SRC" = "workflow_run" ]; then
+            WF_NAME="${{ github.event.workflow.name }}"
+            STATUS="${{ github.event.workflow_run.conclusion }}"
+          elif [ "$SRC" = "workflow_dispatch" ]; then
+            WF_NAME="${{ inputs.workflow_name || '' }}"
+            STATUS="${{ inputs.status || 'success' }}"
+          fi
+
+          # Fallbacks
+          if [ -z "$WF_NAME" ]; then
+            WF_NAME="Kick (unspecified)"
+          fi
+          if [ -z "$STATUS" ]; then
+            STATUS="success"
+          fi
+
+          echo "workflow_name=$WF_NAME" >> "$GITHUB_OUTPUT"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+      - name: Update README badge + section
+        env:
+          WF_NAME: ${{ steps.src.outputs.workflow_name }}
+          STATUS:  ${{ steps.src.outputs.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re, pathlib, urllib.parse, datetime, os
+
+          readme = pathlib.Path("README.md")
+          txt = readme.read_text(encoding="utf-8") if readme.exists() else "# Repository\n\n"
+
+          wf_name = os.environ.get("WF_NAME","Kick (unspecified)")
+          status  = (os.environ.get("STATUS","success") or "success").lower()
+          now     = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+          # slug for ID lines (e.g., Kick YAML Bulk Autofix -> kick_yaml_bulk_autofix)
+          slug = re.sub(r'[^A-Za-z0-9_-]+', '_', wf_name.strip()).strip('_').lower()
+          # shields.io safe label
+          label = "Kick:" + wf_name.replace(" ", "_")
+          label_enc = urllib.parse.quote(label, safe="")
+          ts_enc    = urllib.parse.quote(now.replace(" ", "_"), safe="")
+          color = {
+            "success":"brightgreen", "neutral":"lightgrey", "skipped":"lightgrey",
+            "cancelled":"blue", "failure":"red", "timed_out":"orange",
+            "action_required":"yellow"
+          }.get(status, "blue")
+
+          badge = f"![{wf_name}](" \
+                  f"https://img.shields.io/badge/{label_enc}-{ts_enc}-{color}?style=flat-square)"
+
+          # Section markers
+          start = "<!-- kicks:status -->"
+          end   = "<!-- /kicks:status -->"
+
+          # Ensure section exists
+          if start not in txt or end not in txt:
+            block = (
+              f"## Kick Workflows Status\n\n"
+              f"{start}\n"
+              f"_Last updated: **{now}**_\n\n"
+              f"{badge}\n\n"
+              f"{end}\n"
+            )
+            txt = txt.rstrip() + "\n\n" + block + "\n"
+          else:
+            # Update inside block:
+            def repl(m):
+              body = m.group(1)
+
+              # update "Last updated"
+              body = re.sub(
+                r"_Last updated: \*\*.*?\*\*_",
+                f"_Last updated: **{now}**_",
+                body,
+                flags=re.S
+              )
+
+              # Look for an existing line with this slug (using an HTML comment anchor)
+              anchor = f"<!-- kick:{slug} -->"
+              new_line = f"{anchor}\n{badge}\n"
+
+              if anchor in body:
+                body = re.sub(
+                  rf"<!-- kick:{re.escape(slug)} -->.*",
+                  new_line,
+                  body
+                )
+              else:
+                # append at end before closing marker
+                body = body.rstrip() + "\n" + new_line + "\n"
+
+              return f"{start}{body}{end}"
+
+            txt = re.sub(rf"{re.escape(start)}(.*?){re.escape(end)}", repl, txt, flags=re.S)
+
+          readme.write_text(txt, encoding="utf-8")
+          PY
+
+      - name: Commit & push changes
+        run: |
+          set -euo pipefail
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add README.md
+          git commit -m "docs(readme): update Kick status badge" || echo "No README changes"
+          git push origin HEAD:main || true
