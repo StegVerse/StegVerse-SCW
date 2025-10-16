@@ -7,14 +7,13 @@ on:
       - ".github/workflows/**"
       - ".github/badges/**"
       - "README.md"
-  # optional daily keep-fresh
   schedule:
-    - cron: "17 9 * * *"
+    - cron: "17 9 * * *"  # daily check (09:17 UTC)
   workflow_dispatch: {}
 
 permissions:
   contents: read
-  actions: write   # needed to dispatch another workflow
+  actions: write
 
 jobs:
   nudge:
@@ -31,8 +30,7 @@ jobs:
                 workflow_id: "workflows-badges.yml",
                 ref: context.ref.replace("refs/heads/","") || "main"
               });
-              core.info("Dispatched workflows-badges.yml ✅");
+              core.info("✅ Dispatched workflows-badges.yml successfully");
             } catch (e) {
-              // Graceful on common cases (e.g., missing workflow_dispatch)
-              core.warning(`Could not dispatch workflows-badges.yml: ${e.message}`);
+              core.warning(`⚠️ Could not dispatch workflows-badges.yml: ${e.message}`);
             }
