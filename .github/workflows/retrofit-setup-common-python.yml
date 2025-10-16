@@ -6,8 +6,7 @@ on:
     branches: [ "main" ]
     paths:
       - ".github/workflows/**"
-      - ".github/actions/**"
-      - "scripts/**"
+      - ".github/actions/setup-common-python/**"
 
 permissions:
   contents: write
@@ -15,162 +14,226 @@ permissions:
 jobs:
   retrofit:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
-      - name: Setup Python (for this retrofit script)
+      - name: Setup Python (for this retrofit task)
         uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with:
+          python-version: "3.11"
 
-      - name: Install PyYAML
-        run: python -m pip install --upgrade pip pyyaml
-
-      - name: Ensure composite action exists / is updated
-        shell: bash
+      - name: Ensure composite action exists/updated
         run: |
           set -euo pipefail
           mkdir -p .github/actions/setup-common-python
-          cat > .github/actions/setup-common-python/action.yml <<'YAML'
+          cat > .github/actions/setup-common-python/action.yml <<'YML'
           name: Setup common Python
-          description: Standard Python setup with optional caching + extra packages
+          description: Standard Python setup with optional caching and extra packages
           inputs:
             python-version:
+              description: Python version (semver)
               required: false
               default: "3.11"
             cache:
+              description: Cache backend (pip/false)
               required: false
               default: "pip"
             extra-packages:
+              description: Extra packages to pip install (space-separated)
               required: false
               default: ""
           runs:
             using: "composite"
             steps:
-              - uses: actions/setup-python@v5
+              - name: Setup Python
+                uses: actions/setup-python@v5
                 with:
                   python-version: ${{ inputs.python-version }}
                   cache: ${{ inputs.cache }}
-              - shell: bash
+              - name: Upgrade pip and install extras
+                shell: bash
                 run: |
                   set -euo pipefail
                   python -m pip install --upgrade pip
                   if [ -n "${{ inputs.extra-packages }}" ]; then
                     pip install ${{ inputs.extra-packages }}
                   fi
-                  python - <<'PY'
-                  try:
-                      import yaml  # PyYAML sanity check
-                      print("✅ PyYAML is present.")
-                  except Exception as e:
-                      print("⚠️  Installing PyYAML…", e)
-                      import subprocess, sys
-                      subprocess.check_call([sys.executable, "-m", "pip", "install", "PyYAML"])
-                      import yaml  # retry
-                      print("✅ PyYAML installed.")
-                  PY
-          YAML
+          YML
 
-      - name: Retrofit workflows to use composite (idempotent)
-        id: retrofit
+      - name: Install PyYAML for scanner
         run: |
+          python -m pip install --upgrade pip pyyaml
+
+      - name: Scan & retrofit workflows
+        id: scan
+        run: |
+          set -euo pipefail
           python - <<'PY'
-          import re, yaml, sys, json
-          from pathlib import Path
+          import yaml, pathlib, sys, json, copy
 
-          WF_DIR = Path(".github/workflows")
-          changed = []
+          WF_DIR   = pathlib.Path(".github/workflows")
+          THIS_WF  = "retrofit-setup-common-python.yml"
+          CHANGED  = []
+          UPDATED  = []
+          SKIPPED  = []
+          BROKEN   = []
 
-          # Heuristics: a job "uses Python" if any step runs python/pip or embeds python heredoc
-          def job_uses_python(job):
-            steps = (job or {}).get("steps", [])
-            for st in steps or []:
-              # A "uses:" step is fine; we're looking for shell runs that need Python
-              run = (st or {}).get("run") or (st or {}).get("shell") or ""
-              if not isinstance(run, str):
-                continue
-              s = run.lower()
-              if (
-                "python -m pip" in s
-                or re.search(r"\bpython(\s|-)<<", s)
-                or re.search(r"\bpip(\s|$)", s)
-                or "pyyaml" in s
-                or "yaml" in s and "import" in s
-              ):
-                return True
-            return False
-
-          def has_setup_common_step(job):
-            steps = (job or {}).get("steps", [])
-            for st in steps or []:
-              if isinstance(st, dict) and str(st.get("uses","")).endswith(".github/actions/setup-common-python"):
-                return True
-            return False
-
-          def ensure_setup_step(job):
-            if has_setup_common_step(job):
-              return False
-            # Insert at the beginning of steps (or create steps if missing)
-            if "steps" not in job or not job["steps"]:
-              job["steps"] = []
-            job["steps"].insert(0, {
+          # Step to inject
+          INJECT_STEP = {
               "name": "Setup common Python",
-              "uses": ".github/actions/setup-common-python",
+              "uses": "./.github/actions/setup-common-python",
               "with": {
-                "python-version": "3.11",
-                "cache": "pip",
-                "extra-packages": ""
+                  "python-version": "3.11",
+                  "cache": "pip",
+                  "extra-packages": ""
               }
-            })
-            return True
+          }
+
+          def is_reusable_only(on_val):
+              if isinstance(on_val, dict):
+                  return set(on_val.keys()) == {"workflow_call"}
+              return False
+
+          def job_uses_python(job):
+              # Heuristics: if a job has steps that use setup-python OR runs python explicitly
+              steps = job.get("steps") or []
+              for st in steps:
+                  if isinstance(st, dict):
+                      uses = st.get("uses", "")
+                      run  = st.get("run", "")
+                      if isinstance(uses, str) and ("actions/setup-python" in uses or "./.github/actions/setup-common-python" in uses):
+                          return True
+                      if isinstance(run, str) and ("python " in run or "python3 " in run or "pip " in run):
+                          return True
+              # Also if the job has a `strategy.matrix.python-version`, assume python
+              strat = job.get("strategy", {}).get("matrix", {})
+              if isinstance(strat, dict) and "python-version" in strat:
+                  return True
+              return False
+
+          def already_has_common(job):
+              steps = job.get("steps") or []
+              for st in steps:
+                  if isinstance(st, dict) and isinstance(st.get("uses"), str):
+                      if st["uses"].strip().startswith("./.github/actions/setup-common-python"):
+                          return True
+                  if isinstance(st, dict) and isinstance(st.get("name"), str):
+                      if st["name"].strip().lower() == "setup common python":
+                          return True
+              return False
+
+          def where_to_insert(steps):
+              """
+              Put just after checkout if present, otherwise as the first step.
+              """
+              if not steps:
+                  return 0
+              for i, st in enumerate(steps):
+                  if isinstance(st, dict) and isinstance(st.get("uses"), str):
+                      if st["uses"].startswith("actions/checkout@"):
+                          return i + 1
+              return 0
 
           for p in sorted(WF_DIR.glob("*.y*ml")):
-            text = p.read_text(encoding="utf-8", errors="ignore")
-            try:
-              data = yaml.safe_load(text)
-            except Exception:
-              # Skip broken YAML — other repairers will handle those
-              continue
-            if not isinstance(data, dict):
-              continue
+              if p.name == THIS_WF:
+                  SKIPPED.append(p.name)
+                  continue
 
-            on = data.get("on")
-            # skip reusable-only
-            if isinstance(on, dict) and set(on.keys()) == {"workflow_call"}:
-              continue
+              try:
+                  data = yaml.safe_load(p.read_text(encoding="utf-8"))
+              except Exception as e:
+                  BROKEN.append(f"{p.name}  — parse failed: {type(e).__name__}")
+                  continue
 
-            jobs = data.get("jobs")
-            if not isinstance(jobs, dict):
-              continue
+              if not isinstance(data, dict):
+                  SKIPPED.append(f"{p.name}  — not a mapping")
+                  continue
 
-            touched = False
-            for jname, job in jobs.items():
-              if isinstance(job, dict) and job_uses_python(job):
-                if ensure_setup_step(job):
-                  touched = True
+              if is_reusable_only(data.get("on")):
+                  SKIPPED.append(f"{p.name}  — reusable-only")
+                  continue
 
-            if touched:
-              # preserve key order, minimal formatting
-              new_text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-              if new_text != text:
-                p.write_text(new_text, encoding="utf-8")
-                changed.append(str(p))
+              jobs = data.get("jobs")
+              if not isinstance(jobs, dict) or not jobs:
+                  SKIPPED.append(f"{p.name}  — no jobs")
+                  continue
 
-          print(json.dumps({"changed": changed}, indent=2))
-          (Path(".github")/"autopatch_out").mkdir(parents=True, exist_ok=True)
-          (Path(".github")/"autopatch_out"/"RETROFIT_SETUP_COMMON_CHANGED.txt").write_text("\n".join(changed), encoding="utf-8")
+              changed = False
+              for jname, job in jobs.items():
+                  if not isinstance(job, dict):
+                      continue
+                  if not job_uses_python(job):
+                      # no python usage detected, skip this job
+                      continue
+                  if already_has_common(job):
+                      continue
+                  steps = job.get("steps")
+                  if not isinstance(steps, list):
+                      continue
+                  idx = where_to_insert(steps)
+                  steps.insert(idx, copy.deepcopy(INJECT_STEP))
+                  job["steps"] = steps
+                  changed = True
+
+              if changed:
+                  p.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+                  CHANGED.append(p.name)
+                  UPDATED.append(p.name)
+              else:
+                  SKIPPED.append(f"{p.name}")
+
+          result = {
+              "updated": UPDATED,
+              "skipped": SKIPPED,
+              "broken": BROKEN
+          }
+          print(json.dumps(result, indent=2))
+          # surface counts for later steps
+          print(f"::set-output name=updated_count::{len(UPDATED)}")
+          print(f"::set-output name=skipped_count::{len(SKIPPED)}")
+          print(f"::set-output name=broken_count::{len(BROKEN)}")
+          # also write a markdown summary block
+          md = []
+          md.append("### Retrofit summary")
+          md.append(f"- ✅ updated: **{len(UPDATED)}**")
+          md.append(f"- ⚠️ skipped: **{len(SKIPPED)}**")
+          md.append(f"- ❌ broken (parse): **{len(BROKEN)}**")
+          if UPDATED:
+              md.append("\n**Updated files**")
+              for n in UPDATED: md.append(f"- `{n}`")
+          if SKIPPED:
+              md.append("\n**Skipped files**")
+              for n in SKIPPED: md.append(f"- `{n}`")
+          if BROKEN:
+              md.append("\n**Broken files**")
+              for n in BROKEN: md.append(f"- `{n}`")
+          pathlib.Path("retrofit_summary.md").write_text("\n".join(md) + "\n", encoding="utf-8")
           PY
 
       - name: Commit changes (if any)
         run: |
           set -euo pipefail
-          if [ -s ".github/autopatch_out/RETROFIT_SETUP_COMMON_CHANGED.txt" ]; then
+          if ! git diff --quiet -- .github/workflows .github/actions/setup-common-python/action.yml; then
             git config user.name  "StegVerse Bot"
             git config user.email "bot@stegverse.org"
             git add .github/workflows .github/actions/setup-common-python/action.yml
-            git commit -m "chore(workflows): retrofit jobs to use .github/actions/setup-common-python"
+            git commit -m "chore(workflows): retrofit setup-common-python into Python jobs"
             git push origin HEAD:main
           else
-            echo "No workflow retrofits needed."
+            echo "No workflow changes to commit."
+          fi
+
+      - name: Post-run verification summary
+        run: |
+          set -euo pipefail
+          if [ -f retrofit_summary.md ]; then
+            echo "## Setup-common-python retrofit" >> "$GITHUB_STEP_SUMMARY"
+            cat retrofit_summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Setup-common-python retrofit" >> "$GITHUB_STEP_SUMMARY"
+            echo "_No summary file produced._" >> "$GITHUB_STEP_SUMMARY"
           fi
