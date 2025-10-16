@@ -1,3 +1,5 @@
 version: 1
 patches:
   - .github/autopatch/patches/workflows-badge-wire.patch.yml
+    - id: workflows-badges-legend
+      path: .github/autopatch/workflows-badges-legend.patch.yml
