@@ -1,0 +1,46 @@
+name: README Nudge - YAML Bulk Autofix
+run-name: "README Nudge: YAML Bulk Autofix 🧩"
+
+on:
+  workflow_dispatch: {}
+  workflow_run:
+    workflows: ["Kick YAML Bulk Autofix"]
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update README badge timestamp
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="README.md"
+          ts="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          badge_line="![Last YAML Bulk Autofix](https://img.shields.io/badge/Last_YAML_Autofix-${ts// /%20}-blue?style=flat-square)"
+
+          # If badge already exists, replace it; otherwise, append under main heading
+          if grep -q "Last_YAML_Autofix" "$file"; then
+            sed -i.bak -E "s|!\[Last YAML Bulk Autofix\]\([^)]*\)|${badge_line}|" "$file"
+          else
+            awk -v badge="$badge_line" '
+              NR==1 {print; print badge; next}1
+            ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+          fi
+
+      - name: Commit & push changes
+        run: |
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add README.md
+          git commit -m "docs(readme): update YAML Bulk Autofix timestamp" || echo "No README changes"
+          git push origin HEAD:main || true
