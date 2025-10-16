@@ -1,0 +1,83 @@
+name: QuickKick Sweep
+
+on:
+  workflow_dispatch: {}
+
+# Uses the repo GITHUB_TOKEN. Make sure repo Settings → Actions → Workflow permissions
+# is set to “Read and write” and “Allow GitHub Actions to create and approve PRs”.
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kick a set of workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          REF:  ${{ github.ref_name }}
+          # List only workflows that have `on: workflow_dispatch`
+          TARGETS: |
+            kick-autopatch.yml
+            kick-yaml-bulk-autofix.yml
+            workflows-console-table.yml
+            workflows-badges.yml
+            workflows-badges-nudge.yml
+            validate-setup-common-python.yml
+        run: |
+          set -euo pipefail
+          : > results.tsv
+
+          while IFS= read -r wf; do
+            wf="$(echo "$wf" | xargs)"; [ -z "$wf" ] && continue
+            url="https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${wf}/dispatches"
+
+            # Attempt the dispatch
+            status=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${url}" \
+              -d "{\"ref\":\"${REF}\"}")
+
+            note=""
+            case "$status" in
+              204) result="OK";;
+              422) result="NO_DISPATCH"; note="Missing or malformed 'workflow_dispatch' trigger";;
+              403) result="DENIED"; note="Resource not accessible by integration (check repo Actions permissions)";;
+              *)   result="ERROR"; note="HTTP ${status}: $(tr -d '\n' </tmp/resp.txt | cut -c1-180)";;
+            esac
+
+            printf "%s\t%s\t%s\n" "$wf" "$result" "$note" >> results.tsv
+          done <<< "$TARGETS"
+
+          # Write a nice summary table
+          {
+            echo "## QuickKick Sweep"
+            echo ""
+            echo "| Workflow | Result | Note |"
+            echo "|---|---|---|"
+            while IFS=$'\t' read -r a b c; do
+              echo "| \`$a\` | $b | ${c:-} |"
+            done < results.tsv
+            echo ""
+            echo "> Tip: If you see **DENIED**, enable **Settings → Actions → Workflow permissions** → *Read & write* and allow Actions to make changes."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Optional: ping Ops Console builder
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          REF:  ${{ github.ref_name }}
+        run: |
+          # Best-effort nudge; ignore failures.
+          curl -sS -o /dev/null -w "%{http_code}\n" \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/workflows-console-table.yml/dispatches" \
+            -d "{\"ref\":\"${REF}\"}" || true
