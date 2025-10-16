@@ -1,0 +1,27 @@
+name: Kick: YAML Bulk Autofix
+on:
+  workflow_dispatch: {}   # button in Actions
+
+permissions:
+  contents: write
+
+jobs:
+  kick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Drop trigger file and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          ts="$(date -u +%Y%m%dT%H%M%SZ)"
+          mkdir -p .github/trigger/yaml-bulk-autofix
+          echo "go $ts" > ".github/trigger/yaml-bulk-autofix/ping-${ts}"
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/trigger/yaml-bulk-autofix/
+          git commit -m "chore(kick): YAML bulk autofix @ ${ts}" || exit 0
+          git push origin HEAD:main || true
