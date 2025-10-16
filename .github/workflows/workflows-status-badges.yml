@@ -1,0 +1,175 @@
+name: Workflows Status Badges
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+      - ".github/docs/**"
+      - "README.md"
+      - "scripts/autodocs_generate.py"
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip pyyaml
+
+      - name: Scan workflows and render badge + docs
+        id: scan
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import yaml, pathlib, datetime, json, re
+
+          ROOT   = pathlib.Path(".")
+          WF_DIR = ROOT/".github/workflows"
+          BADGE  = ROOT/".github/badges/workflows.svg"
+          DOC    = ROOT/".github/docs/WORKFLOWS_STATUS.md"
+          README = ROOT/"README.md"
+
+          BADGE.parent.mkdir(parents=True, exist_ok=True)
+          DOC.parent.mkdir(parents=True, exist_ok=True)
+
+          def load_yaml(p: pathlib.Path):
+            try:
+              return yaml.safe_load(p.read_text(encoding="utf-8"))
+            except Exception as e:
+              return e  # mark as broken
+
+          def has_dispatch(d):
+            if not isinstance(d, dict): return False
+            on = d.get("on")
+            if on is None: return False
+            if isinstance(on, str): 
+              return on == "workflow_dispatch"
+            if isinstance(on, list):
+              return "workflow_dispatch" in on
+            if isinstance(on, dict):
+              # reusable-only → ignore for “dispatch” purposes
+              if set(on.keys()) == {"workflow_call"}:
+                return False
+              return "workflow_dispatch" in on
+            return False
+
+          rows = []
+          ok = nodisp = broken = 0
+          for p in sorted(WF_DIR.glob("*.y*ml")):
+            data = load_yaml(p)
+            state = ""
+            note  = ""
+            if isinstance(data, Exception):
+              broken += 1
+              state = "❌ broken"
+              note = type(data).__name__
+            else:
+              if has_dispatch(data):
+                ok += 1
+                state = "✅ ok"
+              else:
+                nodisp += 1
+                state = "➖ no-dispatch"
+            rows.append((p.name, state, note))
+
+          total = ok + nodisp + broken
+          now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+          # --- badge svg
+          def svg_badge(label, value, color):
+            label_w = 6 * len(label) + 10
+            val_w   = 6 * len(value) + 10
+            tot_w   = label_w + val_w
+            return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{tot_w}" height="20" role="img" aria-label="{label}: {value}">
+  <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+  <mask id="m"><rect width="{tot_w}" height="20" rx="3" fill="#fff"/></mask>
+  <g mask="url(#m)">
+    <rect width="{label_w}" height="20" fill="#555"/>
+    <rect x="{label_w}" width="{val_w}" height="20" fill="{color}"/>
+    <rect width="{tot_w}" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="{label_w/2:.1f}" y="14">{label}</text>
+    <text x="{label_w + val_w/2:.1f}" y="14">{value}</text>
+  </g>
+</svg>'''
+
+          # green if none broken; amber if any nodisp; red if any broken
+          color = "#4c1" if broken == 0 and nodisp == 0 else ("#dfb317" if broken == 0 else "#e05d44")
+          BADGE.write_text(svg_badge("workflows", f"{ok}/{total}", color), encoding="utf-8")
+
+          # --- docs
+          lines = []
+          lines += [f"# Workflows Status", "", f"_Last updated: **{now}**_", ""]
+          lines += [f"- ✅ OK (has `workflow_dispatch`): **{ok}**",
+                    f"- ➖ Valid but no dispatch button: **{nodisp}**",
+                    f"- ❌ Broken YAML: **{broken}**", ""]
+          lines += ["| Workflow | State | Note |","|---|---|---|"]
+          for n, s, note in rows:
+            lines.append(f"| `{n}` | {s} | {note} |")
+          DOC.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          # --- README block
+          txt = README.read_text(encoding="utf-8") if README.exists() else "# Repository\n\n"
+          start = "<!-- workflows:status -->"
+          end   = "<!-- /workflows:status -->"
+          block = (
+            f"{start}\n"
+            f"[![workflows](.github/badges/workflows.svg)](.github/docs/WORKFLOWS_STATUS.md)\n\n"
+            f"{ok}/{total} OK · {nodisp} no-dispatch · {broken} broken — _{now}_\n"
+            f"{end}"
+          )
+          if start in txt and end in txt:
+            new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}", block, txt, flags=re.S)
+          else:
+            new = txt.rstrip() + "\n\n## Workflows Status\n\n" + block + "\n"
+          if new != txt:
+            README.write_text(new, encoding="utf-8")
+
+          print(json.dumps({"ok":ok,"nodisp":nodisp,"broken":broken,"total":total}, indent=2))
+          PY
+
+      - name: Post-run: AutoDocs (if available)
+        run: |
+          set -euo pipefail
+          if [ -f "scripts/autodocs_generate.py" ]; then
+            echo "[AutoDocs] Running scripts/autodocs_generate.py"
+            python scripts/autodocs_generate.py || true
+          else
+            echo "[AutoDocs] Skipped (scripts/autodocs_generate.py not found)"
+          fi
+
+      - name: Commit badge + docs (if changed)
+        run: |
+          set -euo pipefail
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/badges/workflows.svg .github/docs/WORKFLOWS_STATUS.md README.md || true
+          if ! git diff --cached --quiet; then
+            git commit -m "docs(badges): update workflows status badge and table"
+            git push origin HEAD:main || true
+          else
+            echo "No changes to commit."
+          fi
+
+      - name: Upload artifacts (badge + doc)
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflows-status-${{ github.run_id }}
+          path: |
+            .github/badges/workflows.svg
+            .github/docs/WORKFLOWS_STATUS.md
+          if-no-files-found: warn
