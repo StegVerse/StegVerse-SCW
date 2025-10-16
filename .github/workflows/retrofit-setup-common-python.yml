@@ -1,0 +1,176 @@
+name: Retrofit: setup-common-python
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - "scripts/**"
+
+permissions:
+  contents: write
+
+jobs:
+  retrofit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python (for this retrofit script)
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Install PyYAML
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Ensure composite action exists / is updated
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .github/actions/setup-common-python
+          cat > .github/actions/setup-common-python/action.yml <<'YAML'
+          name: Setup common Python
+          description: Standard Python setup with optional caching + extra packages
+          inputs:
+            python-version:
+              required: false
+              default: "3.11"
+            cache:
+              required: false
+              default: "pip"
+            extra-packages:
+              required: false
+              default: ""
+          runs:
+            using: "composite"
+            steps:
+              - uses: actions/setup-python@v5
+                with:
+                  python-version: ${{ inputs.python-version }}
+                  cache: ${{ inputs.cache }}
+              - shell: bash
+                run: |
+                  set -euo pipefail
+                  python -m pip install --upgrade pip
+                  if [ -n "${{ inputs.extra-packages }}" ]; then
+                    pip install ${{ inputs.extra-packages }}
+                  fi
+                  python - <<'PY'
+                  try:
+                      import yaml  # PyYAML sanity check
+                      print("✅ PyYAML is present.")
+                  except Exception as e:
+                      print("⚠️  Installing PyYAML…", e)
+                      import subprocess, sys
+                      subprocess.check_call([sys.executable, "-m", "pip", "install", "PyYAML"])
+                      import yaml  # retry
+                      print("✅ PyYAML installed.")
+                  PY
+          YAML
+
+      - name: Retrofit workflows to use composite (idempotent)
+        id: retrofit
+        run: |
+          python - <<'PY'
+          import re, yaml, sys, json
+          from pathlib import Path
+
+          WF_DIR = Path(".github/workflows")
+          changed = []
+
+          # Heuristics: a job "uses Python" if any step runs python/pip or embeds python heredoc
+          def job_uses_python(job):
+            steps = (job or {}).get("steps", [])
+            for st in steps or []:
+              # A "uses:" step is fine; we're looking for shell runs that need Python
+              run = (st or {}).get("run") or (st or {}).get("shell") or ""
+              if not isinstance(run, str):
+                continue
+              s = run.lower()
+              if (
+                "python -m pip" in s
+                or re.search(r"\bpython(\s|-)<<", s)
+                or re.search(r"\bpip(\s|$)", s)
+                or "pyyaml" in s
+                or "yaml" in s and "import" in s
+              ):
+                return True
+            return False
+
+          def has_setup_common_step(job):
+            steps = (job or {}).get("steps", [])
+            for st in steps or []:
+              if isinstance(st, dict) and str(st.get("uses","")).endswith(".github/actions/setup-common-python"):
+                return True
+            return False
+
+          def ensure_setup_step(job):
+            if has_setup_common_step(job):
+              return False
+            # Insert at the beginning of steps (or create steps if missing)
+            if "steps" not in job or not job["steps"]:
+              job["steps"] = []
+            job["steps"].insert(0, {
+              "name": "Setup common Python",
+              "uses": ".github/actions/setup-common-python",
+              "with": {
+                "python-version": "3.11",
+                "cache": "pip",
+                "extra-packages": ""
+              }
+            })
+            return True
+
+          for p in sorted(WF_DIR.glob("*.y*ml")):
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            try:
+              data = yaml.safe_load(text)
+            except Exception:
+              # Skip broken YAML — other repairers will handle those
+              continue
+            if not isinstance(data, dict):
+              continue
+
+            on = data.get("on")
+            # skip reusable-only
+            if isinstance(on, dict) and set(on.keys()) == {"workflow_call"}:
+              continue
+
+            jobs = data.get("jobs")
+            if not isinstance(jobs, dict):
+              continue
+
+            touched = False
+            for jname, job in jobs.items():
+              if isinstance(job, dict) and job_uses_python(job):
+                if ensure_setup_step(job):
+                  touched = True
+
+            if touched:
+              # preserve key order, minimal formatting
+              new_text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+              if new_text != text:
+                p.write_text(new_text, encoding="utf-8")
+                changed.append(str(p))
+
+          print(json.dumps({"changed": changed}, indent=2))
+          (Path(".github")/"autopatch_out").mkdir(parents=True, exist_ok=True)
+          (Path(".github")/"autopatch_out"/"RETROFIT_SETUP_COMMON_CHANGED.txt").write_text("\n".join(changed), encoding="utf-8")
+          PY
+
+      - name: Commit changes (if any)
+        run: |
+          set -euo pipefail
+          if [ -s ".github/autopatch_out/RETROFIT_SETUP_COMMON_CHANGED.txt" ]; then
+            git config user.name  "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git add .github/workflows .github/actions/setup-common-python/action.yml
+            git commit -m "chore(workflows): retrofit jobs to use .github/actions/setup-common-python"
+            git push origin HEAD:main
+          else
+            echo "No workflow retrofits needed."
+          fi
