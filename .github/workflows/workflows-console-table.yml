@@ -1,0 +1,103 @@
+name: Workflows Console Table
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+      - "README.md"
+
+permissions:
+  contents: write
+
+jobs:
+  build-table:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Build table & update README
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib, yaml, datetime, re
+
+          ROOT = pathlib.Path(".")
+          WFD  = ROOT/".github/workflows"
+          README = ROOT/"README.md"
+
+          def load(p):
+            try:
+              return yaml.safe_load(p.read_text(encoding="utf-8"))
+            except Exception as e:
+              return e
+
+          def has_dispatch(d):
+            if not isinstance(d, dict): return False
+            on = d.get("on")
+            if on is None: return False
+            if isinstance(on, str): return on == "workflow_dispatch"
+            if isinstance(on, list): return "workflow_dispatch" in on
+            if isinstance(on, dict):
+              if set(on.keys()) == {"workflow_call"}: return False
+              return "workflow_dispatch" in on
+            return False
+
+          rows = []
+          broken = 0
+          for p in sorted(WFD.glob("*.y*ml")):
+            data = load(p)
+            state = "❌ broken" if isinstance(data, Exception) else ("✅ ok" if has_dispatch(data) else "➖ no-dispatch")
+            if isinstance(data, Exception): broken += 1
+            # Links:
+            actions_link = f"./actions/workflows/{p.name}"
+            view_link    = f".github/workflows/{p.name}"
+            run_link     = f"./issues/new?template=run-workflow.yml&title=Run%20workflow:%20{p.name}"
+            rows.append((p.name, state, actions_link, view_link, run_link))
+
+          now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+          table = ["| Workflow | State | Actions |",
+                   "|---|---|---|"]
+          for name, state, actions_link, view_link, run_link in rows:
+            actions_cell = f"[View]({actions_link}) · [File]({view_link}) · [▶︎ Run]({run_link})"
+            table.append(f"| `{name}` | {state} | {actions_cell} |")
+          block = "\n".join(table) + f"\n\n_Last updated: **{now}**_"
+
+          start = "<!-- ops-console:start -->"
+          end   = "<!-- ops-console:end -->"
+
+          if README.exists():
+            txt = README.read_text(encoding="utf-8")
+          else:
+            txt = "# Repository\n\n"
+
+          # Ensure section header & markers
+          block_all = f"{start}\n{block}\n{end}"
+          if start in txt and end in txt:
+            new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}", block_all, txt, flags=re.S)
+          else:
+            new = txt.rstrip() + "\n\n## Ops Console\n\n" + block_all + "\n"
+
+          if new != txt:
+            README.write_text(new, encoding="utf-8")
+            print("UPDATED: README Ops Console table")
+          else:
+            print("NO-CHANGE: README Ops Console table")
+          PY
+
+      - name: Commit (if changed)
+        run: |
+          set -euo pipefail
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add README.md
+          if ! git diff --cached --quiet; then
+            git commit -m "docs(ops-console): auto-update workflows table with ▶︎ Run links"
+            git push origin HEAD:main
+          else
+            echo "No changes to commit."
+          fi
