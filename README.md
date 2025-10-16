@@ -5,6 +5,47 @@
 ...
 <!-- /workflows:status -->
 
+## Ops Console
+
+<!-- ops-console:table -->
+See the full table in [.github/docs/WORKFLOWS_CONSOLE.md](.github/docs/WORKFLOWS_CONSOLE.md).
+
+| Workflow | State | Actions |
+|---|---|---|
+| `AutoPatch.yml` | ➖ no-dispatch | [View](./actions/workflows/AutoPatch.yml) · [File](.github/workflows/AutoPatch.yml) · [▶ Run](./actions/workflows/AutoPatch.yml) |
+| `actions-permission-check.yml` | ➖ no-dispatch | [View](./actions/workflows/actions-permission-check.yml) · [File](.github/workflows/actions-permission-check.yml) · [▶ Run](./actions/workflows/actions-permission-check.yml) |
+| `auto_patch.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/auto_patch.yml) · [File](.github/workflows/auto_patch.yml) · [▶ Run](./actions/workflows/auto_patch.yml) |
+| `autodocs-on-demand.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/autodocs-on-demand.yml) · [File](.github/workflows/autodocs-on-demand.yml) · [▶ Run](./actions/workflows/autodocs-on-demand.yml) |
+| `autopatch-inspect.yml` | ➖ no-dispatch | [View](./actions/workflows/autopatch-inspect.yml) · [File](.github/workflows/autopatch-inspect.yml) · [▶ Run](./actions/workflows/autopatch-inspect.yml) |
+| `autopatch-reindex.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/autopatch-reindex.yml) · [File](.github/workflows/autopatch-reindex.yml) · [▶ Run](./actions/workflows/autopatch-reindex.yml) |
+| `autopatch-repotree-and-supercheck.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/autopatch-repotree-and-supercheck.yml) · [File](.github/workflows/autopatch-repotree-and-supercheck.yml) · [▶ Run](./actions/workflows/autopatch-repotree-and-supercheck.yml) |
+| `autopatch_apply.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/autopatch_apply.yml) · [File](.github/workflows/autopatch_apply.yml) · [▶ Run](./actions/workflows/autopatch_apply.yml) |
+| `autopatch_deferred.yml` | ➖ no-dispatch | [View](./actions/workflows/autopatch_deferred.yml) · [File](.github/workflows/autopatch_deferred.yml) · [▶ Run](./actions/workflows/autopatch_deferred.yml) |
+| `autopatch_dryrun.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/autopatch_dryrun.yml) · [File](.github/workflows/autopatch_dryrun.yml) · [▶ Run](./actions/workflows/autopatch_dryrun.yml) |
+| `backup_triggers.yml` | ➖ no-dispatch | [View](./actions/workflows/backup_triggers.yml) · [File](.github/workflows/backup_triggers.yml) · [▶ Run](./actions/workflows/backup_triggers.yml) |
+| `ci.yml` | ➖ no-dispatch | [View](./actions/workflows/ci.yml) · [File](.github/workflows/ci.yml) · [▶ Run](./actions/workflows/ci.yml) |
+| `codeql.yml` | ➖ no-dispatch | [View](./actions/workflows/codeql.yml) · [File](.github/workflows/codeql.yml) · [▶ Run](./actions/workflows/codeql.yml) |
+| `deploy_multi.yml` | ➖ no-dispatch | [View](./actions/workflows/deploy_multi.yml) · [File](.github/workflows/deploy_multi.yml) · [▶ Run](./actions/workflows/deploy_multi.yml) |
+| `direct_apply_fixes.yml` | ➖ no-dispatch | [View](./actions/workflows/direct_apply_fixes.yml) · [File](.github/workflows/direct_apply_fixes.yml) · [▶ Run](./actions/workflows/direct_apply_fixes.yml) |
+| `dispatch-proxy.yml` | ➖ no-dispatch | [View](./actions/workflows/dispatch-proxy.yml) · [File](.github/workflows/dispatch-proxy.yml) · [▶ Run](./actions/workflows/dispatch-proxy.yml) |
+| `dispatch-workflow.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/dispatch-workflow.yml) · [File](.github/workflows/dispatch-workflow.yml) · [▶ Run](./actions/workflows/dispatch-workflow.yml) |
+| `docs-suite-on-complete.yml` | ➖ no-dispatch | [View](./actions/workflows/docs-suite-on-complete.yml) · [File](.github/workflows/docs-suite-on-complete.yml) · [▶ Run](./actions/workflows/docs-suite-on-complete.yml) |
+| `docs_suite_apply.yml` | ➖ no-dispatch | [View](./actions/workflows/docs_suite_apply.yml) · [File](.github/workflows/docs_suite_apply.yml) · [▶ Run](./actions/workflows/docs_suite_apply.yml) |
+| `e2e_worker_check.yml` | ➖ no-dispatch | [View](./actions/workflows/e2e_worker_check.yml) · [File](.github/workflows/e2e_worker_check.yml) · [▶ Run](./actions/workflows/e2e_worker_check.yml) |
+| `emergency_orchestrator.yml` | ➖ no-dispatch | [View](./actions/workflows/emergency_orchestrator.yml) · [File](.github/workflows/emergency_orchestrator.yml) · [▶ Run](./actions/workflows/emergency_orchestrator.yml) |
+| `emergency_orchestrator_lite.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/emergency_orchestrator_lite.yml) · [File](.github/workflows/emergency_orchestrator_lite.yml) · [▶ Run](./actions/workflows/emergency_orchestrator_lite.yml) |
+| `enqueue-test.yml` | ➖ no-dispatch | [View](./actions/workflows/enqueue-test.yml) · [File](.github/workflows/enqueue-test.yml) · [▶ Run](./actions/workflows/enqueue-test.yml) |
+| `export-hcb-nightly.yml` | ➖ no-dispatch | [View](./actions/workflows/export-hcb-nightly.yml) · [File](.github/workflows/export-hcb-nightly.yml) · [▶ Run](./actions/workflows/export-hcb-nightly.yml) |
+| `export-hcb-weekly.yml` | ➖ no-dispatch | [View](./actions/workflows/export-hcb-weekly.yml) · [File](.github/workflows/export-hcb-weekly.yml) · [▶ Run](./actions/workflows/export-hcb-weekly.yml) |
+| `export-hcb.yml` | ➖ no-dispatch | [View](./actions/workflows/export-hcb.yml) · [File](.github/workflows/export-hcb.yml) · [▶ Run](./actions/workflows/export-hcb.yml) |
+| `fix-dispatch-triggers.yml` | ➖ no-dispatch | [View](./actions/workflows/fix-dispatch-triggers.yml) · [File](.github/workflows/fix-dispatch-triggers.yml) · [▶ Run](./actions/workflows/fix-dispatch-triggers.yml) |
+| `fix_it.yml` | ➖ no-dispatch | [View](./actions/workflows/fix_it.yml) · [File](.github/workflows/fix_it.yml) · [▶ Run](./actions/workflows/fix_it.yml) |
+| `force-setup-common-python.yml` | ➖ no-dispatch | [View](./actions/workflows/force-setup-common-python.yml) · [File](.github/workflows/force-setup-common-python.yml) · [▶ Run](./actions/workflows/force-setup-common-python.yml) |
+| `hcb-pipeline.yml` | ➖ no-dispatch | [View](./actions/workflows/hcb-pipeline.yml) · [File](.github/workflows/hcb-pipeline.yml) · [▶ Run](./actions/workflows/hcb-pipeline.yml) |
+
+_(Table truncated; see full console for all workflows.)_
+<!-- /ops-console:table -->
+
 Self-healing CI + runtime harness for StegTalk and related services.
 
 ## Quick Start (mobile-friendly)
