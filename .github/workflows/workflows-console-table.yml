@@ -11,10 +11,9 @@ on:
       - ".github/docs/**"
 
 permissions:
-  contents: write        # commit README/docs/badges
-  actions: write         # allow API dispatch
-  workflows: write       # (belt-and-suspenders) for workflow API
-
+  contents: write
+  actions: write   # ✅ This is the correct scope to allow workflow re-dispatch
+  
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
