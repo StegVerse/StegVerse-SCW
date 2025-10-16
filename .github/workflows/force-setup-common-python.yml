@@ -5,15 +5,19 @@ on:
 
 permissions:
   contents: write
-  workflows: write
 
 jobs:
   fix:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      workflows: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Write composite action (overwrite)
         shell: bash
