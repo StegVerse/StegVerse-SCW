@@ -170,5 +170,5 @@ add a token with the `workflow` scope and rerun `fix-dispatch-triggers.yml`.
 | `yaml_corrector.yml` | ❌ broken | [View](./actions/workflows/yaml_corrector.yml) · [File](.github/workflows/yaml_corrector.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20yaml_corrector.yml) |
 | `yaml_corrector_v2.yml` | ❌ broken | [View](./actions/workflows/yaml_corrector_v2.yml) · [File](.github/workflows/yaml_corrector_v2.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20yaml_corrector_v2.yml) |
 
-_Last updated: **2025-10-16 19:24 UTC**_
+_Last updated: **2025-10-16 19:28 UTC**_
 <!-- ops-console:end -->
