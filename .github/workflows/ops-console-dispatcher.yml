@@ -1,0 +1,87 @@
+name: Ops Console Dispatcher
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      workflow:
+        description: "Workflow file (e.g., autopatch-apply.yml)"
+        required: true
+      ref:
+        description: "Ref (default main)"
+        required: false
+        default: "main"
+      inputs_json:
+        description: "Inputs JSON"
+        required: false
+        default: "{}"
+
+permissions:
+  contents: read
+  issues: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Derive parameters
+        id: params
+        run: |
+          set -euo pipefail
+          MODE="${{ github.event_name }}"
+          WF=""; REF="main"; INPUTS="{}"
+
+          if [ "$MODE" = "issues" ]; then
+            BODY='${{ github.event.issue.body }}'
+            WF=$(printf "%s\n" "$BODY" | awk '/Select workflow to run/{getline; print}' | xargs)
+            REF_LINE=$(printf "%s\n" "$BODY" | awk '/Branch\/Ref/{getline; print}' | xargs)
+            [ -n "$REF_LINE" ] && REF="$REF_LINE"
+            INPUTS=$(printf "%s\n" "$BODY" | awk '/Inputs JSON/{getline; print}' | sed 's/^```//; s/```$//' | xargs)
+            [ -z "$INPUTS" ] && INPUTS="{}"
+          elif [ "$MODE" = "issue_comment" ]; then
+            CMT='${{ github.event.comment.body }}'
+            if echo "$CMT" | grep -qE '^/run[[:space:]]+'; then
+              WF=$(echo "$CMT" | sed -n 's#^/run[[:space:]]\+\([^[:space:]]\+\).*#\1#p')
+              JSON=$(echo "$CMT" | sed -n 's#^/run[[:space:]]\+[^[:space:]]\+[[:space:]]\+\(.*\)$#\1#p')
+              [ -n "$JSON" ] && INPUTS="$JSON" || INPUTS="{}"
+            fi
+          else
+            WF='${{ inputs.workflow }}'
+            REF='${{ inputs.ref }}'
+            INPUTS='${{ inputs.inputs_json }}'
+          fi
+
+          echo "wf=$WF" >> $GITHUB_OUTPUT
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+          echo "inputs=$INPUTS" >> $GITHUB_OUTPUT
+
+      - name: Validate
+        run: |
+          [ -n "${{ steps.params.outputs.wf }}" ] || { echo "::error::No workflow given"; exit 1; }
+          echo "Workflow: ${{ steps.params.outputs.wf }}"
+          echo "Ref     : ${{ steps.params.outputs.ref }}"
+          echo "Inputs  : ${{ steps.params.outputs.inputs }}"
+
+      - name: Dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          WF_FILE='${{ steps.params.outputs.wf }}'
+          REF='${{ steps.params.outputs.ref }}'
+          INPUTS='${{ steps.params.outputs.inputs }}'
+          OWNER_REPO='${{ github.repository }}'
+
+          WF_ID=$(gh api /repos/$OWNER_REPO/actions/workflows \
+                  --jq '.workflows[] | select(.path | endswith($ENV.WF_FILE)) | .id' | head -n1)
+          [ -n "$WF_ID" ] || { echo "::error::Workflow not found: $WF_FILE"; exit 1; }
+
+          gh api --method POST \
+            /repos/$OWNER_REPO/actions/workflows/$WF_ID/dispatches \
+            -f ref="$REF" -f inputs="$INPUTS"
+
+          echo "✅ Dispatched $WF_FILE on $REF"
