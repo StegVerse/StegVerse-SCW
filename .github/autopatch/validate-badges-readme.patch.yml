@@ -1,0 +1,79 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/workflows/validate-badges-readme.yml"
+        mode: "100644"
+        contents: |
+          name: Validate & Repair Badges Section
+
+          on:
+            workflow_dispatch: {}
+            schedule:
+              - cron: "0 9 * * 1"  # every Monday 9AM UTC
+
+          permissions:
+            contents: write
+
+          jobs:
+            validate:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.11"
+
+                - name: Validate badges + legend
+                  id: validate
+                  run: |
+                    set -euo pipefail
+                    python - <<'PY'
+                    import pathlib, re, sys
+
+                    ROOT = pathlib.Path(".")
+                    readme = ROOT / "README.md"
+
+                    if not readme.exists():
+                        print("::error::README.md missing")
+                        sys.exit(1)
+
+                    txt = readme.read_text(encoding="utf-8")
+
+                    required_snippets = {
+                        "badges_start": "<!-- workflows:badges:start -->",
+                        "badges_end": "<!-- workflows:badges:end -->",
+                        "legend_svg": ".github/badges/legend.svg",
+                        "topic_comment": "<!-- topic:badges -->"
+                    }
+
+                    missing = [k for k,v in required_snippets.items() if v not in txt]
+                    if missing:
+                        print(f"::warning::Missing elements: {', '.join(missing)} — will repair.")
+                        # simple repair
+                        if "legend_svg" in missing:
+                            txt += "\n\n<p align=\"left\"><img alt=\"Workflows Legend\" src=\".github/badges/legend.svg\" width=\"380\" /></p>\n"
+                        if "topic_comment" in missing:
+                            txt += "\n\n<!-- topic:badges -->\n"
+                        readme.write_text(txt, encoding="utf-8")
+                        print("README repaired.")
+                    else:
+                        print("✅ README badges section valid.")
+                    PY
+
+                - name: Commit & push if changes
+                  run: |
+                    set -euo pipefail
+                    git config user.name "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add README.md || true
+                    if ! git diff --cached --quiet; then
+                      git commit -m "docs(badges): auto-repair README badges section"
+                      git push origin HEAD:main
+                    else
+                      echo "No changes to commit."
+                    fi
+  - commit:
+      message: "chore(docs): add validate-badges-readme workflow"
