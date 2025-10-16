@@ -1,0 +1,89 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/badges/legend.svg"
+        mode: "100644"
+        contents: |
+          <svg xmlns="http://www.w3.org/2000/svg" width="380" height="20" role="img" aria-label="Legend: valid / invalid / fixing">
+            <linearGradient id="b" x2="0" y2="100%">
+              <stop offset="0" stop-color="#fff" stop-opacity=".7"/>
+              <stop offset=".1" stop-opacity=".1"/>
+              <stop offset=".9" stop-opacity=".3"/>
+              <stop offset="1" stop-opacity=".5"/>
+            </linearGradient>
+            <mask id="a">
+              <rect width="380" height="20" rx="3" fill="#fff"/>
+            </mask>
+            <g mask="url(#a)">
+              <rect width="60" height="20" fill="#555"/>
+              <rect x="60" width="110" height="20" fill="#2ea44f"/>
+              <rect x="170" width="110" height="20" fill="#dbab09"/>
+              <rect x="280" width="100" height="20" fill="#e5534b"/>
+              <rect width="380" height="20" fill="url(#b)"/>
+            </g>
+            <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">
+              <text x="30" y="15" fill="#010101" fill-opacity=".3">Legend</text>
+              <text x="30" y="14">Legend</text>
+
+              <text x="115" y="15" fill="#010101" fill-opacity=".3">✅ valid</text>
+              <text x="115" y="14">✅ valid</text>
+
+              <text x="225" y="15" fill="#010101" fill-opacity=".3">🛠️ fixing</text>
+              <text x="225" y="14">🛠️ fixing</text>
+
+              <text x="330" y="15" fill="#010101" fill-opacity=".3">⚠️ invalid</text>
+              <text x="330" y="14">⚠️ invalid</text>
+            </g>
+          </svg>
+
+      - path: ".github/autopatch/scripts/inject_badges_legend.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          import pathlib, re
+
+          ROOT = pathlib.Path(".")
+          README = ROOT / "README.md"
+          LEGEND_SNIPPET = "\n<p align=\"left\">\n  <img alt=\"Workflows Legend\" src=\".github/badges/legend.svg\" width=\"380\" />\n</p>\n"
+          BADGES_ANCHOR = r"<!-- workflows:badges:start -->"
+          FOOTER_TAG = "<!-- topic:badges -->"
+
+          if not README.exists():
+              raise SystemExit(0)
+
+          txt = README.read_text(encoding="utf-8")
+          orig = txt
+
+          # 1) Insert legend right after our badges block if anchor present
+          m = re.search(BADGES_ANCHOR, txt)
+          if m:
+              # find the end of the badges block, which ends at <!-- workflows:badges:end -->
+              end_m = re.search(r"<!-- workflows:badges:end -->", txt[m.end():])
+              if end_m:
+                  insert_at = m.end() + end_m.end()
+                  # if legend not already present, insert
+                  if ".github/badges/legend.svg" not in txt:
+                      txt = txt[:insert_at] + LEGEND_SNIPPET + txt[insert_at:]
+          else:
+              # If no anchor, append once at the end if not already there
+              if ".github/badges/legend.svg" not in txt:
+                  txt = txt.rstrip() + "\n\n" + LEGEND_SNIPPET
+
+          # 2) Ensure hidden topic footer comment exists exactly once
+          if FOOTER_TAG not in txt:
+              txt = txt.rstrip() + "\n\n" + FOOTER_TAG + "\n"
+
+          if txt != orig:
+              README.write_text(txt, encoding="utf-8")
+              print("[legend] README updated.")
+          else:
+              print("[legend] No changes needed.")
+
+  - run_shell:
+      name: Inject legend and footer into README
+      script: |
+        set -euo pipefail
+        python .github/autopatch/scripts/inject_badges_legend.py || true
+
+  - commit:
+      message: "docs(badges): add workflows legend SVG + README legend/footer (autopatch)"
