@@ -7,3 +7,6 @@ patches:
       path: .github/autopatch/validate-badges-readme.patch.yml
     - id: ops-console
       path: .github/autopatch/ops-console.patch.yml
+    # Ensures Python setup is consistent across workflows & PyYAML always present
+      path: ".github/autopatch/patches/pyyaml-and-common-setup.patch.yml"
+        reason: "Standardize Python env; fix recurring 'No module named yaml'"
