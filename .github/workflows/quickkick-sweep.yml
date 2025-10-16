@@ -1,10 +1,14 @@
 name: QuickKick Sweep
 
 on:
-  workflow_dispatch:   # ← deliberately no {} (more tolerant)
+  workflow_dispatch: {}
 
+# Needed so the GITHUB_TOKEN can call the workflow-dispatch API
 permissions:
-  contents: write
+  contents: write          # keep if you might write summaries/files later
+  actions: write           # helpful for workflow run mgmt APIs
+  workflows: write         # <<< REQUIRED to dispatch other workflows
+  issues: write            # only used if you later open issue notes (safe to keep)
 
 jobs:
   sweep:
@@ -12,9 +16,9 @@ jobs:
     steps:
       - name: Kick a set of workflows
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO_FULL: ${{ github.repository }}   # owner/repo
-          REF: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}           # built-in; same secret, clearer
+          REPO_FULL: ${{ github.repository }}     # owner/repo
+          REF: ${{ github.ref_name || 'main' }}   # default to main if empty
           TARGETS: |
             kick-autopatch.yml
             kick-yaml-bulk-autofix.yml
@@ -38,13 +42,15 @@ jobs:
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "${url}" \
-              -d "{\"ref\":\"${REF}\"}")
+              -d "{\"ref\":\"${REF}\"}" || true)
 
             note=""
             case "$code" in
               204) result="OK";;
+              404) result="NOT_FOUND"; note="check filename/branch";;
               422) result="NO_DISPATCH"; note="missing 'workflow_dispatch'";;
-              403) result="DENIED"; note="check Actions → Workflow permissions (Read & write)";;
+              403) result="DENIED"; note="need 'workflows: write' on this job (now added) or org policy";;
+              429) result="RATE_LIMIT"; note="slow down or retry later";;
               *)   result="ERROR"; note="HTTP ${code}: $(tr -d '\n' </tmp/resp.txt | cut -c1-160)";;
             esac
             printf "%s\t%s\t%s\n" "$wf" "$result" "$note" >> results.tsv
@@ -59,5 +65,6 @@ jobs:
               echo "| \`$a\` | $b | ${c:-} |"
             done < results.tsv
             echo ""
-            echo "> If you see **DENIED**, flip **Settings → Actions → General → Workflow permissions → Read & write**."
+            echo "> Tip: **NO_DISPATCH** → add \`on: { workflow_dispatch: {} }\` to that workflow."
+            echo "> Tip: **DENIED** → ensure this job has \`permissions: workflows: write\` (added above) and org policy allows it."
           } >> "$GITHUB_STEP_SUMMARY"
