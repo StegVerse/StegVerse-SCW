@@ -81,10 +81,12 @@ add a token with the `workflow` scope and rerun `fix-dispatch-triggers.yml`.
 | `autopatch_deferred.yml` | ➖ no-dispatch | [View](./actions/workflows/autopatch_deferred.yml) · [File](.github/workflows/autopatch_deferred.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20autopatch_deferred.yml) |
 | `autopatch_dryrun.yml` | ❌ broken | [View](./actions/workflows/autopatch_dryrun.yml) · [File](.github/workflows/autopatch_dryrun.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20autopatch_dryrun.yml) |
 | `backup_triggers.yml` | ➖ no-dispatch | [View](./actions/workflows/backup_triggers.yml) · [File](.github/workflows/backup_triggers.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20backup_triggers.yml) |
+| `build-ops-console-v2.yml` | ➖ no-dispatch | [View](./actions/workflows/build-ops-console-v2.yml) · [File](.github/workflows/build-ops-console-v2.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20build-ops-console-v2.yml) |
 | `ci.yml` | ➖ no-dispatch | [View](./actions/workflows/ci.yml) · [File](.github/workflows/ci.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20ci.yml) |
 | `codeql.yml` | ➖ no-dispatch | [View](./actions/workflows/codeql.yml) · [File](.github/workflows/codeql.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20codeql.yml) |
 | `deploy_multi.yml` | ➖ no-dispatch | [View](./actions/workflows/deploy_multi.yml) · [File](.github/workflows/deploy_multi.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20deploy_multi.yml) |
 | `direct_apply_fixes.yml` | ➖ no-dispatch | [View](./actions/workflows/direct_apply_fixes.yml) · [File](.github/workflows/direct_apply_fixes.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20direct_apply_fixes.yml) |
+| `dispatch-proxy.yml` | ➖ no-dispatch | [View](./actions/workflows/dispatch-proxy.yml) · [File](.github/workflows/dispatch-proxy.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20dispatch-proxy.yml) |
 | `dispatch-workflow.yml` | ❌ broken | [View](./actions/workflows/dispatch-workflow.yml) · [File](.github/workflows/dispatch-workflow.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20dispatch-workflow.yml) |
 | `docs-suite-on-complete.yml` | ➖ no-dispatch | [View](./actions/workflows/docs-suite-on-complete.yml) · [File](.github/workflows/docs-suite-on-complete.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20docs-suite-on-complete.yml) |
 | `docs_suite_apply.yml` | ➖ no-dispatch | [View](./actions/workflows/docs_suite_apply.yml) · [File](.github/workflows/docs_suite_apply.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20docs_suite_apply.yml) |
@@ -168,5 +170,5 @@ add a token with the `workflow` scope and rerun `fix-dispatch-triggers.yml`.
 | `yaml_corrector.yml` | ❌ broken | [View](./actions/workflows/yaml_corrector.yml) · [File](.github/workflows/yaml_corrector.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20yaml_corrector.yml) |
 | `yaml_corrector_v2.yml` | ❌ broken | [View](./actions/workflows/yaml_corrector_v2.yml) · [File](.github/workflows/yaml_corrector_v2.yml) · [▶︎ Run](./issues/new?template=run-workflow.yml&title=Run%20workflow:%20yaml_corrector_v2.yml) |
 
-_Last updated: **2025-10-16 13:38 UTC**_
+_Last updated: **2025-10-16 19:24 UTC**_
 <!-- ops-console:end -->
