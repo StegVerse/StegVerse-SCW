@@ -1,0 +1,148 @@
+version: 1
+actions:
+  - write_files:
+      - path: "scripts/patches/inject_kick_dispatch.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Inject 'Notify Kick completion' step into all Kick workflows.
+
+          Targets:
+            - Workflows whose 'name' starts with "Kick "
+            - Or filenames starting with 'kick-' / 'kick_' (case-insensitive)
+
+          Behavior:
+            - Adds the repository_dispatch notifier step (if missing)
+            - Appends to EVERY job's steps with idempotence (won't duplicate)
+            - Uses PyYAML; formatting/comments may be normalized
+
+          Idempotent: yes (checks for 'kick-complete' marker in existing steps)
+          """
+          import sys, re, pathlib, yaml
+
+          ROOT = pathlib.Path(".")
+          WF_DIR = ROOT / ".github" / "workflows"
+          MARKER_SUBSTR = 'event_type:"kick-complete"'
+
+          def is_kick_workflow(path: pathlib.Path, data: dict) -> bool:
+            # filename signal
+            fname = path.name.lower()
+            if fname.startswith("kick-") or fname.startswith("kick_"):
+              return True
+            # name: Kick ...
+            if isinstance(data, dict):
+              nm = data.get("name")
+              if isinstance(nm, str) and nm.strip().lower().startswith("kick "):
+                return True
+            return False
+
+          def already_has_notifier(steps) -> bool:
+            if not isinstance(steps, list):
+              return False
+            for step in steps:
+              if isinstance(step, dict):
+                # run block check
+                run = step.get("run") or step.get("shell")
+                # Simple string search is enough—step is unique.
+                if isinstance(run, str) and MARKER_SUBSTR in run:
+                  return True
+            return False
+
+          def build_notifier_step():
+            # Matches the step we agreed on
+            return {
+              "name": "Notify Kick completion",
+              "if": "always()",
+              "env": {
+                "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
+                "WF_NAME":  "${{ github.workflow }}",
+                "STATUS":   "${{ job.status }}",
+                "OWNER":    "${{ github.repository_owner }}",
+                "REPO":     "${{ github.event.repository.name }}",
+              },
+              "run": (
+                "set -euo pipefail\n"
+                "curl -sS -X POST \\\n"
+                "  -H \"Authorization: token ${GH_TOKEN}\" \\\n"
+                "  -H \"Accept: application/vnd.github+json\" \\\n"
+                "  \"https://api.github.com/repos/${OWNER}/${REPO}/dispatches\" \\\n"
+                "  -d \"$(jq -nc --arg w \\\"$WF_NAME\\\" --arg s \\\"$STATUS\\\" '{event_type:\"kick-complete\", client_payload:{workflow:$w, status:$s}}')\"\n"
+              ),
+            }
+
+          def inject_into_workflow(path: pathlib.Path) -> bool:
+            txt = path.read_text(encoding="utf-8")
+            try:
+              data = yaml.safe_load(txt)
+            except Exception:
+              return False
+
+            if not isinstance(data, dict):
+              return False
+
+            if not is_kick_workflow(path, data):
+              return False
+
+            jobs = data.get("jobs")
+            if not isinstance(jobs, dict):
+              return False
+
+            changed = False
+            for job_id, job in jobs.items():
+              if not isinstance(job, dict):
+                continue
+              steps = job.get("steps")
+              if not isinstance(steps, list):
+                # Create steps array if missing
+                steps = []
+                job["steps"] = steps
+
+              if already_has_notifier(steps):
+                continue
+
+              steps.append(build_notifier_step())
+              changed = True
+
+            if changed:
+              new_txt = yaml.safe_dump(
+                data,
+                sort_keys=False,
+                allow_unicode=True,
+                default_flow_style=False
+              )
+              path.write_text(new_txt, encoding="utf-8")
+            return changed
+
+          def main():
+            if not WF_DIR.exists():
+              print("[inject] No .github/workflows directory found; nothing to do.")
+              return 0
+
+            changed_files = []
+            for p in sorted(WF_DIR.glob("*.y*ml")):
+              try:
+                if inject_into_workflow(p):
+                  changed_files.append(str(p))
+                  print(f"[inject] Added notifier to: {p}")
+              except Exception as e:
+                print(f"[inject] WARN: could not process {p}: {e}")
+
+            outdir = ROOT / "self_healing_out"
+            outdir.mkdir(parents=True, exist_ok=True)
+            (outdir / "KICK_NOTIFY_INJECTED.txt").write_text("\n".join(changed_files), encoding="utf-8")
+            print(f"[inject] Done. Files changed: {len(changed_files)}")
+            return 0
+
+          if __name__ == "__main__":
+            sys.exit(main())
+
+  - run_shell:
+      name: Inject Kick notifier into Kick workflows
+      script: |
+        set -euo pipefail
+        python -m pip install --upgrade pip pyyaml >/dev/null
+        python scripts/patches/inject_kick_dispatch.py
+
+  - commit:
+      message: "chore(kick): inject repository_dispatch notifier into Kick workflows (autopatch)"
