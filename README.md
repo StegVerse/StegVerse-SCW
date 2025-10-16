@@ -1,4 +1,5 @@
 # StegVerse-SCW
+[![Workflows](.github/badges/workflows.svg)](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-badges.yml)
 
 Self-healing CI + runtime harness for StegTalk and related services.
 
