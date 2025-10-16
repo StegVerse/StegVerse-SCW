@@ -1,0 +1,22 @@
+# .github/workflows/setup-common-python-selftest.yml
+name: setup-common-python self-test
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use composite action
+        uses: ./.github/actions/setup-common-python
+        with:
+          python-version: "3.11"
+          extra-packages: "requests"
+      - name: Verify imports (yaml + requests)
+        run: |
+          python - <<'PY'
+          import yaml, requests
+          print("yaml:", yaml.__version__)
+          print("requests:", requests.__version__)
+          PY
