@@ -1,5 +1,9 @@
 # .github/workflows/ — GitHub Actions Workflows
 
+<!-- workflows:status -->
+...
+<!-- /workflows:status -->
+
 This folder contains the **automation harness** for StegVerse-SCW.  
 Most workflows can be triggered either manually from the Actions tab or
 by committing a file to a trigger folder.
