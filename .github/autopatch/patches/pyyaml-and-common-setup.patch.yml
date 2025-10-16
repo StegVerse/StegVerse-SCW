@@ -1,0 +1,113 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/actions/setup-common-python/action.yml"
+        mode: "100644"
+        contents: |
+          name: Setup common Python
+          description: Standard Python setup with optional caching + extra pkgs
+          inputs:
+            python-version:
+              required: false
+              default: "3.11"
+            cache:
+              required: false
+              default: "pip"
+            extra-packages:
+              required: false
+              # NOTE: include pyyaml by default so inline Python can `import yaml`
+              default: "pyyaml"
+          runs:
+            using: "composite"
+            steps:
+              - uses: actions/setup-python@v5
+                with:
+                  python-version: ${{ inputs.python-version }}
+                  cache: ${{ inputs.cache }}
+              - shell: bash
+                run: |
+                  set -euo pipefail
+                  python -m pip install --upgrade pip
+                  if [ -n "${{ inputs.extra-packages }}" ]; then
+                    pip install ${{ inputs.extra-packages }}
+                  fi
+
+      - path: "scripts/patches/retarget_setup_python_to_composite.py"
+        mode: "100755"
+        contents: |
+          #!/usr/bin/env python3
+          """
+          Sweep all workflows:
+            1) Replace raw `actions/setup-python@*` steps with `./.github/actions/setup-common-python`
+            2) Ensure jobs that run inline Python get a one-line guard to ensure PyYAML is present
+          Safe to re-run; changes only when needed.
+          """
+          import re, pathlib
+
+          ROOT = pathlib.Path(".")
+          WF_DIR = ROOT / ".github" / "workflows"
+
+          def load(p):
+            return p.read_text(encoding="utf-8", errors="ignore")
+
+          def save(p, txt):
+            p.write_text(txt, encoding="utf-8")
+
+          def retarget_setup_python(txt: str) -> str:
+            # Replace any 'uses: actions/setup-python@v*' with composite
+            # Keep `with:` section as-is (we support python-version/cache).
+            pattern = re.compile(r"(^\s*uses:\s*actions/setup-python@v[0-9]+\s*$)", re.M)
+            txt = pattern.sub(lambda m: m.group(0).replace(m.group(0).strip(), "uses: ./.github/actions/setup-common-python"), txt)
+            return txt
+
+          def has_guard_nearby(chunk: str) -> bool:
+            return "Ensure PyYAML present" in chunk or "Guard: ensure pyyaml" in chunk
+
+          def ensure_guard_for_inline_python(txt: str) -> str:
+            # If a job contains inline python (python - <<'PY' … OR python -c …),
+            # insert a small guard step *just before the first such script* inside that job.
+            lines = txt.splitlines(keepends=False)
+            out = []
+            i = 0
+            inserted_any = False
+            while i < len(lines):
+              out.append(lines[i])
+              line = lines[i]
+              if re.search(r"^\s*-+\s*name:\s", line):
+                # Scan ahead a small window for inline python
+                window = "\n".join(lines[i:i+20])
+                if (("python - <<'PY'" in window) or ("python - <<" in window) or ("python -c" in window)) and not has_guard_nearby(window):
+                  # Determine indent from current line
+                  indent = re.match(r"^(\s*)", line).group(1)
+                  guard = [
+                    f"{indent}- name: Ensure PyYAML present",
+                    f"{indent}  shell: bash",
+                    f"{indent}  run: python -c \"import yaml\" || pip install pyyaml",
+                  ]
+                  out.extend(guard)
+                  inserted_any = True
+              i += 1
+            return "\n".join(out) + ("\n" if not txt.endswith("\n") else ""), inserted_any
+
+          changed = []
+          for p in sorted(WF_DIR.glob("*.y*ml")):
+            before = load(p)
+            after = retarget_setup_python(before)
+            after2, inserted = ensure_guard_for_inline_python(after)
+            if after2 != before:
+              save(p, after2)
+              changed.append(p.name)
+
+          report = ROOT / ".github" / "autopatch_out" / "retarget_setup_python_to_composite.txt"
+          report.parent.mkdir(parents=True, exist_ok=True)
+          report.write_text("\n".join(changed), encoding="utf-8")
+          print(f"[retarget] Updated {len(changed)} workflow(s).")
+
+  - run_shell:
+      name: Retarget workflows to composite + guards
+      script: |
+        set -euo pipefail
+        python scripts/patches/retarget_setup_python_to_composite.py
+
+  - commit:
+      message: "chore(workflows): standardize Python setup via composite + add PyYAML guard"
