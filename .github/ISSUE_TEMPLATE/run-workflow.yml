@@ -1,0 +1,32 @@
+name: "Run a workflow"
+description: "Dispatch a workflow from the Ops Console table"
+title: "Run workflow: <select>"
+labels: ["ops-console-run"]
+body:
+  - type: dropdown
+    id: wf
+    attributes:
+      label: "Select workflow to run"
+      description: "Pick one of your repository workflows"
+      options:
+        - autopatch-apply.yml
+        - workflows-console-table.yml
+        - workflows-status-badges.yml
+        - export-hcb.yml
+        - autodocs-on-demand.yml
+        - kick-autopatch-apply.yml
+        - fix-dispatch-triggers.yml
+        # add more here as you like (the table also creates Run links)
+    validations:
+      required: true
+  - type: input
+    id: ref
+    attributes:
+      label: "Branch/Ref (optional)"
+      placeholder: "main"
+  - type: textarea
+    id: inputs_json
+    attributes:
+      label: "Inputs JSON (optional)"
+      description: "e.g. {\"dry_run\":\"true\"}"
+      placeholder: "{}"
