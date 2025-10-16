@@ -1,10 +1,10 @@
 # Ops Console
 
-_Last updated: **2025-10-16 22:16 UTC**_
+_Last updated: **2025-10-16 22:17 UTC**_
 
 - ✅ OK: **0**
-- ➖ No dispatch: **64**
-- ❌ Broken: **35**
+- ➖ No dispatch: **65**
+- ❌ Broken: **34**
 - Total: **99**
 
 | Workflow | State | Actions |
@@ -46,7 +46,7 @@ _Last updated: **2025-10-16 22:16 UTC**_
 | `kick-autopatch-apply.yml` | ➖ no-dispatch | [View](./actions/workflows/kick-autopatch-apply.yml) · [File](.github/workflows/kick-autopatch-apply.yml) · [▶ Run](./actions/workflows/kick-autopatch-apply.yml) |
 | `kick-autopatch.yml` | ➖ no-dispatch | [View](./actions/workflows/kick-autopatch.yml) · [File](.github/workflows/kick-autopatch.yml) · [▶ Run](./actions/workflows/kick-autopatch.yml) |
 | `kick-seed-steg-config.yml` | ➖ no-dispatch | [View](./actions/workflows/kick-seed-steg-config.yml) · [File](.github/workflows/kick-seed-steg-config.yml) · [▶ Run](./actions/workflows/kick-seed-steg-config.yml) |
-| `kick-yaml-bulk-autofix.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/kick-yaml-bulk-autofix.yml) · [File](.github/workflows/kick-yaml-bulk-autofix.yml) · [▶ Run](./actions/workflows/kick-yaml-bulk-autofix.yml) |
+| `kick-yaml-bulk-autofix.yml` | ➖ no-dispatch | [View](./actions/workflows/kick-yaml-bulk-autofix.yml) · [File](.github/workflows/kick-yaml-bulk-autofix.yml) · [▶ Run](./actions/workflows/kick-yaml-bulk-autofix.yml) |
 | `neutralize_secrets_if.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/neutralize_secrets_if.yml) · [File](.github/workflows/neutralize_secrets_if.yml) · [▶ Run](./actions/workflows/neutralize_secrets_if.yml) |
 | `nightly_snapshot.yml` | ➖ no-dispatch | [View](./actions/workflows/nightly_snapshot.yml) · [File](.github/workflows/nightly_snapshot.yml) · [▶ Run](./actions/workflows/nightly_snapshot.yml) |
 | `one-shot-workflow-normalizer.yml` | ➖ no-dispatch | [View](./actions/workflows/one-shot-workflow-normalizer.yml) · [File](.github/workflows/one-shot-workflow-normalizer.yml) · [▶ Run](./actions/workflows/one-shot-workflow-normalizer.yml) |
