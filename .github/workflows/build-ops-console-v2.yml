@@ -10,6 +10,11 @@ on:
 
 permissions:
   contents: write
+  actions: write   # needed to dispatch a workflow
+
+concurrency:
+  group: ops-console-table
+  cancel-in-progress: false
 
 jobs:
   build-table:
