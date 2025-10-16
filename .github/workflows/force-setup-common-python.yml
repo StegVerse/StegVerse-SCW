@@ -1,0 +1,118 @@
+name: Force setup-common-python + retarget
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  workflows: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Write composite action (overwrite)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .github/actions/setup-common-python
+          cat > .github/actions/setup-common-python/action.yml <<'YML'
+          name: Setup common Python
+          description: Standard Python setup with optional caching + extra pkgs
+          inputs:
+            python-version:
+              required: false
+              default: "3.11"
+            cache:
+              required: false
+              default: "pip"
+            extra-packages:
+              required: false
+              default: "pyyaml"
+          runs:
+            using: "composite"
+            steps:
+              - uses: actions/setup-python@v5
+                with:
+                  python-version: ${{ inputs.python-version }}
+                  cache: ${{ inputs.cache }}
+              - shell: bash
+                run: |
+                  set -euo pipefail
+                  python -m pip install --upgrade pip
+                  if [ -n "${{ inputs.extra-packages }}" ]; then
+                    pip install ${{ inputs.extra-packages }}
+                  fi
+          YML
+
+      - name: Retarget workflows to composite + add PyYAML guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re, pathlib
+          root = pathlib.Path(".")
+          wf = root/".github/workflows"
+          changed = []
+
+          def retarget(txt:str)->str:
+            return re.sub(r"(^\s*uses:\s*)actions/setup-python@v[0-9]+\s*$",
+                          r"\1./.github/actions/setup-common-python",
+                          txt, flags=re.M)
+
+          def add_guard(txt:str)->str:
+            lines = txt.splitlines()
+            out = []
+            i = 0
+            while i < len(lines):
+              out.append(lines[i])
+              if re.match(r"^\s*-\s*name:\s.*", lines[i]):
+                window = "\n".join(lines[i:i+20])
+                if ("python - <<".lower() in window.lower() or "python -c" in window) and \
+                   not any("Ensure PyYAML present" in l for l in lines[i:i+20]):
+                  indent = re.match(r"^(\s*)", lines[i]).group(1)
+                  out += [
+                    f"{indent}- name: Ensure PyYAML present",
+                    f"{indent}  shell: bash",
+                    f'{indent}  run: python -c "import yaml" || pip install pyyaml',
+                  ]
+              i += 1
+            return "\n".join(out) + ("\n" if not txt.endswith("\n") else "")
+
+          for p in sorted(wf.glob("*.y*ml")):
+            before = p.read_text(encoding="utf-8", errors="ignore")
+            after = add_guard(retarget(before))
+            if after != before:
+              p.write_text(after, encoding="utf-8")
+              changed.append(p.name)
+
+          (root/".github/autopatch_out").mkdir(parents=True, exist_ok=True)
+          (root/".github/autopatch_out/retargeted_workflows.txt").write_text("\n".join(changed), encoding="utf-8")
+          print(f"Retargeted {len(changed)} workflow(s).")
+          PY
+
+      - name: Commit & push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/actions/setup-common-python/action.yml .github/workflows || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: force-write setup-common-python and retarget workflows (+ PyYAML guard)"
+            git push origin HEAD:main
+          else
+            echo "Nothing to commit."
+          fi
+
+      - name: Show summary
+        run: |
+          echo "Composite timestamp:"
+          git log -1 --format=%ci -- .github/actions/setup-common-python/action.yml
+          echo
+          echo "Workflows retargeted:"
+          cat .github/autopatch_out/retargeted_workflows.txt || true
