@@ -7,7 +7,8 @@ on:
     paths:
       - ".github/workflows/**"
       - "scripts/**"
-
+      - ".github/trigger/yaml-bulk-autofix/**"   # ← add this line
+      
 permissions:
   contents: write
 
