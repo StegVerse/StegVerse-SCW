@@ -1,24 +1,25 @@
-name: "Setup Common Python"
-description: "Reusable composite action for installing Python, dependencies, and ensuring PyYAML is present"
-author: "StegVerse CI"
+# .github/actions/setup-common-python/action.yml
+# Updated: 2025-10-16T00:00:00Z  (bump this comment anytime you touch the file)
+
+name: Setup common Python
+description: Standard Python setup with optional caching + extra packages, with PyYAML guard
 inputs:
   python-version:
-    description: "Python version to use"
+    description: Python version to install
     required: false
     default: "3.11"
   cache:
-    description: "Enable caching"
+    description: Cache backend for setup-python
     required: false
-    default: "true"
+    default: "pip"
   extra-packages:
-    description: "Extra packages to install (space-separated)"
+    description: Space-separated list of extra pip packages to install
     required: false
     default: ""
-
-outputs:
-  yaml_available:
-    description: "Whether PyYAML is installed successfully"
-    value: ${{ steps.check_yaml.outputs.yaml_available }}
+  ensure-pyyaml:
+    description: Ensure PyYAML is installed (true/false)
+    required: false
+    default: "true"
 
 runs:
   using: "composite"
@@ -27,22 +28,27 @@ runs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
-        cache: "pip"
-        
-    - name: Install dependencies
+        cache: ${{ inputs.cache }}
+
+    - name: Upgrade pip
       shell: bash
       run: |
         python -m pip install --upgrade pip
-        pip install PyYAML requests ${{ inputs.extra-packages }}
 
-    - name: Verify PyYAML availability
-      id: check_yaml
+    - name: Install extra packages (if any)
+      if: ${{ inputs.extra-packages != '' }}
       shell: bash
       run: |
-        if python -c "import yaml" 2>/dev/null; then
-          echo "✅ PyYAML available"
-          echo "yaml_available=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "⚠️ PyYAML not found"
-          echo "yaml_available=false" >> "$GITHUB_OUTPUT"
-        fi
+        pip install ${{ inputs.extra-packages }}
+
+    - name: Ensure PyYAML present (guard)
+      if: ${{ inputs.ensure-pyyaml == 'true' }}
+      shell: bash
+      run: |
+        python - <<'PY'
+        import sys, subprocess
+        try:
+            import yaml  # noqa
+        except Exception:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "pyyaml"])
+        PY
