@@ -106,8 +106,9 @@ jobs:
           README.write_text(txt, encoding="utf-8")
           PY
 
-      - name: Commit (if changed)
+            - name: Commit (if changed)
         run: |
+          set -e
           git config user.name  "StegVerse Bot"
           git config user.email "bot@stegverse.org"
           git add OPS/CONSOLE.md .github/docs/OPS_CONSOLE.md README.md || true
@@ -116,3 +117,4 @@ jobs:
             git push origin HEAD:main
           else
             echo "No changes."
+          fi
