@@ -1,0 +1,111 @@
+name: Dispatch Proxy (safe workflow trigger)
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow:
+        description: "Workflow filename under .github/workflows/"
+        required: true
+      ref:
+        description: "Branch/ref to dispatch"
+        required: true
+        default: "main"
+      inputs_json:
+        description: "Optional JSON inputs for the target workflow"
+        required: false
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (for audit log)
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Parse event → payload
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const core = require("@actions/core");
+            let wf = core.getInput("workflow");
+            let ref = core.getInput("ref") || "main";
+            let inputs_json = core.getInput("inputs_json") || "{}";
+
+            if (context.eventName === "issues") {
+              const labels = (context.payload.issue.labels || []).map(l => l.name);
+              if (!labels.includes("run:workflow")) { core.setOutput("skip","true"); return; }
+              const body = context.payload.issue.body || "";
+              const grab = (key) => {
+                const m = body.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
+                return m ? m[1].trim() : "";
+              }
+              wf = grab("workflow") || wf;
+              ref = grab("ref") || ref;
+              inputs_json = grab("inputs_json") || inputs_json;
+            }
+
+            core.setOutput("skip","false");
+            core.setOutput("workflow", wf);
+            core.setOutput("ref", ref);
+            core.setOutput("inputs_json", inputs_json);
+
+      - name: Bail if not our issue
+        if: steps.parse.outputs.skip == 'true'
+        run: echo "Not a run:workflow issue — skipping."
+
+      - name: Dispatch target workflow
+        if: steps.parse.outputs.skip != 'true'
+        id: dispatch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const wf = core.getInput("workflow", { required: true });
+            const ref = core.getInput("ref", { required: true });
+            const inputs = JSON.parse(core.getInput("inputs_json") || "{}");
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              workflow_id: wf,
+              ref,
+              inputs
+            });
+
+      - name: Comment + close issue (if came from issue)
+        if: steps.parse.outputs.skip != 'true' && github.event_name == 'issues'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue_number = context.payload.issue.number;
+            const wf  = core.getInput("workflow");
+            const ref = core.getInput("ref");
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number,
+              body: `✅ Dispatched \`${wf}\` on \`${ref}\`.`
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number,
+              state: "closed"
+            });
+
+      - name: Append audit log (jsonl)
+        if: steps.parse.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p .github/taskops
+          printf '%s\n' \
+            "{\"ts\":\"$(date -u +%FT%TZ)\",\"by\":\"${{ github.actor }}\",\"wf\":\"${{ steps.parse.outputs.workflow }}\",\"ref\":\"${{ steps.parse.outputs.ref }}\",\"via\":\"${{ github.event_name }}\"}" \
+            >> .github/taskops/dispatch-log.jsonl
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/taskops/dispatch-log.jsonl
+          git commit -m "chore(ops): append dispatch log" || true
+          git push origin HEAD:main || true
