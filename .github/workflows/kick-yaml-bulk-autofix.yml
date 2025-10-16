@@ -1,9 +1,20 @@
-name: Kick: YAML Bulk Autofix
+name: Kick YAML Bulk Autofix
+run-name: "Kick: YAML Bulk Autofix 🚀"
+
 on:
-  workflow_dispatch: {}   # button in Actions
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "Optional note for this kick"
+        required: false
+        default: "manual"
 
 permissions:
   contents: write
+
+concurrency:
+  group: kick-yaml-bulk-autofix
+  cancel-in-progress: false
 
 jobs:
   kick:
@@ -11,17 +22,37 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
-      - name: Drop trigger file and push
+      - name: Create trigger file
+        id: trigger
         shell: bash
         run: |
           set -euo pipefail
-          ts="$(date -u +%Y%m%dT%H%M%SZ)"
-          mkdir -p .github/trigger/yaml-bulk-autofix
-          echo "go $ts" > ".github/trigger/yaml-bulk-autofix/ping-${ts}"
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          DIR=".github/trigger/yaml-bulk-autofix"
+          mkdir -p "$DIR"
+          FILE="$DIR/ping-${TS}.txt"
+          echo "note=${{ github.event.inputs.note || 'manual' }}" > "$FILE"
+          echo "actor=${{ github.actor }}" >> "$FILE"
+          echo "sha=${GITHUB_SHA}" >> "$FILE"
+          echo "ref=${GITHUB_REF}" >> "$FILE"
+          echo "file=$FILE" >> $GITHUB_OUTPUT
+          echo "Created $FILE"
+
+      - name: Commit & push trigger
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name  "StegVerse Bot"
           git config user.email "bot@stegverse.org"
           git add .github/trigger/yaml-bulk-autofix/
-          git commit -m "chore(kick): YAML bulk autofix @ ${ts}" || exit 0
-          git push origin HEAD:main || true
+          git commit -m "chore(kick): trigger YAML bulk autofix from workflow $GITHUB_RUN_ID" || {
+            echo "Nothing to commit (trigger already present)"; exit 0; }
+          git push origin HEAD:main
+
+      - name: Echo next step
+        run: |
+          echo "Pushed ${{ steps.trigger.outputs.file }}"
+          echo "This push will match yaml-bulk-autofix.yml paths and start the autofix run."
