@@ -1,10 +1,10 @@
 # Ops Console
 
-_Last updated: **2025-10-16 22:04 UTC**_
+_Last updated: **2025-10-16 22:07 UTC**_
 
 - ✅ OK: **0**
-- ➖ No dispatch: **63**
-- ❌ Broken: **36**
+- ➖ No dispatch: **64**
+- ❌ Broken: **35**
 - Total: **99**
 
 | Workflow | State | Actions |
@@ -105,6 +105,6 @@ _Last updated: **2025-10-16 22:04 UTC**_
 | `workflows-console-table.yml` | ➖ no-dispatch | [View](./actions/workflows/workflows-console-table.yml) · [File](.github/workflows/workflows-console-table.yml) · [▶ Run](./actions/workflows/workflows-console-table.yml) |
 | `workflows-first-aid.yml` | ➖ no-dispatch | [View](./actions/workflows/workflows-first-aid.yml) · [File](.github/workflows/workflows-first-aid.yml) · [▶ Run](./actions/workflows/workflows-first-aid.yml) |
 | `workflows-status-badges.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/workflows-status-badges.yml) · [File](.github/workflows/workflows-status-badges.yml) · [▶ Run](./actions/workflows/workflows-status-badges.yml) |
-| `yaml-bulk-autofix.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/yaml-bulk-autofix.yml) · [File](.github/workflows/yaml-bulk-autofix.yml) · [▶ Run](./actions/workflows/yaml-bulk-autofix.yml) |
+| `yaml-bulk-autofix.yml` | ➖ no-dispatch | [View](./actions/workflows/yaml-bulk-autofix.yml) · [File](.github/workflows/yaml-bulk-autofix.yml) · [▶ Run](./actions/workflows/yaml-bulk-autofix.yml) |
 | `yaml_corrector.yml` | ❌ broken · `ParserError` | [View](./actions/workflows/yaml_corrector.yml) · [File](.github/workflows/yaml_corrector.yml) · [▶ Run](./actions/workflows/yaml_corrector.yml) |
 | `yaml_corrector_v2.yml` | ❌ broken · `ParserError` | [View](./actions/workflows/yaml_corrector_v2.yml) · [File](.github/workflows/yaml_corrector_v2.yml) · [▶ Run](./actions/workflows/yaml_corrector_v2.yml) |
