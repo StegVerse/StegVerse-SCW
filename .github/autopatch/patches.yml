@@ -5,3 +5,5 @@ patches:
       path: .github/autopatch/workflows-badges-legend.patch.yml
     - id: validate-badges-readme
       path: .github/autopatch/validate-badges-readme.patch.yml
+    - id: ops-console
+      path: .github/autopatch/ops-console.patch.yml
