@@ -213,3 +213,13 @@ add a token with the `workflow` scope and rerun `fix-dispatch-triggers.yml`.
 
 _Last updated: **2025-10-16 19:28 UTC**_
 <!-- ops-console:end -->
+
+## Kick Workflows Status
+
+<!-- kicks:status -->
+_Last updated: **2025-10-16 22:37:33 UTC**_
+
+![Kick Autopatch Apply](https://img.shields.io/badge/Kick%3AKick_Autopatch_Apply-2025-10-16_22%3A37%3A33_UTC-red?style=flat-square)
+
+<!-- /kicks:status -->
+
