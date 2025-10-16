@@ -1,11 +1,11 @@
 # Ops Console
 
-_Last updated: **2025-10-16 22:50 UTC**_
+_Last updated: **2025-10-16 23:27 UTC**_
 
 - ✅ OK: **0**
-- ➖ No dispatch: **67**
+- ➖ No dispatch: **68**
 - ❌ Broken: **34**
-- Total: **101**
+- Total: **102**
 
 | Workflow | State | Actions |
 |---|---|---|
@@ -61,6 +61,7 @@ _Last updated: **2025-10-16 22:50 UTC**_
 | `propagate-commit-template-v1_1.yml` | ➖ no-dispatch | [View](./actions/workflows/propagate-commit-template-v1_1.yml) · [File](.github/workflows/propagate-commit-template-v1_1.yml) · [▶ Run](./actions/workflows/propagate-commit-template-v1_1.yml) |
 | `propagate-commit-template.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/propagate-commit-template.yml) · [File](.github/workflows/propagate-commit-template.yml) · [▶ Run](./actions/workflows/propagate-commit-template.yml) |
 | `propagate-readme-badges.yml` | ➖ no-dispatch | [View](./actions/workflows/propagate-readme-badges.yml) · [File](.github/workflows/propagate-readme-badges.yml) · [▶ Run](./actions/workflows/propagate-readme-badges.yml) |
+| `quickkick-sweep.yml` | ➖ no-dispatch | [View](./actions/workflows/quickkick-sweep.yml) · [File](.github/workflows/quickkick-sweep.yml) · [▶ Run](./actions/workflows/quickkick-sweep.yml) |
 | `readme-nudge-kicks.yml` | ➖ no-dispatch | [View](./actions/workflows/readme-nudge-kicks.yml) · [File](.github/workflows/readme-nudge-kicks.yml) · [▶ Run](./actions/workflows/readme-nudge-kicks.yml) |
 | `readme-nudge-yaml-autofix.yml` | ➖ no-dispatch | [View](./actions/workflows/readme-nudge-yaml-autofix.yml) · [File](.github/workflows/readme-nudge-yaml-autofix.yml) · [▶ Run](./actions/workflows/readme-nudge-yaml-autofix.yml) |
 | `rebuild-kit.yml` | ❌ broken · `ScannerError` | [View](./actions/workflows/rebuild-kit.yml) · [File](.github/workflows/rebuild-kit.yml) · [▶ Run](./actions/workflows/rebuild-kit.yml) |
