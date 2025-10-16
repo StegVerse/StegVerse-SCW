@@ -1,14 +1,14 @@
 name: YAML Bulk Autofix
 
-on:
-  workflow_dispatch: {}
-  push:
-    branches: [ "main" ]
-    paths:
-      - ".github/workflows/**"
-      - "scripts/**"
-      - ".github/trigger/yaml-bulk-autofix/**"   # ← add this line
-      
+ on:
+   workflow_dispatch: {}
+   push:
+     branches: [ "main" ]
+     paths:
+       - ".github/workflows/**"
+       - "scripts/**"
+       - ".github/trigger/yaml-bulk-autofix/**"
+
 permissions:
   contents: write
 
