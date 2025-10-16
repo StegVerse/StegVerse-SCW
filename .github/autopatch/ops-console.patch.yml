@@ -1,0 +1,230 @@
+version: 1
+actions:
+  - write_files:
+      # --- 1) Issue Form (used by the README ▶︎ Run links)
+      - path: ".github/ISSUE_TEMPLATE/run-workflow.yml"
+        mode: "100644"
+        contents: |
+          name: "Run a workflow"
+          description: "Dispatch a workflow from the Ops Console table"
+          title: "Run workflow: <select>"
+          labels: ["ops-console-run"]
+          body:
+            - type: dropdown
+              id: wf
+              attributes:
+                label: "Select workflow to run"
+                description: "Pick one of your repository workflows"
+                options:
+                  - autopatch-apply.yml
+                  - workflows-console-table.yml
+                  - workflows-status-badges.yml
+                  - export-hcb.yml
+                  - autodocs-on-demand.yml
+                  - kick-autopatch-apply.yml
+                  - fix-dispatch-triggers.yml
+              validations:
+                required: true
+            - type: input
+              id: ref
+              attributes:
+                label: "Branch/Ref (optional)"
+                placeholder: "main"
+            - type: textarea
+              id: inputs_json
+              attributes:
+                label: "Inputs JSON (optional)"
+                description: "e.g. {\"dry_run\":\"true\"}"
+                placeholder: "{}"
+
+      # --- 2) Dispatcher (turns issues into workflow dispatch calls)
+      - path: ".github/workflows/ops-console-dispatcher.yml"
+        mode: "100644"
+        contents: |
+          name: Ops Console Dispatcher
+          on:
+            issues:
+              types: [opened]
+            issue_comment:
+              types: [created]
+            workflow_dispatch:
+              inputs:
+                workflow:
+                  description: "Workflow file (e.g., autopatch-apply.yml)"
+                  required: true
+                ref:
+                  description: "Ref (default main)"
+                  required: false
+                  default: "main"
+                inputs_json:
+                  description: "Inputs JSON"
+                  required: false
+                  default: "{}"
+          permissions:
+            contents: read
+            issues: read
+            actions: write
+          jobs:
+            dispatch:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Derive parameters
+                  id: params
+                  run: |
+                    set -euo pipefail
+                    MODE="${{ github.event_name }}"
+                    WF=""; REF="main"; INPUTS="{}"
+                    if [ "$MODE" = "issues" ]; then
+                      BODY='${{ github.event.issue.body }}'
+                      WF=$(printf "%s\n" "$BODY" | awk '/Select workflow to run/{getline; print}' | xargs)
+                      REF_LINE=$(printf "%s\n" "$BODY" | awk '/Branch\\/Ref/{getline; print}' | xargs)
+                      [ -n "$REF_LINE" ] && REF="$REF_LINE"
+                      INPUTS=$(printf "%s\n" "$BODY" | awk '/Inputs JSON/{getline; print}' | sed 's/^```//; s/```$//' | xargs)
+                      [ -z "$INPUTS" ] && INPUTS="{}"
+                    elif [ "$MODE" = "issue_comment" ]; then
+                      CMT='${{ github.event.comment.body }}'
+                      if echo "$CMT" | grep -qE '^/run[[:space:]]+'; then
+                        WF=$(echo "$CMT" | sed -n 's#^/run[[:space:]]\\+\\([^[:space:]]\\+\\).*#\\1#p')
+                        JSON=$(echo "$CMT" | sed -n 's#^/run[[:space:]]\\+[^[:space:]]\\+[[:space:]]\\+\\(.*\\)$#\\1#p')
+                        [ -n "$JSON" ] && INPUTS="$JSON" || INPUTS="{}"
+                      fi
+                    else
+                      WF='${{ inputs.workflow }}'
+                      REF='${{ inputs.ref }}'
+                      INPUTS='${{ inputs.inputs_json }}'
+                    fi
+                    echo "wf=$WF" >> $GITHUB_OUTPUT
+                    echo "ref=$REF" >> $GITHUB_OUTPUT
+                    echo "inputs=$INPUTS" >> $GITHUB_OUTPUT
+                - name: Validate
+                  run: |
+                    [ -n "${{ steps.params.outputs.wf }}" ] || { echo "::error::No workflow given"; exit 1; }
+                    echo "Workflow: ${{ steps.params.outputs.wf }}"
+                    echo "Ref     : ${{ steps.params.outputs.ref }}"
+                    echo "Inputs  : ${{ steps.params.outputs.inputs }}"
+                - name: Dispatch
+                  env:
+                    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  run: |
+                    set -euo pipefail
+                    WF_FILE='${{ steps.params.outputs.wf }}'
+                    REF='${{ steps.params.outputs.ref }}'
+                    INPUTS='${{ steps.params.outputs.inputs }}'
+                    OWNER_REPO='${{ github.repository }}'
+                    WF_ID=$(gh api /repos/$OWNER_REPO/actions/workflows \
+                            --jq '.workflows[] | select(.path | endswith(env.WF_FILE)) | .id' | head -n1)
+                    [ -n "$WF_ID" ] || { echo "::error::Workflow not found: $WF_FILE"; exit 1; }
+                    gh api --method POST \
+                      /repos/$OWNER_REPO/actions/workflows/$WF_ID/dispatches \
+                      -f ref="$REF" -f inputs="$INPUTS"
+                    echo "✅ Dispatched $WF_FILE on $REF"
+
+      # --- 3) README Ops Console table generator
+      - path: ".github/workflows/workflows-console-table.yml"
+        mode: "100644"
+        contents: |
+          name: Workflows Console Table
+          on:
+            workflow_dispatch: {}
+            push:
+              branches: [ "main" ]
+              paths:
+                - ".github/workflows/**"
+                - "README.md"
+          permissions:
+            contents: write
+          jobs:
+            build-table:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-python@v5
+                  with: { python-version: "3.11" }
+                - name: Build table & update README
+                  run: |
+                    set -euo pipefail
+                    python - <<'PY'
+                    import pathlib, yaml, datetime, re
+                    ROOT = pathlib.Path(".")
+                    WFD  = ROOT/".github/workflows"
+                    README = ROOT/"README.md"
+                    def load(p):
+                      try: return yaml.safe_load(p.read_text(encoding="utf-8"))
+                      except Exception as e: return e
+                    def has_dispatch(d):
+                      if not isinstance(d, dict): return False
+                      on = d.get("on")
+                      if on is None: return False
+                      if isinstance(on, str): return on == "workflow_dispatch"
+                      if isinstance(on, list): return "workflow_dispatch" in on
+                      if isinstance(on, dict):
+                        if set(on.keys()) == {"workflow_call"}: return False
+                        return "workflow_dispatch" in on
+                      return False
+                    rows = []
+                    for p in sorted(WFD.glob("*.y*ml")):
+                      data = load(p)
+                      state = "❌ broken" if isinstance(data, Exception) else ("✅ ok" if has_dispatch(data) else "➖ no-dispatch")
+                      actions_link = f"./actions/workflows/{p.name}"
+                      view_link    = f".github/workflows/{p.name}"
+                      run_link     = f"./issues/new?template=run-workflow.yml&title=Run%20workflow:%20{p.name}"
+                      rows.append((p.name, state, actions_link, view_link, run_link))
+                    now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+                    table = ["| Workflow | State | Actions |","|---|---|---|"]
+                    for name, state, actions_link, view_link, run_link in rows:
+                      actions_cell = f"[View]({actions_link}) · [File]({view_link}) · [▶︎ Run]({run_link})"
+                      table.append(f"| `{name}` | {state} | {actions_cell} |")
+                    block = "\n".join(table) + f"\n\n_Last updated: **{now}**_"
+                    start = "<!-- ops-console:start -->"; end = "<!-- ops-console:end -->"
+                    txt = README.read_text(encoding="utf-8") if README.exists() else "# Repository\n\n"
+                    block_all = f"{start}\n{block}\n{end}"
+                    if start in txt and end in txt:
+                      new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}", block_all, txt, flags=re.S)
+                    else:
+                      new = txt.rstrip() + "\n\n## Ops Console\n\n" + block_all + "\n"
+                    if new != txt:
+                      README.write_text(new, encoding="utf-8")
+                      print("UPDATED: README Ops Console table")
+                    else:
+                      print("NO-CHANGE: README Ops Console table")
+                    PY
+                - name: Commit (if changed)
+                  run: |
+                    set -euo pipefail
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add README.md
+                    if ! git diff --cached --quiet; then
+                      git commit -m "docs(ops-console): auto-update workflows table with ▶︎ Run links"
+                      git push origin HEAD:main
+                    else
+                      echo "No changes to commit."
+
+      # Marker so we can detect application
+      - path: ".github/.applied_ops_console"
+        mode: "100644"
+        contents: "applied"
+
+  # --- 4) Ensure README has the ops-console anchors (idempotent)
+  - run_shell:
+      name: Ensure README has ops-console anchors
+      script: |
+        set -euo pipefail
+        if [ -f README.md ]; then
+          python - <<'PY'
+          import pathlib, re
+          p = pathlib.Path("README.md")
+          txt = p.read_text(encoding="utf-8")
+          start = "<!-- ops-console:start -->"; end = "<!-- ops-console:end -->"
+          if start not in txt or end not in txt:
+            block = f"{start}\n_Populated by Workflows Console Table workflow._\n{end}\n"
+            if "## Ops Console" in txt:
+              txt = re.sub(r"## Ops Console.*?$", "## Ops Console\n\n"+block, txt, count=1, flags=re.S|re.M)
+            else:
+              txt = txt.rstrip() + "\n\n## Ops Console\n\n" + block
+            p.write_text(txt, encoding="utf-8")
+          PY
+        fi
+
+  - commit:
+      message: "chore(ops-console): add Issue Form, Dispatcher, and README console table"
