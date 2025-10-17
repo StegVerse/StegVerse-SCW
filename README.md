@@ -225,3 +225,27 @@ _Last updated: **2025-10-16 23:12:35 UTC**_
 
 <!-- /kicks:status -->
 
+## Operations
+
+<!-- ops:console -->
+**Ops Console** — quick links (hybrid):
+
+[Open full console](.github/docs/WORKFLOWS_CONSOLE.md) · [All Actions](https://github.com/StegVerse/StegVerse-SCW/actions)
+
+| Workflow | State | Actions |
+|---|---|---|
+| `AutoPatch.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/AutoPatch.yml) · [File](.github/workflows/AutoPatch.yml) |
+| `actions-permission-check.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/actions-permission-check.yml) · [File](.github/workflows/actions-permission-check.yml) |
+| `auto_patch.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/auto_patch.yml) · [File](.github/workflows/auto_patch.yml) |
+| `autodocs-on-demand.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autodocs-on-demand.yml) · [File](.github/workflows/autodocs-on-demand.yml) |
+| `autopatch-inspect.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-inspect.yml) · [File](.github/workflows/autopatch-inspect.yml) |
+| `autopatch-reindex.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-reindex.yml) · [File](.github/workflows/autopatch-reindex.yml) |
+| `autopatch-repotree-and-supercheck.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-repotree-and-supercheck.yml) · [File](.github/workflows/autopatch-repotree-and-supercheck.yml) |
+| `autopatch_apply.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_apply.yml) · [File](.github/workflows/autopatch_apply.yml) |
+| `autopatch_deferred.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_deferred.yml) · [File](.github/workflows/autopatch_deferred.yml) |
+| `autopatch_dryrun.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_dryrun.yml) · [File](.github/workflows/autopatch_dryrun.yml) |
+| `backup_triggers.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/backup_triggers.yml) · [File](.github/workflows/backup_triggers.yml) |
+| `ci.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/ci.yml) · [File](.github/workflows/ci.yml) |
+
+_See the full table for all workflows → [.github/docs/WORKFLOWS_CONSOLE.md](.github/docs/WORKFLOWS_CONSOLE.md)._
+<!-- /ops:console -->
