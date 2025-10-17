@@ -1,0 +1,4 @@
+note=manual
+actor=StegVerse
+sha=5962fd36b101496fb69adc7bbd6031749ef2291c
+ref=refs/heads/main
