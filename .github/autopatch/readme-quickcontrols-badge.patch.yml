@@ -7,15 +7,13 @@ actions:
           name: Autopatch: README Quick Controls Badge
 
           on:
-            # Manual run if needed
             workflow_dispatch: {}
-            # Keep badge fresh when either file changes
             push:
               branches: [ "main" ]
               paths:
                 - ".github/workflows/autopatch-wire-quick-controls.yml"
                 - "README.md"
-            # 🔗 Auto-run immediately after the Quick Controls workflow completes
+                - ".github/taskops/ledger.jsonl"
             workflow_run:
               workflows: [ "Autopatch: Wire Quick Controls" ]
               types: [ completed ]
@@ -24,52 +22,115 @@ actions:
             contents: write
 
           jobs:
-            sync_badge:
+            sync_readme:
               runs-on: ubuntu-latest
               steps:
                 - name: Checkout
                   uses: actions/checkout@v4
                   with: { fetch-depth: 0 }
 
-                - name: Insert or update Quick Controls badge
+                - name: Update README badge + AutoPatch totals
                   id: update
+                  shell: bash
                   run: |
                     set -euo pipefail
+
                     FILE="README.md"
                     BADGE_START="<!-- autopatch-wire-quick-controls:badge -->"
                     BADGE_END="<!-- /autopatch-wire-quick-controls:badge -->"
+                    STATS_START="<!-- autopatch:totals -->"
+                    STATS_END="<!-- /autopatch:totals -->"
+
                     REPO="${{ github.repository }}"
                     BADGE="[![Autopatch: Wire Quick Controls](https://github.com/${REPO}/actions/workflows/autopatch-wire-quick-controls.yml/badge.svg)](https://github.com/${REPO}/actions/workflows/autopatch-wire-quick-controls.yml)"
+
+                    # Build the stats line from TaskOps ledger (latest autopatch-apply)
+                    STATS_LINE="$(python - <<'PY'
+                    import json, pathlib, datetime
+
+                    led = pathlib.Path('.github/taskops/ledger.jsonl')
+                    applied=noop=skipped=blocked=error=0
+                    ts='n/a'
+                    if led.exists():
+                        last=None
+                        with led.open('r', encoding='utf-8', errors='ignore') as f:
+                            for line in f:
+                                if not line.strip(): continue
+                                try:
+                                    j=json.loads(line)
+                                except Exception:
+                                    continue
+                                if j.get('job')=='autopatch-apply':
+                                    last=j
+                        if last:
+                            ts=last.get('ts','n/a')
+                            def to_int(x): 
+                                try: return int(str(x))
+                                except: return 0
+                            applied = to_int(last.get('applied',0))
+                            noop    = to_int(last.get('noop',0))
+                            skipped = to_int(last.get('skipped',0))
+                            blocked = to_int(last.get('blocked',0))
+                            error   = to_int(last.get('error',0))
+                    print(f"AutoPatch totals → ✅ applied **{applied}** · ⏭ noop **{noop}** · ⚠️ skipped **{skipped}** · ⛔ blocked **{blocked}** · ❌ error **{error}** — _{ts}_")
+                    PY
+                    )"
 
                     if [ ! -f "$FILE" ]; then
                       echo "::error file=$FILE::README not found"
                       exit 1
                     fi
 
-                    TMP="$(mktemp)"
-                    if grep -qF "$BADGE_START" "$FILE" && grep -qF "$BADGE_END" "$FILE"; then
-                      # Replace within existing block
-                      awk -v s="$BADGE_START" -v e="$BADGE_END" -v b="$BADGE" '
-                        BEGIN {inblk=0}
-                        {
-                          if (index($0,s)) {print s"\n"b"\n"e; inblk=1; next}
-                          if (inblk && index($0,e)) {inblk=0; next}
-                          if (!inblk) print
-                        }
-                      ' "$FILE" > "$TMP"
-                    else
-                      # Prepend if missing
-                      printf "%s\n%s\n%s\n\n" "$BADGE_START" "$BADGE" "$BADGE_END" > "$TMP"
-                      cat "$FILE" >> "$TMP"
-                    fi
+                    python - <<'PY'
+                    import re, os, sys
 
-                    mv "$TMP" "$FILE"
+                    file = "README.md"
+                    with open(file, "r", encoding="utf-8") as f:
+                        txt = f.read()
 
-                    if git diff --quiet; then
-                      echo "changed=false" >> "$GITHUB_OUTPUT"
-                    else
+                    BADGE_START="<!-- autopatch-wire-quick-controls:badge -->"
+                    BADGE_END="<!-- /autopatch-wire-quick-controls:badge -->"
+                    STATS_START="<!-- autopatch:totals -->"
+                    STATS_END="<!-- /autopatch:totals -->"
+
+                    badge = os.environ.get("BADGE_MD","").strip()
+                    stats = os.environ.get("STATS_MD","").strip()
+
+                    def upsert_block(text, start, end, body):
+                        block = f"{start}\n{body}\n{end}"
+                        if start in text and end in text:
+                            return re.sub(
+                                rf"{re.escape(start)}.*?{re.escape(end)}",
+                                block, text, flags=re.S
+                            )
+                        # If README has a “Badges” header, try to put under it; else, prepend at top
+                        if "## " in text:
+                            # Prepend at very top to keep it visible
+                            return block + "\n\n" + text
+                        return block + "\n\n" + text
+
+                    before = txt
+                    txt = upsert_block(txt, BADGE_START, BADGE_END, badge)
+                    txt = upsert_block(txt, STATS_START, STATS_END, stats)
+
+                    if txt != before:
+                        with open(file, "w", encoding="utf-8") as f:
+                            f.write(txt)
+                        print("changed=true")
+                    else:
+                        print("changed=false")
+                    PY \
+                    | tee /tmp/changed.txt
+
+                    CHANGED=$(grep -o 'changed=true' /tmp/changed.txt || true)
+                    if [ -n "$CHANGED" ]; then
                       echo "changed=true" >> "$GITHUB_OUTPUT"
+                    else
+                      echo "changed=false" >> "$GITHUB_OUTPUT"
                     fi
+                  env:
+                    BADGE_MD: "${{ env.BADGE }}"
+                    STATS_MD: "${STATS_LINE}"
 
                 - name: Commit & push (if changed)
                   if: steps.update.outputs.changed == 'true'
@@ -77,15 +138,16 @@ actions:
                     git config user.name  "StegVerse Bot"
                     git config user.email "bot@stegverse.org"
                     git add README.md
-                    git commit -m "autopatch(readme): ensure Quick Controls badge present"
+                    git commit -m "autopatch(readme): sync Quick Controls badge + latest AutoPatch totals"
                     git push origin HEAD:main
 
                 - name: Summary
                   if: always()
                   run: |
-                    echo "## README Quick Controls Badge Sync" >> "$GITHUB_STEP_SUMMARY"
-                    echo "- File: \`README.md\`" >> "$GITHUB_STEP_SUMMARY"
+                    echo "## README Sync" >> "$GITHUB_STEP_SUMMARY"
+                    echo "- Badge: Autopatch: Wire Quick Controls" >> "$GITHUB_STEP_SUMMARY"
+                    echo "- Totals source: .github/taskops/ledger.jsonl" >> "$GITHUB_STEP_SUMMARY"
                     echo "- Changed: \`${{ steps.update.outputs.changed || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
 
   - commit:
-      message: "autopatch(readme): add Quick Controls badge sync (auto-trigger on Quick Controls completion)"
+      message: "autopatch(readme): add badge + AutoPatch totals sync (auto-trigger on Quick Controls)"
