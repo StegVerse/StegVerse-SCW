@@ -1,217 +1,196 @@
-name: autopatch-apply
+name: AutoPatch + Ops Repair/Kick
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      kick_after:
+        description: "Kick selected workflows after repair (comma-separated file names)"
+        required: false
+        default: "workflows-badges.yml,workflows-console-table.yml"
+        type: string
+      just_preview:
+        description: "Preview only (no commit/push)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false","true"]
+
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
-      - ".github/autopatch/**"
+      - ".github/workflows/**"
       - "scripts/**"
-      - ".github/trigger/autopatch/**"
+      - ".github/manifest/**"
 
 permissions:
   contents: write
-  pull-requests: write
+  workflows: write
 
 jobs:
-  apply:
+  autopatch:
     runs-on: ubuntu-latest
-    env:
-      MANIFEST: .github/autopatch/patches.yml
-      DEFER: .github/autopatch/patches_deferred.yml
-      OUTDIR: self_healing_out
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
-      - name: Setup common Python (composite)
-        id: py
-        uses: ./.github/actions/setup-common-python
-        with:
-          python-version: "3.11"
-          cache: "pip"
-          extra-packages: "pyyaml jq"  # jq here is a no-op; kept for consistency
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
 
-      - name: Ensure system jq (for README status)
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip pyyaml
+
+      - name: Self-heal workflows (YAML normalize + add workflow_dispatch)
+        id: heal
+        shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -y
-          sudo apt-get install -y jq
+          python - <<'PY'
+          import pathlib, yaml, re, sys
 
-      - name: Seed manifests if missing
-        run: |
-          set -euo pipefail
-          mkdir -p .github/autopatch "${OUTDIR}"
+          ROOT    = pathlib.Path(".")
+          WF_DIR  = ROOT/".github/workflows"
+          fixed, added_dispatch, broken = [], [], []
 
-          if [ ! -f "${MANIFEST}" ]; then
-            printf "version: 1\npatches: []\n" > "${MANIFEST}"
-            echo "Seeded ${MANIFEST}"
-          fi
+          def safe_load(text, path):
+            try:
+              return yaml.safe_load(text), None
+            except Exception as e:
+              return None, e
 
-          if [ ! -f "${DEFER}" ]; then
-            printf "version: 1\npatches: []\n" > "${DEFER}"
-            echo "Seeded ${DEFER}"
-          fi
+          def normalize_inline_env(lines):
+            out = []
+            for line in lines:
+              m = re.match(r'^(\s*)env:\s*\{\s*([^}]+)\s*\}\s*$', line)
+              if m and "${{" in line:
+                base = m.group(1); inner = m.group(2)
+                out.append(f"{base}env:\n")
+                for part in inner.split(","):
+                  part = part.strip()
+                  if not part: continue
+                  if ":" in part:
+                    k,v = part.split(":",1)
+                    out.append(f"{base}  {k.strip()}: {v.strip()}\n")
+              else:
+                out.append(line)
+            return out
 
-      # --- Validate manifest nicely before running anything heavy
-      - name: Validate manifest (friendly)
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip pyyaml >/dev/null
-          python scripts/validate_yaml_manifest.py
-        env:
-          MANIFEST: ${{ env.MANIFEST }}
-      - name: Dry-run AutoPatch (preview)
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          python scripts/autopatch_runner.py \
-            --manifest "${MANIFEST}" \
-            --dry-run || true
-          if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
-            {
-              echo "### AutoPatch Dry-Run Report"
-              echo
-              cat "${OUTDIR}/AUTOPATCH_REPORT.md"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for p in sorted(WF_DIR.glob("*.y*ml")):
+            txt = p.read_text(encoding="utf-8")
+            data, err = safe_load(txt, p)
+            if err:
+              # try a light-touch normalization pass
+              lines = txt.splitlines(keepends=True)
+              lines = normalize_inline_env(lines)
+              new = "".join(lines)
+              if new != txt:
+                try:
+                  yaml.safe_load(new)  # validate
+                  p.write_text(new, encoding="utf-8")
+                  fixed.append(p.name)
+                  txt = new
+                  data, err = safe_load(txt, p)
+                except Exception:
+                  pass
+            if err:
+              broken.append(f"{p.name} · {type(err).__name__}")
+              continue
 
-      - name: Apply AutoPatch (prune + defer)
-        id: apply
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          python scripts/autopatch_runner.py \
-            --manifest "${MANIFEST}" \
-            --prune-success \
-            --defer-file "${DEFER}"
-          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+              # ——— ensure workflow_dispatch (skip pure reusable 'workflow_call' if you want)
+            onv = data.get("on")
+            needs_save = False
+            def add_dispatch_to_dict(d):
+              nonlocal needs_save
+              if "workflow_dispatch" not in d:
+                d["workflow_dispatch"] = {}
+                needs_save = True
 
-      - name: Capture apply exit (if failed)
-        if: failure()
-        run: |
-          echo "exit_code=1" >> "$GITHUB_OUTPUT"
+            if onv is None:
+              data["on"] = {"workflow_dispatch": {}}
+              needs_save = True
+            elif isinstance(onv, str):
+              data["on"] = {onv: None, "workflow_dispatch": {}}
+              needs_save = True
+            elif isinstance(onv, list):
+              m = {k: None for k in onv}
+              m["workflow_dispatch"] = {}
+              data["on"] = m
+              needs_save = True
+            elif isinstance(onv, dict):
+              # If it's *only* reusable, we still add dispatch per policy
+              add_dispatch_to_dict(onv)
 
-      - name: Commit manifest updates (if any)
+            if needs_save:
+              p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+              added_dispatch.append(p.name)
+
+          # Step summary
+          from datetime import datetime
+          print("::group::Autopatch summary")
+          print("Fixed YAML:", len(fixed))
+          for n in fixed: print("  -", n)
+          print("Added workflow_dispatch:", len(added_dispatch))
+          for n in added_dispatch: print("  -", n)
+          print("Still broken:", len(broken))
+          for n in broken: print("  -", n)
+          print("::endgroup::")
+
+          # Save outputs for next steps
+          out = pathlib.Path(os.environ["GITHUB_OUTPUT"])
+          out.write_text(
+              "any_changes=%s\nadded_dispatch=%s\nbroken_count=%d\n" % (
+                  "true" if (fixed or added_dispatch) else "false",
+                  ",".join(added_dispatch),
+                  len(broken)
+              ), encoding="utf-8")
+          PY
+
+      - name: Commit & push (if changes and not preview)
+        if: steps.heal.outputs.any_changes == 'true' && inputs.just_preview != 'true'
         run: |
           set -euo pipefail
           git config user.name  "StegVerse Bot"
           git config user.email "bot@stegverse.org"
-          git add "${MANIFEST}" "${DEFER}" || true
-          if ! git diff --cached --quiet; then
-            git commit -m "autopatch: prune successes, defer blocked items"
-            git push origin HEAD:main
-          else
-            echo "No manifest changes to commit."
-          fi
+          git add .github/workflows || true
+          git commit -m "autopatch: normalize YAML + ensure workflow_dispatch" || echo "Nothing to commit"
+          git push || true
 
-      # --- NEW: Update README with last AutoPatch result (tiny status line)
-      - name: Update README with last AutoPatch status
-        if: always()
+      - name: Kick post-repair workflows (optional)
+        if: inputs.just_preview != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF:  ${{ github.ref_name || 'main' }}
+          TARGETS: ${{ inputs.kick_after }}
         run: |
           set -euo pipefail
-          REPORT_JSON="${OUTDIR}/AUTOPATCH_REPORT.json"
-          if [ ! -f "$REPORT_JSON" ]; then
-            echo "No report json found; skipping README status update."
-            exit 0
-          fi
-          applied=$(jq -r '.summary.applied // 0'    "$REPORT_JSON")
-          noop=$(jq -r '.summary.noop // 0'          "$REPORT_JSON")
-          skipped=$(jq -r '.summary.skipped // 0'    "$REPORT_JSON")
-          blocked=$(jq -r '.summary.blocked // 0'    "$REPORT_JSON")
-          errorc=$(jq -r '.summary.error // 0'       "$REPORT_JSON")
-          ts=$(date -u +'%Y-%m-%d %H:%MZ')
-          line="Last AutoPatch: ✅ applied ${applied} | ➖ noop ${noop} | ⏭ skipped ${skipped} | ⛔ blocked ${blocked} | ❌ error ${errorc} — run #${GITHUB_RUN_ID} @ ${ts}"
+          OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
+          IFS=',' read -r -a arr <<< "${TARGETS}"
+          for wf in "${arr[@]}"; do
+            wf="$(echo "$wf" | xargs)"; [ -z "$wf" ] && continue
+            url="https://api.github.com/repos/${OWNER}/${NAME}/actions/workflows/${wf}/dispatches"
+            code=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" \
+                   -X POST -H "Authorization: Bearer ${GH_TOKEN}" \
+                   -H "Accept: application/vnd.github+json" \
+                   "${url}" -d "{\"ref\":\"${REF}\"}" || true)
+            echo "kick ${wf} → HTTP ${code}"
+          done
 
-          README="README.md"
-          if [ ! -f "$README" ]; then
-            echo "README.md not found at repo root; skipping."
-            exit 0
-          fi
-
-          start="<!-- autopatch-status:start -->"
-          end="<!-- autopatch-status:end -->"
-
-          if grep -q "$start" "$README"; then
-            awk -v s="$start" -v e="$end" -v L="$line" '
-              BEGIN{inblk=0}
-              $0 ~ s {print s; print L; inblk=1; next}
-              $0 ~ e {print e; inblk=0; next}
-              inblk==0 {print}
-            ' "$README" > /tmp/readme.new
-          else
-            # Insert after the first heading or at the very top if no heading found
-            awk -v s="$start" -v e="$end" -v L="$line" '
-              NR==1 {
-                print;
-                print ""; print s; print L; print e; next
-              }
-              {print}
-            ' "$README" > /tmp/readme.new
-          fi
-
-          if ! diff -q "$README" /tmp/readme.new >/dev/null 2>&1; then
-            mv /tmp/readme.new "$README"
-            git add "$README"
-            git config user.name  "StegVerse Bot"
-            git config user.email "bot@stegverse.org"
-            git commit -m "docs(readme): update last AutoPatch status line"
-            git push origin HEAD:main
-          else
-            echo "README already up to date."
-          fi
-
-      - name: Upload AutoPatch artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: autopatch-report-${{ github.run_id }}
-          path: |
-            self_healing_out/AUTOPATCH_REPORT.json
-            self_healing_out/AUTOPATCH_REPORT.md
-          if-no-files-found: warn
-
-      - name: TaskOps ledger (best-effort append)
-        if: always()
+      - name: Rebuild badge + Ops Console
+        if: inputs.just_preview != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF:  ${{ github.ref_name || 'main' }}
         run: |
           set -euo pipefail
-          mkdir -p .github/taskops
-          ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          applied="unknown"
-          if [ -f "${OUTDIR}/AUTOPATCH_REPORT.json" ]; then
-            applied=$(jq -r '.summary.applied // "0"' "${OUTDIR}/AUTOPATCH_REPORT.json" 2>/dev/null || echo "0")
-          fi
-          cat > /tmp/taskops_entry.json <<JSON
-{"ts":"${ts}","job":"autopatch-apply","run_id":"${GITHUB_RUN_ID}","repo":"${GITHUB_REPOSITORY}","branch":"${GITHUB_REF_NAME}","applied":"${applied}"}
-JSON
-          if [ -f ".github/taskops/ledger.jsonl" ]; then
-            cat /tmp/taskops_entry.json >> .github/taskops/ledger.jsonl
-            git add .github/taskops/ledger.jsonl
-            if ! git diff --cached --quiet; then
-              git commit -m "chore(taskops): log autopatch-apply run $GITHUB_RUN_ID"
-              git push origin HEAD:main
-            fi
-          else
-            echo "TaskOps ledger not found (skipping append). To enable, create .github/taskops/ledger.jsonl"
-          fi
-
-      - name: Summarize
-        if: always()
-        run: |
-          echo "### AutoPatch Apply Summary" >> "$GITHUB_STEP_SUMMARY"
-          if [ -f "${OUTDIR}/AUTOPATCH_REPORT.md" ]; then
-            cat "${OUTDIR}/AUTOPATCH_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "_No AUTOPATCH_REPORT.md generated._" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Set job outcome
-        if: always()
-        run: |
-          CODE="${{ steps.apply.outputs.exit_code }}"
-          if [ "$CODE" = "1" ]; then
-            echo "AutoPatch apply reported errors — failing job."
-            exit 1
-          fi
-          echo "AutoPatch apply completed."
+          OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
+          for wf in workflows-badges.yml workflows-console-table.yml; do
+            url="https://api.github.com/repos/${OWNER}/${NAME}/actions/workflows/${wf}/dispatches"
+            curl -sS -X POST -H "Authorization: Bearer ${GH_TOKEN}" \
+                 -H "Accept: application/vnd.github+json" \
+                 "${url}" -d "{\"ref\":\"${REF}\"}" -o /dev/null -w "%{http_code}"
+            echo
+          done
