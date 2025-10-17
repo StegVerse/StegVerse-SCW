@@ -1,11 +1,11 @@
 # Ops Console
 
-_Last updated: **2025-10-17 20:08 UTC**_
+_Last updated: **2025-10-17 21:56 UTC**_
 
 - ✅ OK: **0**
-- ➖ No dispatch: **71**
-- ❌ Broken: **37**
-- Total: **108**
+- ➖ No dispatch: **72**
+- ❌ Broken: **39**
+- Total: **111**
 
 | Workflow | State | Actions |
 |---|---|---|
@@ -25,6 +25,7 @@ _Last updated: **2025-10-17 20:08 UTC**_
 | `autopatch_dryrun.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_dryrun.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_dryrun.yml) · [File](.github/workflows/autopatch_dryrun.yml) |
 | `backup_triggers.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/backup_triggers.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/backup_triggers.yml) · [File](.github/workflows/backup_triggers.yml) |
 | `ci.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/ci.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/ci.yml) · [File](.github/workflows/ci.yml) |
+| `ci_governance.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/ci_governance.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/ci_governance.yml) · [File](.github/workflows/ci_governance.yml) |
 | `codeql.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/codeql.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/codeql.yml) · [File](.github/workflows/codeql.yml) |
 | `deploy_multi.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/deploy_multi.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/deploy_multi.yml) · [File](.github/workflows/deploy_multi.yml) |
 | `direct_apply_fixes.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/direct_apply_fixes.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/direct_apply_fixes.yml) · [File](.github/workflows/direct_apply_fixes.yml) |
@@ -89,6 +90,7 @@ _Last updated: **2025-10-17 20:08 UTC**_
 | `setup-common-python.yml` | ❌ broken · `ParserError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/setup-common-python.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/setup-common-python.yml) · [File](.github/workflows/setup-common-python.yml) |
 | `smoke-tests.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/smoke-tests.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/smoke-tests.yml) · [File](.github/workflows/smoke-tests.yml) |
 | `smoke_api_worker.yml` | ❌ broken · `ParserError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/smoke_api_worker.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/smoke_api_worker.yml) · [File](.github/workflows/smoke_api_worker.yml) |
+| `stegcore_governance_bootstrap.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/stegcore_governance_bootstrap.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/stegcore_governance_bootstrap.yml) · [File](.github/workflows/stegcore_governance_bootstrap.yml) |
 | `stegtalk_writer.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/stegtalk_writer.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/stegtalk_writer.yml) · [File](.github/workflows/stegtalk_writer.yml) |
 | `structure_on_demand.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/structure_on_demand.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/structure_on_demand.yml) · [File](.github/workflows/structure_on_demand.yml) |
 | `supercheck_remote.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/supercheck_remote.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/supercheck_remote.yml) · [File](.github/workflows/supercheck_remote.yml) |
@@ -112,6 +114,7 @@ _Last updated: **2025-10-17 20:08 UTC**_
 | `workflows-console-table.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-console-table.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-console-table.yml) · [File](.github/workflows/workflows-console-table.yml) |
 | `workflows-first-aid-sweep.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid-sweep.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid-sweep.yml) · [File](.github/workflows/workflows-first-aid-sweep.yml) |
 | `workflows-first-aid.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid.yml) · [File](.github/workflows/workflows-first-aid.yml) |
+| `workflows-sanity-check.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-sanity-check.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-sanity-check.yml) · [File](.github/workflows/workflows-sanity-check.yml) |
 | `workflows-second-aid.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-second-aid.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-second-aid.yml) · [File](.github/workflows/workflows-second-aid.yml) |
 | `workflows-status-badges.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-status-badges.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-status-badges.yml) · [File](.github/workflows/workflows-status-badges.yml) |
 | `yaml-bulk-autofix.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/yaml-bulk-autofix.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/yaml-bulk-autofix.yml) · [File](.github/workflows/yaml-bulk-autofix.yml) |
