@@ -1,0 +1,246 @@
+name: Workflows Second-Aid (aggressive repair + quarantine)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  second_aid:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Install deps
+        run: python -m pip install --upgrade pip pyyaml ruamel.yaml
+
+      - name: Aggressive repair / quarantine
+        id: repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re, pathlib, json, shutil, sys
+          from pathlib import Path
+          import yaml
+
+          ROOT = Path(".")
+          WF   = ROOT/".github/workflows"
+          OUT  = ROOT/".github/autopatch_out"
+          OUT.mkdir(parents=True, exist_ok=True)
+          Q    = WF/"_quarantine"
+          Q.mkdir(exist_ok=True)
+
+          def read(p):  return p.read_text(encoding="utf-8", errors="ignore")
+          def write(p,s): p.write_text(s, encoding="utf-8")
+
+          def preclean(txt:str)->str:
+            # Normalize line endings / BOM
+            txt = txt.replace("\r\n","\n").replace("\r","\n")
+            txt = txt.lstrip("\ufeff")
+            # Tabs → two spaces
+            txt = txt.replace("\t","  ")
+            # Smart quotes → ascii
+            txt = txt.replace("“","\"").replace("”","\"").replace("‘","'").replace("’","'")
+            # Unicode ellipsis → three dots
+            txt = txt.replace("…","...")
+            # Trim trailing NULs/ctrls
+            txt = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", txt)
+
+            # Inline env: {A: x, B: y}  → block
+            def fix_inline_env(m):
+              base = m.group(1)
+              inner = m.group(2)
+              out = [f"{base}env:\n"]
+              for part in inner.split(","):
+                part = part.strip()
+                if not part: continue
+                if ":" in part:
+                  k,v = part.split(":",1)
+                  out.append(f"{base}  {k.strip()}: {v.strip()}\n")
+              return "".join(out)
+            txt = re.sub(r"^(\s*)env:\s*\{\s*([^}]+)\s*\}\s*$", fix_inline_env, txt, flags=re.M)
+
+            # Common oops: top-level 'workflows:' instead of 'jobs:'
+            txt = re.sub(r"(?m)^\s*workflows\s*:\s*$", "jobs:", txt)
+
+            # Ensure top-level 'on:' is a map, not literal "on: ..." line with junk
+            # (we’ll leave deep surgery to quarantine path)
+            return txt
+
+          def try_parse(txt):
+            try:
+              yaml.safe_load(txt)
+              return True, None
+            except Exception as e:
+              return False, type(e).__name__
+
+          def skeleton(name:str):
+            return (
+f"""name: {name or 'Recovered Workflow'}
+
+on:
+  workflow_dispatch: {{}}
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Original workflow failed to parse; moved to .github/workflows/_quarantine/{name}.broken"
+"""
+            )
+
+          repaired, quarantined, parse_ok = [], [], []
+
+          for p in sorted(WF.glob("*.y*ml")):
+            txt0 = read(p)
+            ok, _ = try_parse(txt0)
+            if ok:
+              parse_ok.append(p.name)
+              continue
+
+            # pass 1: preclean
+            txt1 = preclean(txt0)
+            ok1, err1 = try_parse(txt1)
+            if ok1:
+              write(p, txt1)
+              repaired.append(p.name)
+              continue
+
+            # pass 2: last-ditch – if it looks like an obvious step script without 'run:', try to insert a run block quickly
+            # (very conservative – only if we see a '- name:' followed by script-ish lines)
+            lines = txt1.splitlines()
+            out = []
+            i = 0
+            changed = False
+            while i < len(lines):
+              out.append(lines[i])
+              if re.match(r'^\s*-\s+name:\s', lines[i]):
+                # look ahead few lines
+                j = i + 1
+                saw_run = False
+                script_lines = 0
+                while j < len(lines) and not re.match(r'^\s*-\s+name:\s', lines[j]) and not re.match(r'^\S', lines[j]):
+                  if re.match(r'^\s*run\s*:', lines[j]): saw_run = True
+                  if re.match(r'^\s*(git|curl|python|bash|sh|node|echo|set -e|set -eu|set -euo)\b', lines[j].lstrip()):
+                    script_lines += 1
+                  j += 1
+                if script_lines and not saw_run:
+                  # inject a run: | and indent subsequent non-empty non-comment lines in this block
+                  indent = len(re.match(r'^(\s*)', lines[i]).group(1)) + 2
+                  out.append(" " * indent + "run: |\n")
+                  k = i + 1
+                  while k < j:
+                    ln = lines[k]
+                    if ln.strip() and not ln.lstrip().startswith("#") and not re.match(r'^\s*\w+\s*:', ln):
+                      out.append(" " * (indent + 2) + ln.lstrip())
+                    else:
+                      out.append(ln)
+                    k += 1
+                  # skip the ones we re-added
+                  i = j - 1
+                  changed = True
+              i += 1
+
+            if changed:
+              txt2 = "\n".join(out) + ("\n" if not out or out[-1] != "" else "")
+              ok2, err2 = try_parse(txt2)
+              if ok2:
+                write(p, txt2)
+                repaired.append(p.name)
+                continue
+
+            # Quarantine: persist the original and replace with minimal skeleton
+            shutil.move(str(p), str(Q/f"{p.name}.broken"))
+            write(p, skeleton(p.stem))
+            quarantined.append(p.name)
+
+          OUT.write_text(
+            json.dumps(
+              {"repaired": repaired, "quarantined": quarantined, "already_ok": parse_ok},
+              indent=2
+            ),
+            encoding="utf-8"
+          )
+          PY
+
+      - name: Commit changes (if any)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add .github/workflows || true
+          git add .github/docs || true
+          if ! git diff --cached --quiet; then
+            git config user.name  "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git commit -m "chore(workflows): second-aid repairs + quarantine of unfixable YAML"
+            git push origin HEAD:main
+          else
+            echo "No changes to commit."
+
+      - name: Refresh Ops Console
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import yaml, pathlib, datetime
+          ROOT   = pathlib.Path(".")
+          WF_DIR = ROOT/".github/workflows"
+          DOC    = ROOT/".github/docs/WORKFLOWS_CONSOLE.md"
+          DOC.parent.mkdir(parents=True, exist_ok=True)
+
+          def load_yaml(p):
+            try: return yaml.safe_load(p.read_text(encoding="utf-8"))
+            except Exception as e: return e
+          def has_dispatch(d):
+            if not isinstance(d, dict): return False
+            on = d.get("on")
+            if on is None: return False
+            if isinstance(on, str): return on == "workflow_dispatch"
+            if isinstance(on, list): return "workflow_dispatch" in on
+            if isinstance(on, dict): return ("workflow_dispatch" in on) and (set(on.keys()) != {"workflow_call"})
+            return False
+
+          rows, ok, nodisp, broken = [], 0, 0, 0
+          for p in sorted(WF_DIR.glob("*.y*ml")):
+            if p.name.startswith("_"):  # skip quarantine dir marker
+              continue
+            d = load_yaml(p)
+            if isinstance(d, Exception):
+              broken += 1; state = f"❌ broken · `{type(d).__name__}`"
+            else:
+              if has_dispatch(d): ok += 1; state = "✅ ok"
+              else: nodisp += 1; state = "➖ no-dispatch"
+            gh = "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/" + p.name
+            rows.append(f"| `{p.name}` | {state} | [Run]({gh}) · [View]({gh}) · [File](.github/workflows/{p.name}) |")
+
+          total = ok + nodisp + broken
+          now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+          lines = []
+          lines += [ "# Ops Console", "", f"_Last updated: **{now}**_", "", f"- ✅ OK: **{ok}**", f"- ➖ No dispatch: **{nodisp}**", f"- ❌ Broken: **{broken}**", f"- Total: **{total}**", "", "| Workflow | State | Actions |", "|---|---|---|" ]
+          lines += rows
+          DOC.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Second-Aid Results" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f ".github/autopatch_out" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat .github/autopatch_out >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
