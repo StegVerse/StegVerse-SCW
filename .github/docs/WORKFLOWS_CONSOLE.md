@@ -1,11 +1,11 @@
 # Ops Console
 
-_Last updated: **2025-10-17 14:20 UTC**_
+_Last updated: **2025-10-17 14:40 UTC**_
 
 - ✅ OK: **0**
 - ➖ No dispatch: **70**
-- ❌ Broken: **35**
-- Total: **105**
+- ❌ Broken: **36**
+- Total: **106**
 
 | Workflow | State | Actions |
 |---|---|---|
@@ -15,6 +15,7 @@ _Last updated: **2025-10-17 14:20 UTC**_
 | `autodocs-on-demand.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autodocs-on-demand.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autodocs-on-demand.yml) · [File](.github/workflows/autodocs-on-demand.yml) |
 | `autopatch-inspect.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-inspect.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-inspect.yml) · [File](.github/workflows/autopatch-inspect.yml) |
 | `autopatch-ops.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-ops.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-ops.yml) · [File](.github/workflows/autopatch-ops.yml) |
+| `autopatch-readme-quickcontrols.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-readme-quickcontrols.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-readme-quickcontrols.yml) · [File](.github/workflows/autopatch-readme-quickcontrols.yml) |
 | `autopatch-reindex.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-reindex.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-reindex.yml) · [File](.github/workflows/autopatch-reindex.yml) |
 | `autopatch-repotree-and-supercheck.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-repotree-and-supercheck.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-repotree-and-supercheck.yml) · [File](.github/workflows/autopatch-repotree-and-supercheck.yml) |
 | `autopatch-wire-ops-table-links.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-wire-ops-table-links.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-wire-ops-table-links.yml) · [File](.github/workflows/autopatch-wire-ops-table-links.yml) |
