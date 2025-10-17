@@ -1,4 +1,4 @@
-name: Workflows Console Table
+name: Workflows Console Table (Hybrid Links)
 
 on:
   workflow_dispatch: {}
@@ -7,48 +7,41 @@ on:
     paths:
       - ".github/workflows/**"
       - "README.md"
-      - ".github/docs/**"
-      - "web/**"
 
-# NOTE: 'workflows:' is NOT a valid permission key in GitHub Actions.
 permissions:
   contents: write
-  actions: write
 
 jobs:
   build-table:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Setup Python
         uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+        with: { python-version: "3.11" }
 
-      - name: Install deps (PyYAML)
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyyaml
+      - name: Install deps
+        run: python -m pip install --upgrade pip pyyaml
 
       - name: Build tables & update README
-        id: render
-        shell: bash
+        env:
+          REPO_FULL: ${{ github.repository }}   # owner/repo
         run: |
           set -euo pipefail
           python - <<'PY'
-          import pathlib, yaml, datetime, re
+          import os, pathlib, urllib.parse, datetime, yaml, re
 
           ROOT   = pathlib.Path(".")
-          WF_DIR = ROOT / ".github" / "workflows"
-          DOC    = ROOT / ".github" / "docs" / "WORKFLOWS_CONSOLE.md"
-          README = ROOT / "README.md"
+          WF_DIR = ROOT/".github/workflows"
+          DOC    = ROOT/".github/docs/WORKFLOWS_CONSOLE.md"
+          README = ROOT/"README.md"
 
-          DOC.parent.mkdir(parents=True, exist_ok=True)
+          owner_repo = os.environ["REPO_FULL"]
+          abs_base   = f"https://github.com/{owner_repo}"
+          runs_base  = f"{abs_base}/actions/workflows"
 
           def load_yaml(p):
             try:
@@ -60,12 +53,11 @@ jobs:
             if not isinstance(d, dict): return False
             on = d.get("on")
             if on is None: return False
-            if isinstance(on, str): return on == "workflow_dispatch"
-            if isinstance(on, list): return "workflow_dispatch" in on
+            if isinstance(on, str):
+              return on == "workflow_dispatch"
+            if isinstance(on, list):
+              return "workflow_dispatch" in on
             if isinstance(on, dict):
-              # treat pure reusable workflows as "no dispatch" (not runnable from UI)
-              if set(on.keys()) == {"workflow_call"}:
-                return False
               return "workflow_dispatch" in on
             return False
 
@@ -73,65 +65,61 @@ jobs:
           ok = nodisp = broken = 0
           for p in sorted(WF_DIR.glob("*.y*ml")):
             data = load_yaml(p)
+            state = ""
+            note  = ""
             if isinstance(data, Exception):
-              state = "❌ broken"
-              note  = type(data).__name__
               broken += 1
+              state, note = "❌ broken", type(data).__name__
             else:
               if has_dispatch(data):
-                state = "✅ ok"
-                note  = ""
                 ok += 1
+                state = "✅ ok"
               else:
-                state = "➖ no-dispatch"
-                note  = ""
                 nodisp += 1
+                state = "➖ no-dispatch"
 
-            wf_name = p.name
-            # Links
-            view = f"./actions/workflows/{wf_name}"
-            file = f".github/workflows/{wf_name}"
-            # 'Run' links to the workflow page so the Run button is one tap away
-            run  = f"./actions/workflows/{wf_name}"
-            rows.append((wf_name, state, note, view, file, run))
+            # links
+            fname = p.name
+            enc   = urllib.parse.quote(fname)
+            run_abs   = f"{runs_base}/{enc}"
+            view_abs  = run_abs  # same page; shows runs + “Run workflow” button
+            file_rel  = f".github/workflows/{fname}"
+
+            actions_cell = f"[Run]({run_abs}) · [View]({view_abs}) · [File]({file_rel})"
+            rows.append((fname, state, note, actions_cell))
 
           total = ok + nodisp + broken
           now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-          # ---- Write console doc
-          lines = []
-          lines += ["# Ops Console", ""]
-          lines += [f"_Last updated: **{now}**_", ""]
-          lines += [f"- ✅ OK: **{ok}**",
-                    f"- ➖ No dispatch: **{nodisp}**",
-                    f"- ❌ Broken: **{broken}**",
-                    f"- Total: **{total}**",
-                    ""]
-          lines += ["| Workflow | State | Actions |",
-                    "|---|---|---|"]
-          for wf_name, state, note, view, file, run in rows:
-            state_with_note = state + (f" · `{note}`" if note else "")
-            actions = f"[View]({view}) · [File]({file}) · [▶ Run]({run})"
-            lines.append(f"| `{wf_name}` | {state_with_note} | {actions} |")
-          DOC.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          # ---- write DOC
+          DOC.parent.mkdir(parents=True, exist_ok=True)
+          out = []
+          out += [f"# Ops Console", "", f"_Last updated: **{now}**_", ""]
+          out += [f"- ✅ OK: **{ok}**", f"- ➖ No dispatch: **{nodisp}**", f"- ❌ Broken: **{broken}**", f"- Total: **{total}**", ""]
+          out += ["| Workflow | State | Actions |", "|---|---|---|"]
+          for n, s, note, a in rows:
+            if note:
+              s = f"{s} · `{note}`"
+            out.append(f"| `{n}` | {s} | {a} |")
+          DOC.write_text("\n".join(out) + "\n", encoding="utf-8")
 
-          # ---- Update README block just under the badge section
-          block_start = "<!-- ops-console:table -->"
-          block_end   = "<!-- /ops-console:table -->"
-          table_block = (
-            f"{block_start}\n"
-            f"See the full table in [.github/docs/WORKFLOWS_CONSOLE.md](.github/docs/WORKFLOWS_CONSOLE.md).\n\n"
-            f"| Workflow | State | Actions |\n"
-            f"|---|---|---|\n" +
-            "\n".join([
-              f"| `{wf}` | {st + (f' · `{nt}`' if nt else '')} | "
-              f"[View](./actions/workflows/{wf}) · "
-              f"[File](.github/workflows/{wf}) · "
-              f"[▶ Run](./actions/workflows/{wf}) |"
-              for wf, st, nt, *_ in rows[:30]  # show first 30 for readability
-            ]) +
-            ("\n\n_(Table truncated; see full console for all workflows.)_\n" if len(rows) > 30 else "\n") +
-            f"{block_end}"
+          # ---- inject into README below a stable marker block
+          start = "<!-- ops:console -->"
+          end   = "<!-- /ops:console -->"
+          block = (
+            f"{start}\n"
+            f"**Ops Console** — quick links (hybrid):\n\n"
+            f"[Open full console]({DOC.as_posix()}) · "
+            f"[All Actions]({abs_base}/actions)\n\n"
+            f"{'| Workflow | State | Actions |'}\n"
+            f"{'|---|---|---|'}\n" +
+            "\n".join(
+              f"| `{n}` | { (s + (f' · `{note}`' if note else '')) } | [Run]({runs_base}/{urllib.parse.quote(n)}) · [File](.github/workflows/{n}) |"
+              for (n,s,note,_) in rows[:12]   # small preview (first 12); full table lives in DOC
+            )
+            + "\n\n"
+            f"_See the full table for all workflows → [{DOC.as_posix()}]({DOC.as_posix()})._\n"
+            f"{end}"
           )
 
           if README.exists():
@@ -139,36 +127,26 @@ jobs:
           else:
             txt = "# Repository\n\n"
 
-          if block_start in txt and block_end in txt:
-            new = re.sub(
-              rf"{re.escape(block_start)}.*?{re.escape(block_end)}",
-              table_block, txt, flags=re.S
-            )
+          if start in txt and end in txt:
+            new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}", block, txt, flags=re.S)
           else:
-            # insert after the workflows status block if present, else append near top
-            insert_after = "<!-- /workflows:status -->"
-            if insert_after in txt:
-              new = txt.replace(insert_after, insert_after + "\n\n## Ops Console\n\n" + table_block)
-            else:
-              new = txt.rstrip() + "\n\n## Ops Console\n\n" + table_block + "\n"
+            new = txt.rstrip() + "\n\n## Operations\n\n" + block + "\n"
 
           if new != txt:
             README.write_text(new, encoding="utf-8")
 
-          # Print summary for the job log
-          print(f"OK={ok} NODISPATCH={nodisp} BROKEN={broken} TOTAL={total}")
+          print(f"[console] ok={ok} nodisp={nodisp} broken={broken} total={total} at {now}")
           PY
 
       - name: Commit (if changed)
-        shell: bash
         run: |
           set -euo pipefail
           git config user.name  "StegVerse Bot"
           git config user.email "bot@stegverse.org"
           git add .github/docs/WORKFLOWS_CONSOLE.md README.md || true
           if ! git diff --cached --quiet; then
-            git commit -m "docs(ops-console): refresh workflows console table"
+            git commit -m "docs(ops-console): hybrid links (absolute run + relative file) + README preview"
             git push origin HEAD:main
           else
-            echo "No changes to commit."
+            echo "No changes."
           fi
