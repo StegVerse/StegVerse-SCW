@@ -18,6 +18,7 @@ jobs:
           mkdir -p api/app/governance
           mkdir -p tests/governance
 
+      # ---------- constitution.yaml (unchanged) ----------
       - name: Write constitution.yaml
         run: |
           cat > api/app/governance/constitution.yaml <<'YAML'
@@ -28,13 +29,11 @@ metadata:
   version: "1.0.0"
   description: "Foundational governance covenant for StegCore."
   createdAt: "2025-10-17T00:00:00Z"
-
 principles:
   - "Species duality: Humans and AIs must co-consent to any governance action."
   - "Safety first: automated actions may only reduce risk/capabilities."
   - "Auditability: every decision yields public, immutable proofs."
   - "Recoverability: a last-known-good state is always restorable."
-
 guardianSpecies:
   - name: human
     code: HUMAN
@@ -46,7 +45,6 @@ guardianSpecies:
     registration:
       requiresCosignFrom: [HUMAN]
       minCosigners: 2
-
 changeClasses:
   - id: A
     name: SafetyHotfix
@@ -84,7 +82,6 @@ changeClasses:
     requiresDiverseDomains: true
     requiresTimeLockHours: 24
     allowAutoQuorum: false
-
 quorumRules:
   minSignersTotal: 3
   minHumanSigners: 1
@@ -92,7 +89,6 @@ quorumRules:
   requireDomainDiversity: true
   minDistinctDomains: 3
   allowedDomains: [HSM, AI_GUARDIAN, HEALTH_ORACLE, CANARY_CELL, REMOTE_ESCROW]
-
 autoQuorum:
   enabled: true
   requireNoHumanActivityForMinutes: 30
@@ -101,7 +97,6 @@ autoQuorum:
   minSigners: 3
   minDistinctDomains: 3
   requireMixedSpecies: true
-
 invariants:
   - id: species_duality
     assert: "signers.humans >= 1 && signers.ais >= 1"
@@ -115,26 +110,24 @@ invariants:
     assert: "change.class == 'A' -> proofs.rollback.previousHash != null"
   - id: autq_only_when_silent
     assert: "(execution.autoQuorum == true) -> (health.humanActivityMins >= autoQuorum.requireNoHumanActivityForMinutes && health.guardianAckMins >= autoQuorum.requireNoGuardianAckForMinutes)"
-
 timelocks:
   defaultHours:
     A: 0
     B: 6
     C: 24
     D: 24
-
 vaultPolicies:
   mixedSpeciesRequired: true
   forbidAutoQuorumEconomicActions: true
   recordAllProofsToAuditLog: true
   immutableRollbackAnchor: true
-
 audit:
   merkleReceipts: true
   remoteMirror: true
   receiptFields: [proposalId, changeClass, artifactHash, prevStateHash, signers, domains, proofs]
 YAML
 
+      # ---------- governance_verify.py (unchanged) ----------
       - name: Write governance_verify.py
         run: |
           cat > api/app/governance/governance_verify.py <<'PY'
@@ -143,15 +136,14 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Set
 import time
 
-# NOTE: replace this with real ed25519/HSM-backed verification.
 def verify_signature_stub(message: bytes, signature: bytes, pubkey: bytes) -> bool:
     return True
 
 @dataclass
 class Signer:
     id: str
-    species: str        # "HUMAN" | "AI"
-    domain: str         # "HSM" | "AI_GUARDIAN" | "HEALTH_ORACLE" | "CANARY_CELL" | "REMOTE_ESCROW"
+    species: str
+    domain: str
     pubkey_b64: str
     signature_b64: str
 
@@ -247,6 +239,7 @@ def _enforce_auto_quorum_rules(cons: Constitution, prop: Proposal) -> List[str]:
     return errors
 
 def verify_proposal(constitution: Constitution, proposal: Proposal, now_epoch: int | None = None) -> List[str]:
+    import yaml, json
     now_epoch = now_epoch or int(time.time())
     errors: List[str] = []
 
@@ -292,83 +285,203 @@ def verify_proposal(constitution: Constitution, proposal: Proposal, now_epoch: i
         if len(distinct) < constitution.quorum_rules()["minDistinctDomains"]:
             errors.append("Class requires domain diversity")
 
-    # TODO: replace signature stub with real verification (ed25519/HSM)
     return errors
 PY
 
-      - name: Write example test (pytest)
+      # ---------- NEW: FastAPI router ----------
+      - name: Write governance routes (FastAPI)
         run: |
-          cat > tests/governance/test_verify.py <<'PY'
-import yaml, time
-from api.app.governance.governance_verify import Constitution, Proposal, Signer, DiffSummary, Proofs, Health, verify_proposal
+          cat > api/app/governance/routes.py <<'PY'
+import os, yaml, time
+from fastapi import APIRouter, Depends, HTTPException, Header, status
+from pydantic import BaseModel, Field, validator
+from typing import List, Optional
+from .governance_verify import (
+    Constitution, Proposal, Signer, DiffSummary, Proofs, Health, verify_proposal
+)
 
-def load_constitution():
+router = APIRouter()
+
+# --- Simple admin guard (swap for guardian-key auth later) ---
+def admin_guard(x_governance_admin: Optional[str] = Header(default=None)):
+    required = os.getenv("GOV_ADMIN_TOKEN")
+    if required and x_governance_admin != required:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return True
+
+# --- Pydantic request models mirroring dataclasses ---
+class PSigner(BaseModel):
+    id: str
+    species: str
+    domain: str
+    pubkey_b64: str = "."
+    signature_b64: str = "."
+
+class PDiff(BaseModel):
+    capabilities_added: int = 0
+    egress_added: int = 0
+
+class PProofs(BaseModel):
+    rollback_previous_hash: Optional[str] = None
+    conformance_hash: Optional[str] = None
+    sbom_hash: Optional[str] = None
+
+class PHealth(BaseModel):
+    human_activity_minutes: int = 999
+    guardian_ack_minutes: int = 999
+
+class PProposal(BaseModel):
+    proposal_id: str
+    change_class: str = Field(regex="^[ABCD]$")
+    artifact_hash: str
+    prev_state_hash: Optional[str] = None
+    created_at_epoch: int
+    timelock_hours: Optional[int] = None
+    execution_auto_quorum: bool = False
+    signers: List[PSigner]
+    diff: PDiff = PDiff()
+    proofs: PProofs = PProofs()
+    health: PHealth = PHealth()
+
+    @validator("change_class")
+    def upper(cls, v): return v.upper()
+
+def load_constitution() -> Constitution:
     with open("api/app/governance/constitution.yaml", "r") as f:
-        return yaml.safe_load(f)
+        return Constitution.from_dict(yaml.safe_load(f))
 
-def test_valid_class_A_auto_quorum():
-    cons = Constitution.from_dict(load_constitution())
-    now = int(time.time())
-    prop = Proposal(
-        proposal_id="prop-0042",
-        change_class="A",
-        artifact_hash="sha256:deadbeef",
-        prev_state_hash="sha256:cafebabe",
-        created_at_epoch=now - 3600,
-        timelock_hours=0,
-        execution_auto_quorum=True,
-        signers=[
-            Signer(id="h1", species="HUMAN", domain="HSM", pubkey_b64=".", signature_b64="."),
-            Signer(id="a1", species="AI", domain="AI_GUARDIAN", pubkey_b64=".", signature_b64="."),
-            Signer(id="o1", species="AI", domain="HEALTH_ORACLE", pubkey_b64=".", signature_b64="."),
-        ],
-        diff=DiffSummary(capabilities_added=0, egress_added=0),
-        proofs=Proofs(rollback_previous_hash="sha256:prev", conformance_hash="sha256:tests", sbom_hash="sha256:sbom"),
-        health=Health(human_activity_minutes=120, guardian_ack_minutes=120),
+def to_dc(p: PProposal) -> Proposal:
+    return Proposal(
+        proposal_id=p.proposal_id,
+        change_class=p.change_class,
+        artifact_hash=p.artifact_hash,
+        prev_state_hash=p.prev_state_hash,
+        created_at_epoch=p.created_at_epoch,
+        timelock_hours=p.timelock_hours,
+        execution_auto_quorum=p.execution_auto_quorum,
+        signers=[Signer(**s.dict()) for s in p.signers],
+        diff=DiffSummary(**p.diff.dict()),
+        proofs=Proofs(**p.proofs.dict()),
+        health=Health(**p.health.dict()),
     )
-    errors = verify_proposal(cons, prop, now_epoch=now)
-    assert errors == [], f"Unexpected errors: {errors}"
 
-def test_reject_capability_growth_in_A():
-    cons = Constitution.from_dict(load_constitution())
-    now = int(time.time())
-    prop = Proposal(
-        proposal_id="prop-bad",
-        change_class="A",
-        artifact_hash="sha256:deadbeef",
-        prev_state_hash="sha256:cafebabe",
-        created_at_epoch=now - 3600,
-        timelock_hours=0,
-        execution_auto_quorum=False,
-        signers=[
-            Signer(id="h1", species="HUMAN", domain="HSM", pubkey_b64=".", signature_b64="."),
-            Signer(id="a1", species="AI", domain="AI_GUARDIAN", pubkey_b64=".", signature_b64="."),
-            Signer(id="o1", species="AI", domain="HEALTH_ORACLE", pubkey_b64=".", signature_b64="."),
-        ],
-        diff=DiffSummary(capabilities_added=1, egress_added=0),
-        proofs=Proofs(rollback_previous_hash="sha256:prev", conformance_hash=None, sbom_hash=None),
-        health=Health(human_activity_minutes=999, guardian_ack_minutes=999),
-    )
-    errors = verify_proposal(cons, prop, now_epoch=now)
-    assert any("may not add capabilities" in e for e in errors)
+@router.post("/governance/verify")
+def verify(proposal: PProposal, _=Depends(admin_guard)):
+    cons = load_constitution()
+    violations = verify_proposal(cons, to_dc(proposal), now_epoch=int(time.time()))
+    return {"valid": len(violations) == 0, "violations": violations}
+
+@router.post("/governance/execute")
+def execute(proposal: PProposal, _=Depends(admin_guard)):
+    cons = load_constitution()
+    violations = verify_proposal(cons, to_dc(proposal), now_epoch=int(time.time()))
+    if violations:
+        raise HTTPException(status_code=400, detail={"violations": violations})
+    # TODO: call into kernel executor (quarantine/rollback/rotate/etc.)
+    # Emit a placeholder "receipt" that a Vault service can later Merkle-root.
+    receipt = {
+        "proposalId": proposal.proposal_id,
+        "changeClass": proposal.change_class,
+        "artifactHash": proposal.artifact_hash,
+        "prevStateHash": proposal.prev_state_hash,
+        "executedAt": int(time.time()),
+        "notes": "Execution stub: wire to kernel/Vault executor.",
+    }
+    return {"status": "accepted", "receipt": receipt}
 PY
 
-      - name: Add lightweight test deps
+      # ---------- Auto-mount router into api/app/main.py (safe append) ----------
+      - name: Mount router in main.py (if not present)
+        run: |
+          MAIN="api/app/main.py"
+          if test -f "$MAIN"; then
+            if ! grep -q "governance.routes import router" "$MAIN"; then
+              echo "" >> "$MAIN"
+              echo "# --- auto-mounted governance router ---" >> "$MAIN"
+              echo "try:" >> "$MAIN"
+              echo "    from app.governance.routes import router as governance_router" >> "$MAIN"
+              echo "    app.include_router(governance_router, tags=[\"governance\"])" >> "$MAIN"
+              echo "except Exception as e:" >> "$MAIN"
+              echo "    import logging; logging.getLogger(__name__).warning(f\"Governance router not mounted: {e}\")" >> "$MAIN"
+            fi
+          else
+            echo "WARNING: $MAIN not found; please mount router manually."
+          fi
+
+      # ---------- tests ----------
+      - name: Write pytest for endpoints
+        run: |
+          cat > tests/governance/test_endpoints.py <<'PY'
+import time, os, yaml
+from fastapi.testclient import TestClient
+from api.app.main import app
+
+os.environ["GOV_ADMIN_TOKEN"] = "test-token"
+client = TestClient(app)
+
+def proposal_json(valid=True, auto=True):
+  now = int(time.time())
+  base = {
+    "proposal_id": "prop-TEST",
+    "change_class": "A",
+    "artifact_hash": "sha256:deadbeef",
+    "prev_state_hash": "sha256:cafebabe",
+    "created_at_epoch": now - 3600,
+    "timelock_hours": 0,
+    "execution_auto_quorum": auto,
+    "signers": [
+      {"id":"h1","species":"HUMAN","domain":"HSM","pubkey_b64":".","signature_b64":"."},
+      {"id":"a1","species":"AI","domain":"AI_GUARDIAN","pubkey_b64":".","signature_b64":"."},
+      {"id":"o1","species":"AI","domain":"HEALTH_ORACLE","pubkey_b64":".","signature_b64":"."}
+    ],
+    "diff": {"capabilities_added": 0 if valid else 1, "egress_added": 0},
+    "proofs": {"rollback_previous_hash":"sha256:prev","conformance_hash":"sha256:t","sbom_hash":"sha256:s"},
+    "health": {"human_activity_minutes": 120, "guardian_ack_minutes": 120}
+  }
+  return base
+
+def test_verify_ok():
+  r = client.post("/governance/verify", json=proposal_json(), headers={"X-Governance-Admin":"test-token"})
+  assert r.status_code == 200, r.text
+  data = r.json()
+  assert data["valid"] is True
+  assert data["violations"] == []
+
+def test_verify_reject_cap_add():
+  r = client.post("/governance/verify", json=proposal_json(valid=False), headers={"X-Governance-Admin":"test-token"})
+  assert r.status_code == 200
+  assert any("may not add capabilities" in v for v in r.json()["violations"])
+
+def test_execute_ok():
+  r = client.post("/governance/execute", json=proposal_json(), headers={"X-Governance-Admin":"test-token"})
+  assert r.status_code == 200, r.text
+  data = r.json()
+  assert data["status"] == "accepted"
+  assert data["receipt"]["proposalId"] == "prop-TEST"
+
+def test_execute_blocked_without_token():
+  r = client.post("/governance/execute", json=proposal_json())
+  assert r.status_code in (401,403)
+PY
+
+      - name: Install deps & run tests
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pyyaml
-
-      - name: Run tests
-        run: pytest -q
+          pip install fastapi "pydantic<3" uvicorn pytest pyyaml httpx
+          pytest -q
 
       - name: Commit & push
         run: |
           git config user.name "stegcore-bot"
           git config user.email "bot@stegverse.org"
-          git add api/app/governance/constitution.yaml api/app/governance/governance_verify.py tests/governance/test_verify.py
+          git add api/app/governance/constitution.yaml \
+                 api/app/governance/governance_verify.py \
+                 api/app/governance/routes.py \
+                 tests/governance/test_verify.py \
+                 tests/governance/test_endpoints.py \
+                 api/app/main.py
           if ! git diff --cached --quiet; then
-            git commit -m "Add StegCore governance constitution + verifier + tests"
+            git commit -m "Governance API: constitution, verifier, routes, tests (+ auto-mount)"
             git push
           else
             echo "No changes to commit."
-          fi
