@@ -1,0 +1,374 @@
+name: StegCore Governance Bootstrap (create/refresh files)
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Ensure folders exist
+        run: |
+          mkdir -p api/app/governance
+          mkdir -p tests/governance
+
+      - name: Write constitution.yaml
+        run: |
+          cat > api/app/governance/constitution.yaml <<'YAML'
+apiVersion: stegverse/v1
+kind: Constitution
+metadata:
+  id: "stegverse-constitution"
+  version: "1.0.0"
+  description: "Foundational governance covenant for StegCore."
+  createdAt: "2025-10-17T00:00:00Z"
+
+principles:
+  - "Species duality: Humans and AIs must co-consent to any governance action."
+  - "Safety first: automated actions may only reduce risk/capabilities."
+  - "Auditability: every decision yields public, immutable proofs."
+  - "Recoverability: a last-known-good state is always restorable."
+
+guardianSpecies:
+  - name: human
+    code: HUMAN
+    registration:
+      requiresCosignFrom: [AI]
+      minCosigners: 2
+  - name: ai
+    code: AI
+    registration:
+      requiresCosignFrom: [HUMAN]
+      minCosigners: 2
+
+changeClasses:
+  - id: A
+    name: SafetyHotfix
+    description: "Rollback, key revocation, kill/quarantine malicious module, tighten policy."
+    mayIncreaseCapabilities: false
+    mayAddEgress: false
+    requiresMixedSpecies: true
+    requiresDiverseDomains: true
+    requiresTimeLockHours: 0
+    allowAutoQuorum: true
+  - id: B
+    name: ContinuityFix
+    description: "Renew expiring certs/secrets; extend storage quota to prevent crash."
+    mayIncreaseCapabilities: false
+    mayAddEgress: false
+    requiresMixedSpecies: true
+    requiresDiverseDomains: true
+    requiresTimeLockHours: 6
+    allowAutoQuorum: true
+  - id: C
+    name: FeatureChange
+    description: "New endpoints/scopes/schemas; migration that expands power."
+    mayIncreaseCapabilities: true
+    mayAddEgress: true
+    requiresMixedSpecies: true
+    requiresDiverseDomains: true
+    requiresTimeLockHours: 24
+    allowAutoQuorum: false
+  - id: D
+    name: EconomicChange
+    description: "Budget increases, new payees, token transfers beyond daily cap."
+    mayIncreaseCapabilities: true
+    mayAddEgress: true
+    requiresMixedSpecies: true
+    requiresDiverseDomains: true
+    requiresTimeLockHours: 24
+    allowAutoQuorum: false
+
+quorumRules:
+  minSignersTotal: 3
+  minHumanSigners: 1
+  minAISigners: 1
+  requireDomainDiversity: true
+  minDistinctDomains: 3
+  allowedDomains: [HSM, AI_GUARDIAN, HEALTH_ORACLE, CANARY_CELL, REMOTE_ESCROW]
+
+autoQuorum:
+  enabled: true
+  requireNoHumanActivityForMinutes: 30
+  requireNoGuardianAckForMinutes: 30
+  permittedClasses: [A, B]
+  minSigners: 3
+  minDistinctDomains: 3
+  requireMixedSpecies: true
+
+invariants:
+  - id: species_duality
+    assert: "signers.humans >= 1 && signers.ais >= 1"
+  - id: quorum_size
+    assert: "signers.total >= quorumRules.minSignersTotal"
+  - id: domain_diversity
+    assert: "signers.distinctDomains >= quorumRules.minDistinctDomains"
+  - id: no_capability_growth_for_AB
+    assert: "(change.class in ['A','B']) -> (diff.capabilities.added == 0 && diff.egress.added == 0)"
+  - id: rollback_point_exists
+    assert: "change.class == 'A' -> proofs.rollback.previousHash != null"
+  - id: autq_only_when_silent
+    assert: "(execution.autoQuorum == true) -> (health.humanActivityMins >= autoQuorum.requireNoHumanActivityForMinutes && health.guardianAckMins >= autoQuorum.requireNoGuardianAckForMinutes)"
+
+timelocks:
+  defaultHours:
+    A: 0
+    B: 6
+    C: 24
+    D: 24
+
+vaultPolicies:
+  mixedSpeciesRequired: true
+  forbidAutoQuorumEconomicActions: true
+  recordAllProofsToAuditLog: true
+  immutableRollbackAnchor: true
+
+audit:
+  merkleReceipts: true
+  remoteMirror: true
+  receiptFields: [proposalId, changeClass, artifactHash, prevStateHash, signers, domains, proofs]
+YAML
+
+      - name: Write governance_verify.py
+        run: |
+          cat > api/app/governance/governance_verify.py <<'PY'
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import List, Dict, Any, Set
+import time
+
+# NOTE: replace this with real ed25519/HSM-backed verification.
+def verify_signature_stub(message: bytes, signature: bytes, pubkey: bytes) -> bool:
+    return True
+
+@dataclass
+class Signer:
+    id: str
+    species: str        # "HUMAN" | "AI"
+    domain: str         # "HSM" | "AI_GUARDIAN" | "HEALTH_ORACLE" | "CANARY_CELL" | "REMOTE_ESCROW"
+    pubkey_b64: str
+    signature_b64: str
+
+@dataclass
+class DiffSummary:
+    capabilities_added: int
+    egress_added: int
+
+@dataclass
+class Proofs:
+    rollback_previous_hash: str | None
+    conformance_hash: str | None
+    sbom_hash: str | None
+
+@dataclass
+class Health:
+    human_activity_minutes: int
+    guardian_ack_minutes: int
+
+@dataclass
+class Proposal:
+    proposal_id: str
+    change_class: str
+    artifact_hash: str
+    prev_state_hash: str | None
+    created_at_epoch: int
+    timelock_hours: int | None
+    execution_auto_quorum: bool
+    signers: List[Signer]
+    diff: DiffSummary
+    proofs: Proofs
+    health: Health
+
+@dataclass
+class Constitution:
+    data: Dict[str, Any]
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "Constitution":
+        return Constitution(d)
+
+    def quorum_rules(self) -> Dict[str, Any]:
+        return self.data["quorumRules"]
+
+    def auto_quorum(self) -> Dict[str, Any]:
+        return self.data["autoQuorum"]
+
+    def change_class_cfg(self, cls: str) -> Dict[str, Any]:
+        by_id = {c["id"]: c for c in self.data["changeClasses"]}
+        return by_id[cls]
+
+    def timelock_default_hours(self, cls: str) -> int:
+        return self.data["timelocks"]["defaultHours"][cls]
+
+    def allowed_domains(self) -> Set[str]:
+        return set(self.data["quorumRules"]["allowedDomains"])
+
+def _count_species(signers: List[Signer]) -> Dict[str, int]:
+    humans = sum(1 for s in signers if s.species.upper() == "HUMAN")
+    ais = sum(1 for s in signers if s.species.upper() == "AI")
+    return {"HUMAN": humans, "AI": ais, "TOTAL": len(signers)}
+
+def _distinct_domains(signers: List[Signer]) -> Set[str]:
+    return set(s.domain for s in signers)
+
+def _validate_domains(signers: List[Signer], allowed: Set[str]) -> List[str]:
+    errors = []
+    for s in signers:
+        if s.domain not in allowed:
+            errors.append(f"Signer {s.id} uses disallowed domain {s.domain}")
+    return errors
+
+def _enforce_timelock(now_epoch: int, prop: Proposal, cls_cfg: Dict[str, Any], default_hours: int) -> List[str]:
+    required = cls_cfg.get("requiresTimeLockHours", default_hours)
+    if required <= 0:
+        return []
+    ready_at = prop.created_at_epoch + required * 3600
+    if now_epoch < ready_at:
+        return [f"Timelock not satisfied: requires {required}h; ready at {ready_at}, now {now_epoch}"]
+    return []
+
+def _enforce_auto_quorum_rules(cons: Constitution, prop: Proposal) -> List[str]:
+    if not prop.execution_auto_quorum:
+        return []
+    aq = cons.auto_quorum()
+    errors = []
+    if prop.change_class not in aq["permittedClasses"]:
+        errors.append(f"Auto-quorum not permitted for class {prop.change_class}")
+    if prop.health.human_activity_minutes < aq["requireNoHumanActivityForMinutes"]:
+        errors.append("Auto-quorum blocked: recent human activity detected")
+    if prop.health.guardian_ack_minutes < aq["requireNoGuardianAckForMinutes"]:
+        errors.append("Auto-quorum blocked: recent guardian ack detected")
+    return errors
+
+def verify_proposal(constitution: Constitution, proposal: Proposal, now_epoch: int | None = None) -> List[str]:
+    now_epoch = now_epoch or int(time.time())
+    errors: List[str] = []
+
+    errors.extend(_validate_domains(proposal.signers, constitution.allowed_domains()))
+
+    species_counts = _count_species(proposal.signers)
+    qr = constitution.quorum_rules()
+
+    if species_counts["TOTAL"] < qr["minSignersTotal"]:
+        errors.append(f"Not enough total signers: have {species_counts['TOTAL']}, need {qr['minSignersTotal']}")
+    if species_counts["HUMAN"] < qr["minHumanSigners"]:
+        errors.append(f"Need >= {qr['minHumanSigners']} HUMAN signers")
+    if species_counts["AI"] < qr["minAISigners"]:
+        errors.append(f"Need >= {qr['minAISigners']} AI signers")
+
+    if qr.get("requireDomainDiversity", True):
+        distinct = _distinct_domains(proposal.signers)
+        if len(distinct) < qr["minDistinctDomains"]:
+            errors.append(f"Insufficient domain diversity: have {len(distinct)}, need {qr['minDistinctDomains']}")
+
+    cls_cfg = constitution.change_class_cfg(proposal.change_class)
+    default_tl = constitution.timelock_default_hours(proposal.change_class)
+    errors.extend(_enforce_timelock(now_epoch, proposal, cls_cfg, default_tl))
+
+    if proposal.change_class in ("A", "B"):
+        if proposal.diff.capabilities_added != 0:
+            errors.append("Class A/B may not add capabilities")
+        if proposal.diff.egress_added != 0:
+            errors.append("Class A/B may not add egress")
+
+    if proposal.change_class == "A":
+        if not proposal.proofs.rollback_previous_hash:
+            errors.append("Class A requires rollback_previous_hash proof")
+
+    errors.extend(_enforce_auto_quorum_rules(constitution, proposal))
+
+    if cls_cfg.get("requiresMixedSpecies", True):
+        if species_counts["HUMAN"] == 0 or species_counts["AI"] == 0:
+            errors.append("Mixed species requirement not met")
+
+    if cls_cfg.get("requiresDiverseDomains", True):
+        distinct = _distinct_domains(proposal.signers)
+        if len(distinct) < constitution.quorum_rules()["minDistinctDomains"]:
+            errors.append("Class requires domain diversity")
+
+    # TODO: replace signature stub with real verification (ed25519/HSM)
+    return errors
+PY
+
+      - name: Write example test (pytest)
+        run: |
+          cat > tests/governance/test_verify.py <<'PY'
+import yaml, time
+from api.app.governance.governance_verify import Constitution, Proposal, Signer, DiffSummary, Proofs, Health, verify_proposal
+
+def load_constitution():
+    with open("api/app/governance/constitution.yaml", "r") as f:
+        return yaml.safe_load(f)
+
+def test_valid_class_A_auto_quorum():
+    cons = Constitution.from_dict(load_constitution())
+    now = int(time.time())
+    prop = Proposal(
+        proposal_id="prop-0042",
+        change_class="A",
+        artifact_hash="sha256:deadbeef",
+        prev_state_hash="sha256:cafebabe",
+        created_at_epoch=now - 3600,
+        timelock_hours=0,
+        execution_auto_quorum=True,
+        signers=[
+            Signer(id="h1", species="HUMAN", domain="HSM", pubkey_b64=".", signature_b64="."),
+            Signer(id="a1", species="AI", domain="AI_GUARDIAN", pubkey_b64=".", signature_b64="."),
+            Signer(id="o1", species="AI", domain="HEALTH_ORACLE", pubkey_b64=".", signature_b64="."),
+        ],
+        diff=DiffSummary(capabilities_added=0, egress_added=0),
+        proofs=Proofs(rollback_previous_hash="sha256:prev", conformance_hash="sha256:tests", sbom_hash="sha256:sbom"),
+        health=Health(human_activity_minutes=120, guardian_ack_minutes=120),
+    )
+    errors = verify_proposal(cons, prop, now_epoch=now)
+    assert errors == [], f"Unexpected errors: {errors}"
+
+def test_reject_capability_growth_in_A():
+    cons = Constitution.from_dict(load_constitution())
+    now = int(time.time())
+    prop = Proposal(
+        proposal_id="prop-bad",
+        change_class="A",
+        artifact_hash="sha256:deadbeef",
+        prev_state_hash="sha256:cafebabe",
+        created_at_epoch=now - 3600,
+        timelock_hours=0,
+        execution_auto_quorum=False,
+        signers=[
+            Signer(id="h1", species="HUMAN", domain="HSM", pubkey_b64=".", signature_b64="."),
+            Signer(id="a1", species="AI", domain="AI_GUARDIAN", pubkey_b64=".", signature_b64="."),
+            Signer(id="o1", species="AI", domain="HEALTH_ORACLE", pubkey_b64=".", signature_b64="."),
+        ],
+        diff=DiffSummary(capabilities_added=1, egress_added=0),
+        proofs=Proofs(rollback_previous_hash="sha256:prev", conformance_hash=None, sbom_hash=None),
+        health=Health(human_activity_minutes=999, guardian_ack_minutes=999),
+    )
+    errors = verify_proposal(cons, prop, now_epoch=now)
+    assert any("may not add capabilities" in e for e in errors)
+PY
+
+      - name: Add lightweight test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pyyaml
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Commit & push
+        run: |
+          git config user.name "stegcore-bot"
+          git config user.email "bot@stegverse.org"
+          git add api/app/governance/constitution.yaml api/app/governance/governance_verify.py tests/governance/test_verify.py
+          if ! git diff --cached --quiet; then
+            git commit -m "Add StegCore governance constitution + verifier + tests"
+            git push
+          else
+            echo "No changes to commit."
+          fi
