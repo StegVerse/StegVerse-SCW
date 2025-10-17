@@ -8,18 +8,13 @@ on:
       - ".github/workflows/**"
       - "scripts/**"
 
-# Global permissions — valid keys only
 permissions:
   contents: write
-  actions: write
+  workflows: write
 
 jobs:
   self_heal:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      workflows: write
-      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,66 +27,55 @@ jobs:
       - name: Install deps (PyYAML)
         run: python -m pip install --upgrade pip pyyaml
 
-      - name: Ensure output dir
-        run: mkdir -p .github/autopatch_out
-
       - name: Run self-heal script
         id: heal
         run: |
-          set -euo pipefail
-          if [ ! -f scripts/self_heal.py ]; then
-            echo "ERROR: scripts/self_heal.py not found"; exit 1
-          fi
           python scripts/self_heal.py
-          : > .github/autopatch_out/SELF_HEAL_SUMMARY.json || true
 
       - name: Commit & push changes (if any)
         run: |
           set -euo pipefail
-          git config user.name  "StegVerse Bot"
-          git config user.email "bot@stegverse.org"
-          git add .github/workflows || true
-          if ! git diff --cached --quiet; then
+          if [ -f ".github/autopatch_out/ANY_CHANGES" ] && grep -q true .github/autopatch_out/ANY_CHANGES; then
+            git config user.name  "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git add .github/workflows
             git commit -m "autopatch(ops): self-heal workflow YAML + ensure workflow_dispatch"
             git push origin HEAD:main
             echo "Committed self-heal changes."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "No self-heal changes to commit."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # >>> quick-controls:summary
+      - name: Add quick buttons (Run / Repair) to summary
+        if: always()
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
+### Quick Controls
+
+> Tap a link to open the Action in the mobile UI.  
+> **Run** = open the workflow page (press *Run workflow*)  
+> **Repair now** = run the fixer that adds `workflow_dispatch` to missing files.
+
+| Action | Link |
+|---|---|
+| Run: Ops Console Table | [Open](./actions/workflows/workflows-console-table.yml) |
+| Repair: Add `workflow_dispatch` | [Open](./actions/workflows/fix-dispatch-triggers.yml) |
+| Kick: YAML Bulk Autofix | [Open](./actions/workflows/yaml-bulk-autofix.yml) |
+| Kick: Autopatch Apply | [Open](./actions/workflows/kick-autopatch-apply.yml) |
+
+MD
+      # <<< quick-controls:summary
 
       - name: Post summary
         if: always()
         run: |
           echo "## Autopatch Ops summary" >> "$GITHUB_STEP_SUMMARY"
-          if [ -s ".github/autopatch_out/SELF_HEAL_SUMMARY.json" ]; then
+          if [ -f ".github/autopatch_out/SELF_HEAL_SUMMARY.json" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
             cat .github/autopatch_out/SELF_HEAL_SUMMARY.json >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No summary file found." >> "$GITHUB_STEP_SUMMARY"
-
-  post_dispatch:
-    needs: self_heal
-    if: always() && needs.self_heal.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      workflows: write
-      contents: read
-    steps:
-      - name: Dispatch follow-ups (console table + badges)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          REF: ${{ github.ref_name || 'main' }}
-        run: |
-          set -euo pipefail
-          for wf in workflows-console-table.yml workflows-badges.yml; do
-            echo "Dispatching $wf..."
-            curl -sS -X POST \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPO/actions/workflows/$wf/dispatches" \
-              -d "{\"ref\":\"$REF\"}" || true
-          done
-          echo "Done."
+          fi
