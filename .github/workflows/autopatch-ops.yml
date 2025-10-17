@@ -1,33 +1,20 @@
-name: AutoPatch + Ops Repair/Kick
+name: Autopatch Ops (self-heal workflows)
 
 on:
-  workflow_dispatch:
-    inputs:
-      kick_after:
-        description: "Kick selected workflows after repair (comma-separated file names)"
-        required: false
-        default: "workflows-badges.yml,workflows-console-table.yml"
-        type: string
-      just_preview:
-        description: "Preview only (no commit/push)"
-        required: false
-        default: "false"
-        type: choice
-        options: ["false","true"]
-
+  workflow_dispatch: {}
   push:
-    branches: ["main"]
+    branches: [ "main" ]
     paths:
       - ".github/workflows/**"
       - "scripts/**"
-      - ".github/manifest/**"
 
+# Needed to write edits back and (optionally) manage other workflows later
 permissions:
   contents: write
   workflows: write
 
 jobs:
-  autopatch:
+  self_heal:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,159 +25,34 @@ jobs:
         uses: actions/setup-python@v5
         with: { python-version: "3.11" }
 
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip pyyaml
+      - name: Install deps (PyYAML)
+        run: python -m pip install --upgrade pip pyyaml
 
-      - name: Self-heal workflows (YAML normalize + add workflow_dispatch)
+      - name: Run self-heal script
         id: heal
-        shell: bash
+        run: python scripts/self_heal.py
+
+      - name: Commit & push changes (if any)
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import pathlib, yaml, re, sys
+          if [ -f ".github/autopatch_out/ANY_CHANGES" ] && grep -q true .github/autopatch_out/ANY_CHANGES; then
+            git config user.name  "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git add .github/workflows
+            git commit -m "autopatch(ops): self-heal workflow YAML + ensure workflow_dispatch"
+            git push origin HEAD:main
+            echo "Committed self-heal changes."
+          else
+            echo "No self-heal changes to commit."
+          fi
 
-          ROOT    = pathlib.Path(".")
-          WF_DIR  = ROOT/".github/workflows"
-          fixed, added_dispatch, broken = [], [], []
-
-          def safe_load(text, path):
-            try:
-              return yaml.safe_load(text), None
-            except Exception as e:
-              return None, e
-
-          def normalize_inline_env(lines):
-            out = []
-            for line in lines:
-              m = re.match(r'^(\s*)env:\s*\{\s*([^}]+)\s*\}\s*$', line)
-              if m and "${{" in line:
-                base = m.group(1); inner = m.group(2)
-                out.append(f"{base}env:\n")
-                for part in inner.split(","):
-                  part = part.strip()
-                  if not part: continue
-                  if ":" in part:
-                    k,v = part.split(":",1)
-                    out.append(f"{base}  {k.strip()}: {v.strip()}\n")
-              else:
-                out.append(line)
-            return out
-
-          for p in sorted(WF_DIR.glob("*.y*ml")):
-            txt = p.read_text(encoding="utf-8")
-            data, err = safe_load(txt, p)
-            if err:
-              # try a light-touch normalization pass
-              lines = txt.splitlines(keepends=True)
-              lines = normalize_inline_env(lines)
-              new = "".join(lines)
-              if new != txt:
-                try:
-                  yaml.safe_load(new)  # validate
-                  p.write_text(new, encoding="utf-8")
-                  fixed.append(p.name)
-                  txt = new
-                  data, err = safe_load(txt, p)
-                except Exception:
-                  pass
-            if err:
-              broken.append(f"{p.name} · {type(err).__name__}")
-              continue
-
-              # ——— ensure workflow_dispatch (skip pure reusable 'workflow_call' if you want)
-            onv = data.get("on")
-            needs_save = False
-            def add_dispatch_to_dict(d):
-              nonlocal needs_save
-              if "workflow_dispatch" not in d:
-                d["workflow_dispatch"] = {}
-                needs_save = True
-
-            if onv is None:
-              data["on"] = {"workflow_dispatch": {}}
-              needs_save = True
-            elif isinstance(onv, str):
-              data["on"] = {onv: None, "workflow_dispatch": {}}
-              needs_save = True
-            elif isinstance(onv, list):
-              m = {k: None for k in onv}
-              m["workflow_dispatch"] = {}
-              data["on"] = m
-              needs_save = True
-            elif isinstance(onv, dict):
-              # If it's *only* reusable, we still add dispatch per policy
-              add_dispatch_to_dict(onv)
-
-            if needs_save:
-              p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-              added_dispatch.append(p.name)
-
-          # Step summary
-          from datetime import datetime
-          print("::group::Autopatch summary")
-          print("Fixed YAML:", len(fixed))
-          for n in fixed: print("  -", n)
-          print("Added workflow_dispatch:", len(added_dispatch))
-          for n in added_dispatch: print("  -", n)
-          print("Still broken:", len(broken))
-          for n in broken: print("  -", n)
-          print("::endgroup::")
-
-          # Save outputs for next steps
-          out = pathlib.Path(os.environ["GITHUB_OUTPUT"])
-          out.write_text(
-              "any_changes=%s\nadded_dispatch=%s\nbroken_count=%d\n" % (
-                  "true" if (fixed or added_dispatch) else "false",
-                  ",".join(added_dispatch),
-                  len(broken)
-              ), encoding="utf-8")
-          PY
-
-      - name: Commit & push (if changes and not preview)
-        if: steps.heal.outputs.any_changes == 'true' && inputs.just_preview != 'true'
+      - name: Post summary
+        if: always()
         run: |
-          set -euo pipefail
-          git config user.name  "StegVerse Bot"
-          git config user.email "bot@stegverse.org"
-          git add .github/workflows || true
-          git commit -m "autopatch: normalize YAML + ensure workflow_dispatch" || echo "Nothing to commit"
-          git push || true
-
-      - name: Kick post-repair workflows (optional)
-        if: inputs.just_preview != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          REF:  ${{ github.ref_name || 'main' }}
-          TARGETS: ${{ inputs.kick_after }}
-        run: |
-          set -euo pipefail
-          OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
-          IFS=',' read -r -a arr <<< "${TARGETS}"
-          for wf in "${arr[@]}"; do
-            wf="$(echo "$wf" | xargs)"; [ -z "$wf" ] && continue
-            url="https://api.github.com/repos/${OWNER}/${NAME}/actions/workflows/${wf}/dispatches"
-            code=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" \
-                   -X POST -H "Authorization: Bearer ${GH_TOKEN}" \
-                   -H "Accept: application/vnd.github+json" \
-                   "${url}" -d "{\"ref\":\"${REF}\"}" || true)
-            echo "kick ${wf} → HTTP ${code}"
-          done
-
-      - name: Rebuild badge + Ops Console
-        if: inputs.just_preview != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          REF:  ${{ github.ref_name || 'main' }}
-        run: |
-          set -euo pipefail
-          OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
-          for wf in workflows-badges.yml workflows-console-table.yml; do
-            url="https://api.github.com/repos/${OWNER}/${NAME}/actions/workflows/${wf}/dispatches"
-            curl -sS -X POST -H "Authorization: Bearer ${GH_TOKEN}" \
-                 -H "Accept: application/vnd.github+json" \
-                 "${url}" -d "{\"ref\":\"${REF}\"}" -o /dev/null -w "%{http_code}"
-            echo
-          done
+          echo "## Autopatch Ops summary" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f ".github/autopatch_out/SELF_HEAL_SUMMARY.json" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat .github/autopatch_out/SELF_HEAL_SUMMARY.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary file found." >> "$GITHUB_STEP_SUMMARY"
+          fi
