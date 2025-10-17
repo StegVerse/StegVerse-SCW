@@ -1,4 +1,5 @@
 # StegVerse-SCW
+![Last YAML Bulk Autofix](https://img.shields.io/badge/Last_YAML_Autofix-2025-10-17%2008:05:29%20UTC-blue?style=flat-square)
 [![Workflows](.github/badges/workflows.svg)](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-badges.yml)
 
 <!-- workflows:status -->
