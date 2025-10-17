@@ -1,11 +1,11 @@
 # Ops Console
 
-_Last updated: **2025-10-17 14:40 UTC**_
+_Last updated: **2025-10-17 18:44 UTC**_
 
 - ✅ OK: **0**
-- ➖ No dispatch: **70**
+- ➖ No dispatch: **71**
 - ❌ Broken: **36**
-- Total: **106**
+- Total: **107**
 
 | Workflow | State | Actions |
 |---|---|---|
@@ -110,6 +110,7 @@ _Last updated: **2025-10-17 14:40 UTC**_
 | `workflows-badges-nudge.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-badges-nudge.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-badges-nudge.yml) · [File](.github/workflows/workflows-badges-nudge.yml) |
 | `workflows-badges.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-badges.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-badges.yml) · [File](.github/workflows/workflows-badges.yml) |
 | `workflows-console-table.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-console-table.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-console-table.yml) · [File](.github/workflows/workflows-console-table.yml) |
+| `workflows-first-aid-sweep.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid-sweep.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid-sweep.yml) · [File](.github/workflows/workflows-first-aid-sweep.yml) |
 | `workflows-first-aid.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid.yml) · [File](.github/workflows/workflows-first-aid.yml) |
 | `workflows-status-badges.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-status-badges.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-status-badges.yml) · [File](.github/workflows/workflows-status-badges.yml) |
 | `yaml-bulk-autofix.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/yaml-bulk-autofix.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/yaml-bulk-autofix.yml) · [File](.github/workflows/yaml-bulk-autofix.yml) |
