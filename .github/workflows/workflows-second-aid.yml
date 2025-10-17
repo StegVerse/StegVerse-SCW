@@ -32,14 +32,15 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import re, pathlib, json, shutil, sys
+          import re, pathlib, json, shutil
           from pathlib import Path
           import yaml
 
           ROOT = Path(".")
           WF   = ROOT/".github/workflows"
-          OUT  = ROOT/".github/autopatch_out"
-          OUT.mkdir(parents=True, exist_ok=True)
+          OUTD = ROOT/".github/autopatch_out"
+          OUTD.mkdir(parents=True, exist_ok=True)
+          OUTF = OUTD/"SECOND_AID_SUMMARY.json"
           Q    = WF/"_quarantine"
           Q.mkdir(exist_ok=True)
 
@@ -47,22 +48,14 @@ jobs:
           def write(p,s): p.write_text(s, encoding="utf-8")
 
           def preclean(txt:str)->str:
-            # Normalize line endings / BOM
             txt = txt.replace("\r\n","\n").replace("\r","\n")
             txt = txt.lstrip("\ufeff")
-            # Tabs → two spaces
             txt = txt.replace("\t","  ")
-            # Smart quotes → ascii
             txt = txt.replace("“","\"").replace("”","\"").replace("‘","'").replace("’","'")
-            # Unicode ellipsis → three dots
             txt = txt.replace("…","...")
-            # Trim trailing NULs/ctrls
             txt = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", txt)
-
-            # Inline env: {A: x, B: y}  → block
             def fix_inline_env(m):
-              base = m.group(1)
-              inner = m.group(2)
+              base = m.group(1); inner = m.group(2)
               out = [f"{base}env:\n"]
               for part in inner.split(","):
                 part = part.strip()
@@ -72,18 +65,12 @@ jobs:
                   out.append(f"{base}  {k.strip()}: {v.strip()}\n")
               return "".join(out)
             txt = re.sub(r"^(\s*)env:\s*\{\s*([^}]+)\s*\}\s*$", fix_inline_env, txt, flags=re.M)
-
-            # Common oops: top-level 'workflows:' instead of 'jobs:'
             txt = re.sub(r"(?m)^\s*workflows\s*:\s*$", "jobs:", txt)
-
-            # Ensure top-level 'on:' is a map, not literal "on: ..." line with junk
-            # (we’ll leave deep surgery to quarantine path)
             return txt
 
           def try_parse(txt):
             try:
-              yaml.safe_load(txt)
-              return True, None
+              yaml.safe_load(txt); return True, None
             except Exception as e:
               return False, type(e).__name__
 
@@ -102,43 +89,31 @@ jobs:
 """
             )
 
-          repaired, quarantined, parse_ok = [], [], []
+          repaired, quarantined, already_ok = [], [], []
 
           for p in sorted(WF.glob("*.y*ml")):
             txt0 = read(p)
             ok, _ = try_parse(txt0)
             if ok:
-              parse_ok.append(p.name)
-              continue
+              already_ok.append(p.name); continue
 
-            # pass 1: preclean
             txt1 = preclean(txt0)
-            ok1, err1 = try_parse(txt1)
+            ok1, _ = try_parse(txt1)
             if ok1:
-              write(p, txt1)
-              repaired.append(p.name)
-              continue
+              write(p, txt1); repaired.append(p.name); continue
 
-            # pass 2: last-ditch – if it looks like an obvious step script without 'run:', try to insert a run block quickly
-            # (very conservative – only if we see a '- name:' followed by script-ish lines)
             lines = txt1.splitlines()
-            out = []
-            i = 0
-            changed = False
+            out, i, changed = [], 0, False
             while i < len(lines):
               out.append(lines[i])
               if re.match(r'^\s*-\s+name:\s', lines[i]):
-                # look ahead few lines
-                j = i + 1
-                saw_run = False
-                script_lines = 0
+                j, saw_run, script_lines = i+1, False, 0
                 while j < len(lines) and not re.match(r'^\s*-\s+name:\s', lines[j]) and not re.match(r'^\S', lines[j]):
                   if re.match(r'^\s*run\s*:', lines[j]): saw_run = True
                   if re.match(r'^\s*(git|curl|python|bash|sh|node|echo|set -e|set -eu|set -euo)\b', lines[j].lstrip()):
                     script_lines += 1
                   j += 1
                 if script_lines and not saw_run:
-                  # inject a run: | and indent subsequent non-empty non-comment lines in this block
                   indent = len(re.match(r'^(\s*)', lines[i]).group(1)) + 2
                   out.append(" " * indent + "run: |\n")
                   k = i + 1
@@ -149,29 +124,23 @@ jobs:
                     else:
                       out.append(ln)
                     k += 1
-                  # skip the ones we re-added
                   i = j - 1
                   changed = True
               i += 1
 
             if changed:
-              txt2 = "\n".join(out) + ("\n" if not out or out[-1] != "" else "")
-              ok2, err2 = try_parse(txt2)
+              txt2 = "\n".join(out) + "\n"
+              ok2, _ = try_parse(txt2)
               if ok2:
-                write(p, txt2)
-                repaired.append(p.name)
-                continue
+                write(p, txt2); repaired.append(p.name); continue
 
-            # Quarantine: persist the original and replace with minimal skeleton
+            # Quarantine
             shutil.move(str(p), str(Q/f"{p.name}.broken"))
             write(p, skeleton(p.stem))
             quarantined.append(p.name)
 
-          OUT.write_text(
-            json.dumps(
-              {"repaired": repaired, "quarantined": quarantined, "already_ok": parse_ok},
-              indent=2
-            ),
+          OUTF.write_text(
+            json.dumps({"repaired": repaired, "quarantined": quarantined, "already_ok": already_ok}, indent=2),
             encoding="utf-8"
           )
           PY
@@ -215,8 +184,6 @@ jobs:
 
           rows, ok, nodisp, broken = [], 0, 0, 0
           for p in sorted(WF_DIR.glob("*.y*ml")):
-            if p.name.startswith("_"):  # skip quarantine dir marker
-              continue
             d = load_yaml(p)
             if isinstance(d, Exception):
               broken += 1; state = f"❌ broken · `{type(d).__name__}`"
@@ -238,9 +205,11 @@ jobs:
         if: always()
         run: |
           echo "## Second-Aid Results" >> "$GITHUB_STEP_SUMMARY"
-          if [ -f ".github/autopatch_out" ]; then
+          if [ -f ".github/autopatch_out/SECOND_AID_SUMMARY.json" ]; then
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
-            cat .github/autopatch_out >> "$GITHUB_STEP_SUMMARY" || true
+            cat .github/autopatch_out/SECOND_AID_SUMMARY.json >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No summary file created._" >> "$GITHUB_STEP_SUMMARY"
           fi
