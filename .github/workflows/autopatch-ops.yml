@@ -8,15 +8,18 @@ on:
       - ".github/workflows/**"
       - "scripts/**"
 
-# Needed to write edits back and (optionally) manage/dispatch other workflows
+# Global permissions — valid keys only
 permissions:
   contents: write
   actions: write
-  workflows: write
 
 jobs:
   self_heal:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      workflows: write
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,7 +43,6 @@ jobs:
             echo "ERROR: scripts/self_heal.py not found"; exit 1
           fi
           python scripts/self_heal.py
-          # Always create a summary stub so the post step has something to show
           : > .github/autopatch_out/SELF_HEAL_SUMMARY.json || true
 
       - name: Commit & push changes (if any)
@@ -48,9 +50,7 @@ jobs:
           set -euo pipefail
           git config user.name  "StegVerse Bot"
           git config user.email "bot@stegverse.org"
-          # Stage typical heal targets
           git add .github/workflows || true
-          # Commit only if there are staged changes
           if ! git diff --cached --quiet; then
             git commit -m "autopatch(ops): self-heal workflow YAML + ensure workflow_dispatch"
             git push origin HEAD:main
@@ -66,7 +66,6 @@ jobs:
         run: |
           echo "## Autopatch Ops summary" >> "$GITHUB_STEP_SUMMARY"
           if [ -s ".github/autopatch_out/SELF_HEAL_SUMMARY.json" ]; then
-            echo "" >> "$GITHUB_STEP_SUMMARY"
             cat .github/autopatch_out/SELF_HEAL_SUMMARY.json >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No summary file found." >> "$GITHUB_STEP_SUMMARY"
