@@ -1,123 +1,108 @@
-name: Autopatch — Wire Quick Controls (Run / Repair)
+name: Autopatch: Wire Quick Controls (ops)
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/autopatch-ops.yml"
 
 permissions:
   contents: write
 
 jobs:
-  patch:
+  wire_block:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-
-      - name: Apply patches (idempotent)
+      - name: Ensure Quick Controls block is present (add or repair)
         id: patch
+        shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import re, pathlib
+          FILE=".github/workflows/autopatch-ops.yml"
+          BEGIN="# >>> quick-controls:summary"
+          END="# <<< quick-controls:summary"
 
-          root = pathlib.Path(".")
-          changed = False
+          if [ ! -f "$FILE" ]; then
+            echo "::error file=$FILE::File not found"
+            exit 1
+          fi
 
-          # ---------- A) autopatch-ops.yml: add summary buttons ----------
-          ops = root/".github/workflows/autopatch-ops.yml"
-          if ops.exists():
-              txt = ops.read_text(encoding="utf-8")
-
-              marker_begin = "# >>> quick-controls:summary"
-              marker_end   = "# <<< quick-controls:summary"
-              block = f"""
+          # Desired block content (indent matches job 'steps' level)
+          read -r -d '' BLOCK <<'YAML'
+      # >>> quick-controls:summary
       - name: Add quick buttons (Run / Repair) to summary
         if: always()
         env:
-          REPO: ${{{{ github.repository }}}}
+          REPO: ${{ github.repository }}
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
-{marker_begin}
 ### Quick Controls
 
 > Tap a link to open the Action in the mobile UI.  
 > **Run** = open the workflow page (press *Run workflow*)  
-> **Repair now** = run the fixer that adds \`workflow_dispatch\` to missing files.
+> **Repair now** = run the fixer that adds `workflow_dispatch` to missing files.
 
 | Action | Link |
 |---|---|
-| ▶ Run **YAML Bulk Autofix** | [Open workflow](./actions/workflows/yaml-bulk-autofix.yml) |
-| ▶ Run **Kick Autopatch** | [Open workflow](./actions/workflows/kick-autopatch.yml) |
-| ▶ Run **Workflows Console Table** | [Open workflow](./actions/workflows/workflows-console-table.yml) |
-| ▶ Run **Workflows Status Badges** | [Open workflow](./actions/workflows/workflows-badges.yml) |
-| 🛠 **Repair now** (add \`workflow_dispatch\`) | [Open fixer](./actions/workflows/fix-dispatch-triggers.yml) |
-{marker_end}
+| Run: Ops Console Table | [Open](./actions/workflows/workflows-console-table.yml) |
+| Repair: Add `workflow_dispatch` | [Open](./actions/workflows/fix-dispatch-triggers.yml) |
+| Kick: YAML Bulk Autofix | [Open](./actions/workflows/yaml-bulk-autofix.yml) |
+| Kick: Autopatch Apply | [Open](./actions/workflows/kick-autopatch-apply.yml) |
 MD
-""".rstrip("\n")
+      # <<< quick-controls:summary
+YAML
 
-              if marker_begin not in txt:
-                  # append the step at the end of the last job (just before file end)
-                  txt = txt.rstrip() + "\n\n" + block + "\n"
-                  ops.write_text(txt, encoding="utf-8")
-                  changed = True
+          orig_sha="$(sha256sum "$FILE" | awk '{print $1}')"
 
-          # ---------- B) README: add Quick Controls under Ops Console ----------
-          readme = root/"README.md"
-          if readme.exists():
-              rtxt = readme.read_text(encoding="utf-8")
-          else:
-              rtxt = "# Repository\n"
+          if grep -qF "$BEGIN" "$FILE" && grep -qF "$END" "$FILE"; then
+            # Replace existing marked region
+            awk -v BEGIN="$BEGIN" -v END="$END" -v repl="$BLOCK" '
+              BEGIN { inblk=0 }
+              {
+                if (index($0, BEGIN)) { print repl; inblk=1; next }
+                if (inblk && index($0, END)) { inblk=0; next }
+                if (!inblk) print
+              }
+            ' "$FILE" > "$FILE.new"
+            mv "$FILE.new" "$FILE"
+          else
+            # Insert block before the "Post summary" step, if present; else append
+            if grep -nE '^[[:space:]]+- name: Post summary' "$FILE" >/dev/null; then
+              line_no="$(grep -nE '^[[:space:]]+- name: Post summary' "$FILE" | head -1 | cut -d: -f1)"
+              head -n $((line_no-1)) "$FILE" > "$FILE.new"
+              printf "%s\n" "$BLOCK" >> "$FILE.new"
+              tail -n +$((line_no)) "$FILE" >> "$FILE.new"
+              mv "$FILE.new" "$FILE"
+            else
+              printf "\n%s\n" "$BLOCK" >> "$FILE"
+            fi
+          fi
 
-          rb = "<!-- quick-controls:begin -->"
-          re_ = "<!-- quick-controls:end -->"
-          md_block = f"""{rb}
-### Quick Controls
+          new_sha="$(sha256sum "$FILE" | awk '{print $1}')"
+          if [ "$orig_sha" != "$new_sha" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
-- ▶ **Run**:  
-  [YAML Bulk Autofix](./actions/workflows/yaml-bulk-autofix.yml) ·
-  [Kick Autopatch](./actions/workflows/kick-autopatch.yml) ·
-  [Console Table](./actions/workflows/workflows-console-table.yml) ·
-  [Status Badges](./actions/workflows/workflows-badges.yml)
-
-- 🛠 **Repair now** (adds `workflow_dispatch` to missing):  
-  [Fix dispatch triggers](./actions/workflows/fix-dispatch-triggers.yml)
-{re_}"""
-
-          if rb not in rtxt:
-              # Try to find an "Ops Console" heading to insert after. If not, append to end.
-              ops_h = re.search(r"(?im)^\s*#+\s*Ops Console\s*$", rtxt)
-              if ops_h:
-                  # insert after the heading line
-                  start_line_end = rtxt.find("\n", ops_h.end())
-                  if start_line_end == -1:
-                      start_line_end = len(rtxt)
-                  new = rtxt[:start_line_end+1] + "\n" + md_block + "\n" + rtxt[start_line_end+1:]
-              else:
-                  new = rtxt.rstrip() + "\n\n" + md_block + "\n"
-              readme.write_text(new, encoding="utf-8")
-              changed = True
-
-          # ---------- RESULT FLAG ----------
-          outflag = root/".github/autopatch_out/WIRED_QUICK_CONTROLS"
-          outflag.parent.mkdir(parents=True, exist_ok=True)
-          outflag.write_text("true" if changed else "false", encoding="utf-8")
-          print(f"[patch] changed={changed}")
-          PY
-
-      - name: Commit changes (if any)
+      - name: Commit & push (if changed)
+        if: steps.patch.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          if [ -s ".github/autopatch_out/WIRED_QUICK_CONTROLS" ] && grep -q true .github/autopatch_out/WIRED_QUICK_CONTROLS; then
-            git config user.name  "StegVerse Bot"
-            git config user.email "bot@stegverse.org"
-            git add README.md .github/workflows/autopatch-ops.yml
-            git commit -m "autopatch: wire Quick Controls (Run / Repair) into README and autopatch-ops summary"
-            git push origin HEAD:main
-          else
-            echo "No changes to commit."
-          fi
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add .github/workflows/autopatch-ops.yml
+          git commit -m "autopatch(ops): add/repair Quick Controls summary block"
+          git push origin HEAD:main
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Wire Quick Controls" >> "$GITHUB_STEP_SUMMARY"
+          echo "- File: \`.github/workflows/autopatch-ops.yml\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Changed: \`${{ steps.patch.outputs.changed || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
