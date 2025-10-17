@@ -1,0 +1,39 @@
+name: Workflows Sanity Check (YAML)
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: python -m pip install --upgrade pyyaml
+      - name: Validate all workflow YAML
+        run: |
+          python - <<'PY'
+import sys, pathlib, yaml
+WF = pathlib.Path(".github/workflows")
+bad = []
+for p in sorted(WF.glob("*.y*ml")):
+    try:
+        yaml.safe_load(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        bad.append((p.name, type(e).__name__, str(e).splitlines()[0]))
+if bad:
+    print("Bad workflow files:")
+    for n, t, msg in bad:
+        print(f"- {n}: {t} — {msg}")
+    sys.exit(1)
+else:
+    print("All workflow YAML parse clean.")
+PY
