@@ -1,11 +1,11 @@
 # Ops Console
 
-_Last updated: **2025-10-17 19:00 UTC**_
+_Last updated: **2025-10-17 19:13 UTC**_
 
 - ✅ OK: **71**
 - ➖ No dispatch: **0**
-- ❌ Broken: **36**
-- Total: **107**
+- ❌ Broken: **37**
+- Total: **108**
 
 | Workflow | State | Actions |
 |---|---|---|
@@ -112,6 +112,7 @@ _Last updated: **2025-10-17 19:00 UTC**_
 | `workflows-console-table.yml` | ✅ ok | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-console-table.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-console-table.yml) · [File](.github/workflows/workflows-console-table.yml) |
 | `workflows-first-aid-sweep.yml` | ✅ ok | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid-sweep.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid-sweep.yml) · [File](.github/workflows/workflows-first-aid-sweep.yml) |
 | `workflows-first-aid.yml` | ✅ ok | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-first-aid.yml) · [File](.github/workflows/workflows-first-aid.yml) |
+| `workflows-second-aid.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-second-aid.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-second-aid.yml) · [File](.github/workflows/workflows-second-aid.yml) |
 | `workflows-status-badges.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-status-badges.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/workflows-status-badges.yml) · [File](.github/workflows/workflows-status-badges.yml) |
 | `yaml-bulk-autofix.yml` | ✅ ok | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/yaml-bulk-autofix.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/yaml-bulk-autofix.yml) · [File](.github/workflows/yaml-bulk-autofix.yml) |
 | `yaml_corrector.yml` | ❌ broken · `ParserError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/yaml_corrector.yml) · [View](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/yaml_corrector.yml) · [File](.github/workflows/yaml_corrector.yml) |
