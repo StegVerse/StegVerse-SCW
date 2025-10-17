@@ -2,24 +2,31 @@ name: QuickKick Sweep
 
 on:
   workflow_dispatch: {}
+  # Optional: auto-run when workflow files change
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
 
-# Needed so the GITHUB_TOKEN can call the workflow-dispatch API
+# Needed so the token can dispatch other workflows
 permissions:
-  contents: write          # keep if you might write summaries/files later
-  actions: write           # helpful for workflow run mgmt APIs
-  workflows: write         # <<< REQUIRED to dispatch other workflows
-  issues: write            # only used if you later open issue notes (safe to keep)
+  contents: write
+  actions: write
+  workflows: write
 
 jobs:
   sweep:
     runs-on: ubuntu-latest
     steps:
-      - name: Kick a set of workflows
+      - name: Kick a set of workflows (with retry/backoff)
         env:
-          GH_TOKEN: ${{ github.token }}           # built-in; same secret, clearer
-          REPO_FULL: ${{ github.repository }}     # owner/repo
-          REF: ${{ github.ref_name || 'main' }}   # default to main if empty
+          GH_TOKEN: ${{ github.token }}          # built-in GITHUB_TOKEN
+          REPO_FULL: ${{ github.repository }}    # owner/repo
+          REF: ${{ github.ref_name || 'main' }}
           TARGETS: |
+            workflows-first-aid.yml
+            workflows-first-aid-sweep.yml
+            workflows-second-aid.yml
             kick-autopatch.yml
             kick-yaml-bulk-autofix.yml
             workflows-console-table.yml
@@ -33,38 +40,86 @@ jobs:
           REPO="${REPO_FULL##*/}"
           : > results.tsv
 
+          retry_dispatch () {
+            local wf="$1" max="$2" delay="$3"
+            local url="https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${wf}/dispatches"
+            local attempt code body
+            attempt=1
+            while [ "${attempt}" -le "${max}" ]; do
+              code=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" \
+                -X POST \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "${url}" \
+                -d "{\"ref\":\"${REF}\"}" || true)
+              body="$(tr -d '\n' </tmp/resp.txt | cut -c1-200)"
+
+              case "${code}" in
+                204)
+                  echo "✓ Dispatched ${wf} on attempt ${attempt}"
+                  echo -e "${wf}\tOK\t" >> results.tsv
+                  return 0
+                  ;;
+                404)
+                  # Not found: filename or branch typo
+                  echo "✗ ${wf}: 404 not found (check filename/branch)"
+                  echo -e "${wf}\tNOT_FOUND\tcheck filename/branch" >> results.tsv
+                  return 0
+                  ;;
+                422)
+                  # Common for newly added workflows: not yet registered or no dispatch trigger
+                  note="may not be registered yet OR missing 'workflow_dispatch'"
+                  if [ "${attempt}" -lt "${max}" ]; then
+                    echo "… ${wf}: 422 (${note}) — retry ${attempt}/${max} after ${delay}s"
+                    sleep "${delay}"
+                  else
+                    echo "✗ ${wf}: 422 (${note})"
+                    echo -e "${wf}\tNO_DISPATCH_OR_NOT_READY\t${note}" >> results.tsv
+                  fi
+                  ;;
+                403)
+                  note="denied — need repo/org to allow workflows:write"
+                  echo "✗ ${wf}: 403 (${note})"
+                  echo -e "${wf}\tDENIED\t${note}" >> results.tsv
+                  return 0
+                  ;;
+                429)
+                  note="rate limited — backoff ${delay}s"
+                  if [ "${attempt}" -lt "${max}" ]; then
+                    echo "… ${wf}: 429 (${note}) retry ${attempt}/${max}"
+                    sleep "${delay}"
+                  else
+                    echo "✗ ${wf}: 429 (${note})"
+                    echo -e "${wf}\tRATE_LIMIT\t${note}" >> results.tsv
+                  fi
+                  ;;
+                *)
+                  note="HTTP ${code}: ${body}"
+                  echo "✗ ${wf}: ${note}"
+                  echo -e "${wf}\tERROR\t${note}" >> results.tsv
+                  return 0
+                  ;;
+              esac
+              attempt=$((attempt+1))
+            done
+          }
+
+          # Sweep targets
           while IFS= read -r wf; do
             wf="$(echo "$wf" | xargs)"; [ -z "$wf" ] && continue
-            url="https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${wf}/dispatches"
-
-            code=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" \
-              -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "${url}" \
-              -d "{\"ref\":\"${REF}\"}" || true)
-
-            note=""
-            case "$code" in
-              204) result="OK";;
-              404) result="NOT_FOUND"; note="check filename/branch";;
-              422) result="NO_DISPATCH"; note="missing 'workflow_dispatch'";;
-              403) result="DENIED"; note="need 'workflows: write' on this job (now added) or org policy";;
-              429) result="RATE_LIMIT"; note="slow down or retry later";;
-              *)   result="ERROR"; note="HTTP ${code}: $(tr -d '\n' </tmp/resp.txt | cut -c1-160)";;
-            esac
-            printf "%s\t%s\t%s\n" "$wf" "$result" "$note" >> results.tsv
+            retry_dispatch "${wf}" 3 15
           done <<< "$TARGETS"
 
           {
             echo "## QuickKick Sweep"
-            echo ""
+            echo
             echo "| Workflow | Result | Note |"
             echo "|---|---|---|"
             while IFS=$'\t' read -r a b c; do
               echo "| \`$a\` | $b | ${c:-} |"
             done < results.tsv
-            echo ""
-            echo "> Tip: **NO_DISPATCH** → add \`on: { workflow_dispatch: {} }\` to that workflow."
-            echo "> Tip: **DENIED** → ensure this job has \`permissions: workflows: write\` (added above) and org policy allows it."
+            echo
+            echo "> Tips:"
+            echo "> • **NO_DISPATCH_OR_NOT_READY** → new workflow? Open its page once or wait ~1 minute, then re-run QuickKick."
+            echo "> • **DENIED** → ensure repo **Settings → Actions → General → Workflow permissions** allow *Read & write* and the job has \`workflows: write\`."
           } >> "$GITHUB_STEP_SUMMARY"
