@@ -1,0 +1,91 @@
+version: 1
+actions:
+  - write_files:
+      - path: ".github/workflows/autopatch-readme-quickcontrols.yml"
+        mode: "100644"
+        contents: |
+          name: Autopatch: README Quick Controls Badge
+
+          on:
+            # Manual run if needed
+            workflow_dispatch: {}
+            # Keep badge fresh when either file changes
+            push:
+              branches: [ "main" ]
+              paths:
+                - ".github/workflows/autopatch-wire-quick-controls.yml"
+                - "README.md"
+            # 🔗 Auto-run immediately after the Quick Controls workflow completes
+            workflow_run:
+              workflows: [ "Autopatch: Wire Quick Controls" ]
+              types: [ completed ]
+
+          permissions:
+            contents: write
+
+          jobs:
+            sync_badge:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with: { fetch-depth: 0 }
+
+                - name: Insert or update Quick Controls badge
+                  id: update
+                  run: |
+                    set -euo pipefail
+                    FILE="README.md"
+                    BADGE_START="<!-- autopatch-wire-quick-controls:badge -->"
+                    BADGE_END="<!-- /autopatch-wire-quick-controls:badge -->"
+                    REPO="${{ github.repository }}"
+                    BADGE="[![Autopatch: Wire Quick Controls](https://github.com/${REPO}/actions/workflows/autopatch-wire-quick-controls.yml/badge.svg)](https://github.com/${REPO}/actions/workflows/autopatch-wire-quick-controls.yml)"
+
+                    if [ ! -f "$FILE" ]; then
+                      echo "::error file=$FILE::README not found"
+                      exit 1
+                    fi
+
+                    TMP="$(mktemp)"
+                    if grep -qF "$BADGE_START" "$FILE" && grep -qF "$BADGE_END" "$FILE"; then
+                      # Replace within existing block
+                      awk -v s="$BADGE_START" -v e="$BADGE_END" -v b="$BADGE" '
+                        BEGIN {inblk=0}
+                        {
+                          if (index($0,s)) {print s"\n"b"\n"e; inblk=1; next}
+                          if (inblk && index($0,e)) {inblk=0; next}
+                          if (!inblk) print
+                        }
+                      ' "$FILE" > "$TMP"
+                    else
+                      # Prepend if missing
+                      printf "%s\n%s\n%s\n\n" "$BADGE_START" "$BADGE" "$BADGE_END" > "$TMP"
+                      cat "$FILE" >> "$TMP"
+                    fi
+
+                    mv "$TMP" "$FILE"
+
+                    if git diff --quiet; then
+                      echo "changed=false" >> "$GITHUB_OUTPUT"
+                    else
+                      echo "changed=true" >> "$GITHUB_OUTPUT"
+                    fi
+
+                - name: Commit & push (if changed)
+                  if: steps.update.outputs.changed == 'true'
+                  run: |
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add README.md
+                    git commit -m "autopatch(readme): ensure Quick Controls badge present"
+                    git push origin HEAD:main
+
+                - name: Summary
+                  if: always()
+                  run: |
+                    echo "## README Quick Controls Badge Sync" >> "$GITHUB_STEP_SUMMARY"
+                    echo "- File: \`README.md\`" >> "$GITHUB_STEP_SUMMARY"
+                    echo "- Changed: \`${{ steps.update.outputs.changed || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  - commit:
+      message: "autopatch(readme): add Quick Controls badge sync (auto-trigger on Quick Controls completion)"
