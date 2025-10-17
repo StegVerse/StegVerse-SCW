@@ -8,9 +8,10 @@ on:
       - ".github/workflows/**"
       - "scripts/**"
 
-# Needed to write edits back and (optionally) manage other workflows later
+# Needed to write edits back and (optionally) manage/dispatch other workflows
 permissions:
   contents: write
+  actions: write
   workflows: write
 
 jobs:
@@ -28,31 +29,70 @@ jobs:
       - name: Install deps (PyYAML)
         run: python -m pip install --upgrade pip pyyaml
 
+      - name: Ensure output dir
+        run: mkdir -p .github/autopatch_out
+
       - name: Run self-heal script
         id: heal
-        run: python scripts/self_heal.py
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/self_heal.py ]; then
+            echo "ERROR: scripts/self_heal.py not found"; exit 1
+          fi
+          python scripts/self_heal.py
+          # Always create a summary stub so the post step has something to show
+          : > .github/autopatch_out/SELF_HEAL_SUMMARY.json || true
 
       - name: Commit & push changes (if any)
         run: |
           set -euo pipefail
-          if [ -f ".github/autopatch_out/ANY_CHANGES" ] && grep -q true .github/autopatch_out/ANY_CHANGES; then
-            git config user.name  "StegVerse Bot"
-            git config user.email "bot@stegverse.org"
-            git add .github/workflows
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          # Stage typical heal targets
+          git add .github/workflows || true
+          # Commit only if there are staged changes
+          if ! git diff --cached --quiet; then
             git commit -m "autopatch(ops): self-heal workflow YAML + ensure workflow_dispatch"
             git push origin HEAD:main
             echo "Committed self-heal changes."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "No self-heal changes to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post summary
         if: always()
         run: |
           echo "## Autopatch Ops summary" >> "$GITHUB_STEP_SUMMARY"
-          if [ -f ".github/autopatch_out/SELF_HEAL_SUMMARY.json" ]; then
-            echo >> "$GITHUB_STEP_SUMMARY"
+          if [ -s ".github/autopatch_out/SELF_HEAL_SUMMARY.json" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
             cat .github/autopatch_out/SELF_HEAL_SUMMARY.json >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No summary file found." >> "$GITHUB_STEP_SUMMARY"
-          fi
+
+  post_dispatch:
+    needs: self_heal
+    if: always() && needs.self_heal.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      workflows: write
+      contents: read
+    steps:
+      - name: Dispatch follow-ups (console table + badges)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name || 'main' }}
+        run: |
+          set -euo pipefail
+          for wf in workflows-console-table.yml workflows-badges.yml; do
+            echo "Dispatching $wf..."
+            curl -sS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/actions/workflows/$wf/dispatches" \
+              -d "{\"ref\":\"$REF\"}" || true
+          done
+          echo "Done."
