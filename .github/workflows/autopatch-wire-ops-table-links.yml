@@ -1,0 +1,213 @@
+name: Autopatch — Wire Ops Console table (per-row Run/Repair)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Write Ops Console generator + workflow (idempotent)
+        id: write
+        run: |
+          set -euo pipefail
+          mkdir -p .github/docs/actions/workflows
+          mkdir -p scripts
+          mkdir -p .github/workflows
+          
+          # -------- scripts/gen_ops_console.py --------
+          cat > scripts/gen_ops_console.py << 'PY'
+          # AUTOPATCH: gen_ops_console.py (stable)
+          import yaml, pathlib, datetime, re
+          from yaml.parser import ParserError
+          from yaml.scanner import ScannerError
+
+          ROOT   = pathlib.Path(".")
+          WF_DIR = ROOT/".github/workflows"
+          DOC    = ROOT/".github/docs/WORKFLOWS_CONSOLE.md"
+          README = ROOT/"README.md"
+
+          def load_yaml(p: pathlib.Path):
+            try:
+              return yaml.safe_load(p.read_text(encoding="utf-8"))
+            except Exception as e:
+              return e
+
+          def has_dispatch(d):
+            if not isinstance(d, (dict,)):
+              return False
+            on = d.get("on")
+            if on is None:
+              return False
+            if isinstance(on, str):
+              return on == "workflow_dispatch"
+            if isinstance(on, list):
+              return "workflow_dispatch" in on
+            if isinstance(on, dict):
+              # reusable-only workflows don't get a Run button
+              if set(on.keys()) == {"workflow_call"}:
+                return False
+              return "workflow_dispatch" in on
+            return False
+
+          rows = []
+          ok = nodisp = broken = 0
+          for p in sorted(WF_DIR.glob("*.y*ml")):
+            data = load_yaml(p)
+            state = ""
+            note = ""
+            if isinstance(data, Exception):
+              broken += 1
+              state = "❌ broken"
+              note  = type(data).__name__
+            else:
+              if has_dispatch(data):
+                ok += 1
+                state = "✅ ok"
+              else:
+                nodisp += 1
+                state = "➖ no-dispatch"
+            rows.append((p.name, state, note))
+
+          total = ok + nodisp + broken
+          now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+          # Build markdown
+          md = []
+          md += [ "# Ops Console", "", f"_Last updated: **{now}**_", "" ]
+          md += [ f"- ✅ OK: **{ok}**", f"- ➖ No dispatch: **{nodisp}**", f"- ❌ Broken: **{broken}**", f"- Total: **{total}**", "" ]
+          md += [ "| Workflow | State | Actions |", "|---|---|---|" ]
+
+          def action_links(name, state):
+            # hybrid (relative) links that work on mobile + web
+            view = f"[View](./actions/workflows/{name})"
+            fsrc = f"[File](.github/workflows/{name})"
+            run  = f"[▶ Run](./actions/workflows/{name})"
+            if state.startswith("➖"):
+              # handy one-tap fixer (global; safe)
+              repair = "[🛠 Repair](./actions/workflows/fix-dispatch-triggers.yml)"
+              return f"{view} · {fsrc} · {run} · {repair}"
+            return f"{view} · {fsrc} · {run}"
+
+          for n, s, note in rows:
+            extra = f" · `{note}`" if note else ""
+            md.append(f"| `{n}` | {s}{extra} | {action_links(n, s)} |")
+
+          DOC.parent.mkdir(parents=True, exist_ok=True)
+          old_doc = DOC.read_text(encoding="utf-8") if DOC.exists() else ""
+          new_doc = "\n".join(md) + "\n"
+          if new_doc != old_doc:
+            DOC.write_text(new_doc, encoding="utf-8")
+
+          # README block injection (under Ops Console, or append). Idempotent via markers.
+          start = "<!-- ops-console:begin -->"
+          end   = "<!-- ops-console:end -->"
+          embed = (
+            f"{start}\n"
+            f"[Open the Ops Console table](.github/docs/WORKFLOWS_CONSOLE.md)\n\n"
+            f"> Quick links: "
+            f"[YAML Bulk Autofix](./actions/workflows/yaml-bulk-autofix.yml) · "
+            f"[Kick Autopatch](./actions/workflows/kick-autopatch.yml) · "
+            f"[Status Badges](./actions/workflows/workflows-badges.yml) · "
+            f"[Fix dispatch triggers](./actions/workflows/fix-dispatch-triggers.yml)\n"
+            f"{end}"
+          )
+
+          rtxt = README.read_text(encoding="utf-8") if README.exists() else "# Repository\n"
+          if start in rtxt and end in rtxt:
+            rtxt2 = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}", embed, rtxt, flags=re.S)
+          else:
+            # try to place under an 'Ops Console' heading if present
+            m = re.search(r"(?im)^\\s*##\\s*Ops Console\\s*$", rtxt)
+            if m:
+              insert_at = rtxt.find("\n", m.end())
+              insert_at = len(rtxt) if insert_at == -1 else insert_at + 1
+              rtxt2 = rtxt[:insert_at] + "\n" + embed + "\n" + rtxt[insert_at:]
+            else:
+              rtxt2 = rtxt.rstrip() + "\n\n## Ops Console\n\n" + embed + "\n"
+          if rtxt2 != rtxt:
+            README.write_text(rtxt2, encoding="utf-8")
+
+          print("[gen] ok:", ok, "nodisp:", nodisp, "broken:", broken, "total:", total)
+          PY
+
+          # -------- .github/workflows/workflows-console-table.yml --------
+          cat > .github/workflows/workflows-console-table.yml << 'YML'
+          name: Workflows Console Table
+
+          on:
+            workflow_dispatch: {}
+            push:
+              branches: [ "main" ]
+              paths:
+                - ".github/workflows/**"
+                - ".github/docs/**"
+                - "README.md"
+
+          permissions:
+            contents: write
+
+          jobs:
+            build-table:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with: { fetch-depth: 0 }
+
+                - name: Setup Python
+                  uses: actions/setup-python@v5
+                  with: { python-version: "3.11" }
+
+                - name: Install deps
+                  run: python -m pip install --upgrade pip pyyaml
+
+                - name: Build table & update README
+                  run: python scripts/gen_ops_console.py
+
+                - name: Commit (if changed)
+                  run: |
+                    set -euo pipefail
+                    git config user.name  "StegVerse Bot"
+                    git config user.email "bot@stegverse.org"
+                    git add .github/docs/WORKFLOWS_CONSOLE.md README.md || true
+                    if ! git diff --cached --quiet; then
+                      git commit -m "docs(ops-console): update per-row Run/Repair links + table"
+                      git push origin HEAD:main
+                    else
+                      echo "No changes to commit."
+          YML
+
+          # flag if something changed
+          if git status --porcelain | grep -qE '(^\\?\\?|^ M|^A )'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+
+      - name: Commit autopatch (if changed)
+        if: steps.write.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name  "StegVerse Bot"
+          git config user.email "bot@stegverse.org"
+          git add scripts/gen_ops_console.py .github/workflows/workflows-console-table.yml
+          git commit -m "autopatch: wire Ops Console generator (per-row Run/Repair) and stable workflow"
+          git push origin HEAD:main
+
+      - name: Summary
+        run: |
+          echo "## Autopatch — Wire Ops Console table" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Installed/updated: \`scripts/gen_ops_console.py\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Installed/updated: \`.github/workflows/workflows-console-table.yml\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Output: \`.github/docs/WORKFLOWS_CONSOLE.md\` and README Ops Console block" >> "$GITHUB_STEP_SUMMARY"
