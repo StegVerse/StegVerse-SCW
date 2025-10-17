@@ -1,0 +1,123 @@
+name: Autopatch — Wire Quick Controls (Run / Repair)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Apply patches (idempotent)
+        id: patch
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re, pathlib
+
+          root = pathlib.Path(".")
+          changed = False
+
+          # ---------- A) autopatch-ops.yml: add summary buttons ----------
+          ops = root/".github/workflows/autopatch-ops.yml"
+          if ops.exists():
+              txt = ops.read_text(encoding="utf-8")
+
+              marker_begin = "# >>> quick-controls:summary"
+              marker_end   = "# <<< quick-controls:summary"
+              block = f"""
+      - name: Add quick buttons (Run / Repair) to summary
+        if: always()
+        env:
+          REPO: ${{{{ github.repository }}}}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
+{marker_begin}
+### Quick Controls
+
+> Tap a link to open the Action in the mobile UI.  
+> **Run** = open the workflow page (press *Run workflow*)  
+> **Repair now** = run the fixer that adds \`workflow_dispatch\` to missing files.
+
+| Action | Link |
+|---|---|
+| ▶ Run **YAML Bulk Autofix** | [Open workflow](./actions/workflows/yaml-bulk-autofix.yml) |
+| ▶ Run **Kick Autopatch** | [Open workflow](./actions/workflows/kick-autopatch.yml) |
+| ▶ Run **Workflows Console Table** | [Open workflow](./actions/workflows/workflows-console-table.yml) |
+| ▶ Run **Workflows Status Badges** | [Open workflow](./actions/workflows/workflows-badges.yml) |
+| 🛠 **Repair now** (add \`workflow_dispatch\`) | [Open fixer](./actions/workflows/fix-dispatch-triggers.yml) |
+{marker_end}
+MD
+""".rstrip("\n")
+
+              if marker_begin not in txt:
+                  # append the step at the end of the last job (just before file end)
+                  txt = txt.rstrip() + "\n\n" + block + "\n"
+                  ops.write_text(txt, encoding="utf-8")
+                  changed = True
+
+          # ---------- B) README: add Quick Controls under Ops Console ----------
+          readme = root/"README.md"
+          if readme.exists():
+              rtxt = readme.read_text(encoding="utf-8")
+          else:
+              rtxt = "# Repository\n"
+
+          rb = "<!-- quick-controls:begin -->"
+          re_ = "<!-- quick-controls:end -->"
+          md_block = f"""{rb}
+### Quick Controls
+
+- ▶ **Run**:  
+  [YAML Bulk Autofix](./actions/workflows/yaml-bulk-autofix.yml) ·
+  [Kick Autopatch](./actions/workflows/kick-autopatch.yml) ·
+  [Console Table](./actions/workflows/workflows-console-table.yml) ·
+  [Status Badges](./actions/workflows/workflows-badges.yml)
+
+- 🛠 **Repair now** (adds `workflow_dispatch` to missing):  
+  [Fix dispatch triggers](./actions/workflows/fix-dispatch-triggers.yml)
+{re_}"""
+
+          if rb not in rtxt:
+              # Try to find an "Ops Console" heading to insert after. If not, append to end.
+              ops_h = re.search(r"(?im)^\s*#+\s*Ops Console\s*$", rtxt)
+              if ops_h:
+                  # insert after the heading line
+                  start_line_end = rtxt.find("\n", ops_h.end())
+                  if start_line_end == -1:
+                      start_line_end = len(rtxt)
+                  new = rtxt[:start_line_end+1] + "\n" + md_block + "\n" + rtxt[start_line_end+1:]
+              else:
+                  new = rtxt.rstrip() + "\n\n" + md_block + "\n"
+              readme.write_text(new, encoding="utf-8")
+              changed = True
+
+          # ---------- RESULT FLAG ----------
+          outflag = root/".github/autopatch_out/WIRED_QUICK_CONTROLS"
+          outflag.parent.mkdir(parents=True, exist_ok=True)
+          outflag.write_text("true" if changed else "false", encoding="utf-8")
+          print(f"[patch] changed={changed}")
+          PY
+
+      - name: Commit changes (if any)
+        run: |
+          set -euo pipefail
+          if [ -s ".github/autopatch_out/WIRED_QUICK_CONTROLS" ] && grep -q true .github/autopatch_out/WIRED_QUICK_CONTROLS; then
+            git config user.name  "StegVerse Bot"
+            git config user.email "bot@stegverse.org"
+            git add README.md .github/workflows/autopatch-ops.yml
+            git commit -m "autopatch: wire Quick Controls (Run / Repair) into README and autopatch-ops summary"
+            git push origin HEAD:main
+          else
+            echo "No changes to commit."
+          fi
