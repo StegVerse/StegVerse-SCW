@@ -9,6 +9,8 @@ patches:
       path: .github/autopatch/ops-console.patch.yml
     - id: inject-kick-dispatch
       path: .github/autopatch/inject-kick-dispatch.patch.yml
+    - id: readme-quickcontrols-badge
+      path: .github/autopatch/readme-quickcontrols-badge.patch.yml
     - id: fix-yaml-bulk-autofix
       path: .github/autopatch/fix-yaml-bulk-autofix.patch.yml
     # Ensures Python setup is consistent across workflows & PyYAML always present
