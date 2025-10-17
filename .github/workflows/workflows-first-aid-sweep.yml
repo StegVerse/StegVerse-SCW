@@ -1,15 +1,15 @@
 name: Workflows First-Aid Sweep
 
 on:
-  workflow_dispatch: {}                         # manual run button
+  workflow_dispatch: {}
   push:
     branches: [ "main" ]
     paths:
       - ".github/workflows/**"
 
 permissions:
-  contents: write                               # to commit fixes
-  workflows: write                              # (optional) if we later dispatch other workflows
+  contents: write            # commit fixes
+  actions: write             # needed to call workflow-dispatch API (future use)
 
 jobs:
   sweep:
@@ -18,51 +18,45 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with:
+          python-version: "3.11"
 
       - name: Install deps
         run: python -m pip install --upgrade pip pyyaml
 
-      - name: Heal workflows (inject dispatch + fix obvious YAML nits)
+      - name: Heal workflows (inject dispatch + fix common YAML nits)
         id: heal
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import re, pathlib, yaml, sys, json, shutil, datetime
+          import re, pathlib, yaml, json
 
           ROOT   = pathlib.Path(".")
           WF_DIR = ROOT / ".github" / "workflows"
           OUTDIR = ROOT / ".github" / "autopatch_out"
           OUTDIR.mkdir(parents=True, exist_ok=True)
 
-          def load_text(p):
-            return p.read_text(encoding="utf-8", errors="ignore")
+          def load_text(p): return p.read_text(encoding="utf-8", errors="ignore")
+          def save_text(p,s): p.write_text(s, encoding="utf-8")
 
-          def save_text(p, s):
-            p.write_text(s, encoding="utf-8")
-
-          def parse_yaml_or_exc(text):
+          def parse_yaml(text):
             try:
               return yaml.safe_load(text), None
             except Exception as e:
               return None, e
 
           def has_workflow_call_only(on):
-            if isinstance(on, dict):
-              keys = set(on.keys())
-              return keys == {"workflow_call"}
-            return False
+            return isinstance(on, dict) and set(on.keys()) == {"workflow_call"}
 
-          def ensure_workflow_dispatch(model):
-            if not isinstance(model, dict):
-              return False
+          def ensure_dispatch(model):
+            if not isinstance(model, dict): return False
             on = model.get("on")
-            # normalize to mapping
             if on is None:
               model["on"] = {"workflow_dispatch": {}}
               return True
@@ -72,17 +66,14 @@ jobs:
             if isinstance(on, list):
               model["on"] = {k: {} for k in on if isinstance(k, str)}
               on = model["on"]
-
             if has_workflow_call_only(on):
-              return False  # reusable-only: skip adding dispatch
-
+              return False
             if "workflow_dispatch" not in on:
               on["workflow_dispatch"] = {}
               return True
             return False
 
           def normalize_inline_env(lines):
-            # env: { A: ${{ ... }}, B: 1 }   ->   multi-line mapping
             out = []
             for line in lines:
               m = re.match(r'^(\s*)env:\s*\{\s*([^}]+)\s*\}\s*$', line)
@@ -94,7 +85,7 @@ jobs:
                   part = part.strip()
                   if not part: continue
                   if ":" in part:
-                    k, v = part.split(":", 1)
+                    k,v = part.split(":",1)
                     out.append(f"{base}  {k.strip()}: {v.strip()}\n")
               else:
                 out.append(line)
@@ -104,36 +95,28 @@ jobs:
             return bool(re.match(r'^\s*-\s+name:\s', line))
 
           SCRIPT_LEADERS = (
-            "import ", "from ", "set -e", "set -eu", "set -euo pipefail",
-            "#!/usr/bin/env", "python ", "bash ", "sh ", "node ",
-            "ROOT=", "SHA=", "git ", "curl ", "jq ", "ts=", "echo ",
-            "{", "}", "if [", "fi", "YML", "JSON"
+            "import ","from ","set -e","set -eu","set -euo pipefail",
+            "#!/usr/bin/env","python ","bash ","sh ","node ",
+            "ROOT=","SHA=","git ","curl ","jq ","ts=","echo ","{","}","if [","fi"
           )
 
           def is_scriptish(line):
             s = line.lstrip()
             return any(s.startswith(t) for t in SCRIPT_LEADERS)
 
+          def indent_of(line): return len(line) - len(line.lstrip(' '))
+
           def needs_run_insertion(lines, i):
-            # if there is a script-ish line inside a step but no preceding "run:"
             if lines[i].lstrip().startswith("#"): return False
             for j in range(i-1, max(-1, i-30), -1):
               t = lines[j].strip()
-              if not t:
-                continue
-              if re.match(r'^\s*run\s*:\s*(\||>|\S)?', t):    # already has run:
-                return False
-              if looks_like_step_start(lines[j]):
-                return True
-              if re.match(r'^\S', lines[j]):                  # hit top-level
-                return True
+              if not t: continue
+              if re.match(r'^\s*run\s*:\s*(\||>|\S)?', t): return False
+              if looks_like_step_start(lines[j]): return True
+              if re.match(r'^\S', lines[j]): return True
             return True
 
-          def indent_of(line):
-            return len(line) - len(line.lstrip(' '))
-
           def inject_run_block(lines, i):
-            # find where to insert "run: |"
             insert_at = i
             ins_indent = max(2, indent_of(lines[i]))
             for j in range(i-1, max(-1, i-50), -1):
@@ -146,40 +129,32 @@ jobs:
                 ins_indent = indent_of(lines[j]) + 2
                 break
             lines.insert(insert_at, " " * ins_indent + "run: |\n")
-            # indent following scriptish lines until end-of-step/top-level
             k = insert_at + 1
             while k < len(lines):
-              if looks_like_step_start(lines[k]) or re.match(r'^\S', lines[k]):
-                break
+              if looks_like_step_start(lines[k]) or re.match(r'^\S', lines[k]): break
               if lines[k].strip() and not lines[k].lstrip().startswith("#"):
                 lines[k] = " " * (ins_indent + 2) + lines[k].lstrip(" ")
               k += 1
 
-          fixed = []
-          added_dispatch = []
-          still_broken = []
+          fixed, added_dispatch, still_broken = [], [], []
 
           for p in sorted(WF_DIR.glob("*.y*ml")):
             text0 = load_text(p)
-            data, exc = parse_yaml_or_exc(text0)
+            data, exc = parse_yaml(text0)
 
-            changed_text = False
             changed_model = False
+            changed_text  = False
 
-            # If it parsed, try to add workflow_dispatch if appropriate
             if exc is None:
-              if ensure_workflow_dispatch(data):
+              if ensure_dispatch(data):
                 changed_model = True
 
-            # For text-level “obvious” issues
             lines = text0.splitlines(keepends=True)
-            # a) inline env
             n1 = normalize_inline_env(lines)
             if n1 != lines:
               lines = n1
               changed_text = True
 
-            # b) inject run: | where script lines are naked
             for idx, line in enumerate(list(lines)):
               if is_scriptish(line) and needs_run_insertion(lines, idx):
                 try:
@@ -188,10 +163,7 @@ jobs:
                 except Exception:
                   pass
 
-            # If we changed the YAML model, dump it back
             if changed_model:
-              # write the *current* lines to keep comments, then merge "on:" back
-              # safer path: reparse lines to model, set model['on'] = modified on, then dump
               try:
                 cur_model = yaml.safe_load("".join(lines))
               except Exception:
@@ -207,12 +179,10 @@ jobs:
             else:
               text_now = "".join(lines)
 
-            # If we changed the text heuristically, save
             if changed_text and not changed_model:
               save_text(p, text_now)
 
-            # Validate after our edits
-            new_data, new_exc = parse_yaml_or_exc(load_text(p))
+            _, new_exc = parse_yaml(load_text(p))
             if new_exc is None:
               if changed_text or changed_model:
                 fixed.append(p.name)
@@ -222,12 +192,11 @@ jobs:
           summary = {
             "fixed": fixed,
             "added_dispatch": added_dispatch,
-            "still_broken": still_broken,
+            "still_broken": still_broken
           }
-          (OUTDIR / "FIRST_AID_SUMMARY.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-
-          print("=== First-aid summary ===")
-          print(json.dumps(summary, indent=2))
+          (OUTDIR / "FIRST_AID_SUMMARY.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+          )
           PY
 
       - name: Commit fixes (if any)
@@ -236,7 +205,9 @@ jobs:
           set -euo pipefail
           CHANGED="no"
           if [ -f ".github/autopatch_out/FIRST_AID_SUMMARY.json" ]; then
-            jq -e '.fixed | length > 0 or .added_dispatch | length > 0' .github/autopatch_out/FIRST_AID_SUMMARY.json >/dev/null 2>&1 && CHANGED="yes" || true
+            if jq -e '.fixed | length > 0 or .added_dispatch | length > 0' .github/autopatch_out/FIRST_AID_SUMMARY.json >/dev/null 2>&1; then
+              CHANGED="yes"
+            fi
           fi
           if [ "$CHANGED" = "yes" ]; then
             git config user.name  "StegVerse Bot"
@@ -249,15 +220,15 @@ jobs:
           fi
 
       - name: Regenerate Ops Console (inline)
+        shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import yaml, pathlib, datetime, re
+          import yaml, pathlib, datetime
 
           ROOT   = pathlib.Path(".")
           WF_DIR = ROOT/".github/workflows"
           DOC    = ROOT/".github/docs/WORKFLOWS_CONSOLE.md"
-
           DOC.parent.mkdir(parents=True, exist_ok=True)
 
           def load_yaml(p):
@@ -281,30 +252,28 @@ jobs:
             data = load_yaml(p)
             if isinstance(data, Exception):
               broken += 1
-              rows.append((p.name, f"❌ broken · `{type(data).__name__}`"))
+              state = f"❌ broken · `{type(data).__name__}`"
             else:
               if has_dispatch(data):
                 ok += 1
-                rows.append((p.name, "✅ ok"))
+                state = "✅ ok"
               else:
                 nodisp += 1
-                rows.append((p.name, "➖ no-dispatch"))
+                state = "➖ no-dispatch"
+            gh = "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/" + p.name
+            rows.append(f"| `{p.name}` | {state} | [Run]({gh}) · [View]({gh}) · [File](.github/workflows/{p.name}) |")
 
           total = ok + nodisp + broken
           now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-          def row(n, s):
-            gh = "https://github.com/StegVerse/StegVerse-SCW/actions/workflows/" + n
-            return f"| `{n}` | {s} | [Run]({gh}) · [View]({gh}) · [File](.github/workflows/{n}) |"
-
           lines = []
-          lines += [ "# Ops Console", "", f"_Last updated: **{now}**_", "", f"- ✅ OK: **{ok}**", f"- ➖ No dispatch: **{nodisp}**", f"- ❌ Broken: **{broken}**", f"- Total: **{total}**", "", "| Workflow | State | Actions |", "|---|---|---|"]
-          for n, s in rows:
-            lines.append(row(n, s))
+          lines += [ "# Ops Console", "", f"_Last updated: **{now}**_", "", f"- ✅ OK: **{ok}**", f"- ➖ No dispatch: **{nodisp}**", f"- ❌ Broken: **{broken}**", f"- Total: **{total}**", "", "| Workflow | State | Actions |", "|---|---|---|" ]
+          lines += rows
           DOC.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
       - name: Commit console (if changed)
+        shell: bash
         run: |
           set -euo pipefail
           git add .github/docs/WORKFLOWS_CONSOLE.md || true
@@ -315,7 +284,7 @@ jobs:
             git push origin HEAD:main
           else
             echo "No console changes."
-      
+
       - name: Summary
         if: always()
         run: |
