@@ -241,7 +241,7 @@ _Last updated: **2025-10-16 23:12:35 UTC**_
 | `autopatch-inspect.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-inspect.yml) · [File](.github/workflows/autopatch-inspect.yml) |
 | `autopatch-reindex.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-reindex.yml) · [File](.github/workflows/autopatch-reindex.yml) |
 | `autopatch-repotree-and-supercheck.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch-repotree-and-supercheck.yml) · [File](.github/workflows/autopatch-repotree-and-supercheck.yml) |
-| `autopatch_apply.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_apply.yml) · [File](.github/workflows/autopatch_apply.yml) |
+| `autopatch_apply.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_apply.yml) · [File](.github/workflows/autopatch_apply.yml) |
 | `autopatch_deferred.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_deferred.yml) · [File](.github/workflows/autopatch_deferred.yml) |
 | `autopatch_dryrun.yml` | ❌ broken · `ScannerError` | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/autopatch_dryrun.yml) · [File](.github/workflows/autopatch_dryrun.yml) |
 | `backup_triggers.yml` | ➖ no-dispatch | [Run](https://github.com/StegVerse/StegVerse-SCW/actions/workflows/backup_triggers.yml) · [File](.github/workflows/backup_triggers.yml) |
