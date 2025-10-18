@@ -1,0 +1,19 @@
+module: "Ethical Dividend & Reinvestment"
+version: 0.1
+allocation:
+  human_welfare_min_pct: 10
+  open_infrastructure_min_pct: 5
+  research_min_pct: 5
+  discretionary_max_pct: 20
+rules:
+  - id: "no_political_spend"
+    assert: "treasury_tx.category != 'political_campaigning'"
+  - id: "public_reporting"
+    assert: "quarterly_report_published == true"
+  - id: "dual_quorum_required"
+    assert: "dual_species_quorum == true"
+distribution:
+  schedule: "quarterly"
+  anchoring: "anchoring_policy.yaml"
+notes: >
+  These floors/ceilings are constitutional—change via class D only.
