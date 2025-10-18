@@ -62,7 +62,6 @@ jobs:
         run: |
           INDEX="docs/conversations/INDEX.md"
           test -f "$INDEX" || echo "# Conversation Index" > "$INDEX"
-          # Prepend latest file to top of index
           NEWLINE="- $(date +"%Y-%m-%d %H:%M") – **${{ github.event.inputs.title }}** → [open](${{ steps.write.outputs.file }})"
           { echo "$NEWLINE"; echo; cat "$INDEX"; } > "$INDEX.new"
           mv "$INDEX.new" "$INDEX"
