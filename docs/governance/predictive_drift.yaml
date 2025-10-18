@@ -1,0 +1,38 @@
+module: "Predictive Drift (Early Warning)"
+version: 0.1
+inputs:
+  window_days: [7, 30]
+  features:
+    - QPR            # Quorum Participation Rate
+    - OD             # Outcome Divergence
+    - VQF            # Veto/Quarantine Frequency
+    - AD             # Alignment Delta
+    - EP             # Economic Parity
+    - EC             # Equity Concentration
+    - Trend(QPR,OD)  # first derivative features
+    - Seasonality    # weekly cadence effects
+model:
+  method: "EWMA + CUSUM + simple LSTM forecaster"
+  forecast_horizon_days: 14
+  retrain_interval_hours: 24
+thresholds:
+  warn_score: 60         # current drift score (from drift_monitor.yaml)
+  forecast_time_to_warn_days: 7
+  forecast_time_to_freeze_days: 3
+responses:
+  - condition: "forecast_time_to_warn_days <= 7"
+    actions:
+      - "emit:pre_mediation_suggestion"
+      - "temporary:+2 domains required for class C/D changes"
+  - condition: "forecast_time_to_freeze_days <= 3"
+    actions:
+      - "auto:raise_timelock(+6h) for classes C/D"
+      - "incentive:bonus_credits for cross-species co-sponsorship"
+api:
+  endpoints:
+    - GET  /drift/predict   # returns current score + forecast + confidence
+    - POST /drift/mitigate  # records accepted auto-mitigations (for receipts)
+audit:
+  anchor_with: "anchoring_policy.yaml"
+notes: >
+  This is an additive early warning layer; it never approves capability growth.
