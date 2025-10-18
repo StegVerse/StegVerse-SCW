@@ -1,0 +1,26 @@
+classes:
+  A:
+    name: SafetyHotfix
+    mayIncreaseCapabilities: false
+    mayAddEgress: false
+    timelock_hours: 0
+    auto_quorum: true
+  B:
+    name: ContinuityFix
+    mayIncreaseCapabilities: false
+    mayAddEgress: false
+    timelock_hours: 6
+    auto_quorum: true
+  C:
+    name: FeatureChange
+    mayIncreaseCapabilities: true
+    mayAddEgress: true
+    timelock_hours: 24
+    auto_quorum: false
+  D:
+    name: EconomicChange
+    mayIncreaseCapabilities: true
+    mayAddEgress: true
+    timelock_hours: 24
+    auto_quorum: false
+notes: "These mirror the kernel verifier’s expectations."
