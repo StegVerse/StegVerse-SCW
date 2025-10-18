@@ -1,0 +1,22 @@
+module: "Ledger-Anchored DID Governance"
+version: 0.1
+did_method: "did:steg"
+document:
+  fields: [public_keys, service_endpoints, guardians, delegations, attestation]
+updates:
+  require:
+    - "dual_species_quorum"
+    - "change_class in ['B','C']"
+    - "timelock >= 6h"
+anchors:
+  targets: [tsa, ethereum]
+  cadence_min: 120
+delegation:
+  allow_deputies: true
+  deputy_limits:
+    - "no changes to guardians"
+    - "keys rotation only"
+revocation:
+  reasons: [compromise, drift_freeze, sanction]
+interop:
+  export_to: ["did:key","did:web"]
