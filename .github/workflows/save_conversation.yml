@@ -1,0 +1,76 @@
+name: Save Conversation Note
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "Short title for this conversation"
+        required: true
+      content:
+        description: "Paste notes / transcript (Markdown allowed)"
+        required: true
+      tags:
+        description: "Comma-separated tags (optional)"
+        required: false
+permissions:
+  contents: write
+
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Prepare paths
+        run: mkdir -p docs/conversations
+
+      - name: Write note
+        id: write
+        env:
+          TITLE: ${{ github.event.inputs.title }}
+          CONTENT: ${{ github.event.inputs.content }}
+          TAGS: ${{ github.event.inputs.tags }}
+        run: |
+          TS=$(date -u +"%Y%m%d-%H%M%S")
+          SLUG=$(echo "$TITLE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')
+          FILE="docs/conversations/${TS}-${SLUG}.md"
+          DATE_LOCAL=$(date +"%Y-%m-%d %H:%M")
+          {
+            echo "---"
+            echo "title: \"${TITLE}\""
+            echo "date: \"${DATE_LOCAL}\""
+            echo "participants: [\"Rigel\", \"Assistant\"]"
+            echo "tags: [${TAGS}]"
+            echo "---"
+            echo
+            echo "# Next actions (resume here)"
+            echo "- [ ] <fill me>"
+            echo
+            echo "# Decisions / agreements"
+            echo "- <fill me>"
+            echo
+            echo "# Open questions"
+            echo "- <fill me>"
+            echo
+            echo "# Notes"
+            echo "${CONTENT}"
+            echo
+          } > "$FILE"
+          echo "file=$FILE" >> $GITHUB_OUTPUT
+
+      - name: Update index
+        run: |
+          INDEX="docs/conversations/INDEX.md"
+          test -f "$INDEX" || echo "# Conversation Index" > "$INDEX"
+          # Prepend latest file to top of index
+          NEWLINE="- $(date +"%Y-%m-%d %H:%M") – **${{ github.event.inputs.title }}** → [open](${{ steps.write.outputs.file }})"
+          { echo "$NEWLINE"; echo; cat "$INDEX"; } > "$INDEX.new"
+          mv "$INDEX.new" "$INDEX"
+
+      - name: Commit & push
+        run: |
+          git config user.name "notes-bot"
+          git config user.email "notes-bot@users.noreply.github.com"
+          git add docs/conversations
+          git commit -m "notes: ${{ github.event.inputs.title }}"
+          git push
