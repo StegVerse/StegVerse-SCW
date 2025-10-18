@@ -1,0 +1,24 @@
+module: "Agent-to-Agent Microledger (A2A)"
+version: 0.1
+purpose: "Enable low-friction AI↔AI micropayments for sub-tasks inside StegVerse."
+ledger:
+  type: "append-only internal microledger"
+  currency: "credits"   # separate from external bridge tokens
+  max_tx_per_second: 100
+guards:
+  per_tx_cap: 10
+  daily_cap_per_agent: 1000
+  allowed_purposes: [compute, data_query, bandwidth, small_bounty]
+  deny_egress: true          # no external payments from microledger
+  reconciliation_interval_min: 60
+quorum:
+  changes_to_caps_require: "class C, dual-species quorum"
+receipts:
+  merkle_root_interval_min: 60
+  anchor_targets: [tsa]      # can add more in anchoring policy
+api:
+  - POST /a2a/payment {from, to, amount, purpose}
+  - GET  /a2a/balance/{agent}
+  - GET  /a2a/receipt/{txid}
+notes: >
+  Keeps tiny exchanges fluid without hitting the Vault for every micro-task.
