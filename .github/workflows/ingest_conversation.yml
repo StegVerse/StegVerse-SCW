@@ -1,0 +1,120 @@
+name: Ingest Full Conversation (auto-split & index)
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "Overall title (e.g., 'StegVerse convo 2025-10-18')"
+        required: true
+      content:
+        description: "Paste the ENTIRE conversation here (markdown/plain text)"
+        required: true
+      section_hint:
+        description: "Optional delimiter (e.g., '###' or '--- section:')"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Prep folders
+        run: mkdir -p docs/conversations
+
+      - name: Split & tag content (Python)
+        id: split
+        env:
+          TITLE: ${{ github.event.inputs.title }}
+          RAW: ${{ github.event.inputs.content }}
+          HINT: ${{ github.event.inputs.section_hint }}
+        run: |
+          python - <<'PY'
+          import os, re, json, pathlib, datetime
+          base = pathlib.Path("docs/conversations")
+          base.mkdir(parents=True, exist_ok=True)
+
+          title = os.environ["TITLE"].strip()
+          raw   = os.environ["RAW"]
+          hint  = os.environ.get("HINT","").strip()
+
+          # Normalize newlines
+          text = raw.replace("\r\n","\n").replace("\r","\n")
+
+          # Split into sections
+          if hint:
+              parts = [p.strip() for p in re.split(rf"(?:{re.escape(hint)}\s*)", text) if p.strip()]
+          else:
+              parts = re.split(r"(?m)^#{1,6}\s.*$|^\s*—{3,}\s*$|^\s*---+\s*$", text)
+              parts = [p.strip() for p in parts if p.strip()]
+
+          TOPIC_MAP = {
+              "governance": r"\bconstitution|quorum|invariant|governance|council|verifier\b",
+              "economy": r"\btokens?|treasury|emission|staking|credits?\b",
+              "drift": r"\bdrift|divergence|cusum|monitor|alignment delta\b",
+              "anchoring": r"\banchor|merkle|op_return|calldata|tsa|transparency log\b",
+              "vault-bridge": r"\bbridge|external\s+(tx|purchase|market)|escrow|oracle\b",
+              "citizenship": r"\bcharter|rights|duties|welfare|ai citizenship\b",
+              "security": r"\bcapabilities?|egress|sandbox|slsa|sigstore|sbom|supply[- ]chain\b",
+              "comms": r"\bmatrix|secure messaging|outreach|activitypub\b",
+              "mvp/roadmap": r"\bmvp|pilot|timeline|week\s+\d|roadmap|demo\b",
+              "legal": r"\blicense|hippocratic|foundation|llc|non[- ]profit|compliance|gdpr|ccpa\b",
+          }
+
+          def tags_for(s):
+              tags = [k for k,pat in TOPIC_MAP.items() if re.search(pat, s, flags=re.I)]
+              return tags or ["general"]
+
+          ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+          def slugify(s):
+              s = s.lower()
+              s = re.sub(r"[^a-z0-9]+","-", s).strip("-")
+              return s[:60] or "section"
+
+          written=[]
+          for i,part in enumerate(parts, start=1):
+              m = re.search(r"(?m)^\s*#{1,6}\s+(.*)", part)
+              sect_title = m.group(1).strip() if m else " ".join(part.split()[:8]) + ("..." if len(part.split())>8 else "")
+              sect_title = sect_title or f"Section {i}"
+              tags = tags_for(part)
+              name = f"{ts}-{i:02d}-{slugify(tags[0])}.md"
+              p = base / name
+              date_local = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+              md = []
+              md += ["---"]
+              md += [f'title: "{sect_title}"']
+              md += [f'date: "{date_local}"']
+              md += [f'participants: ["Rigel","Assistant"]']
+              md += [f'tags: {json.dumps(tags)}']
+              md += ["---",""]
+              md += ["# Next actions (resume here)","\n- [ ] <fill me>",""]
+              md += ["# Notes","\n"+part,"\n"]
+              p.write_text("\n".join(md), encoding="utf-8")
+              written.append((sect_title, str(p)))
+
+          # Update master index
+          index = base / "INDEX.md"
+          if not index.exists():
+              index.write_text("# Conversation Index\n", encoding="utf-8")
+          nowlines = []
+          for sect_title, path in written:
+              now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+              nowlines.append(f"- {now} – **{sect_title}** → [open]({path})\n")
+          existing = index.read_text(encoding="utf-8")
+          index.write_text("".join(nowlines) + "\n" + existing, encoding="utf-8")
+
+          print("WROTE:", json.dumps(written))
+          PY
+
+      - name: Commit & push
+        run: |
+          git config user.name "notes-bot"
+          git config user.email "notes-bot@users.noreply.github.com"
+          git add docs/conversations
+          git commit -m "Ingest full conversation: auto-split & index"
+          git push
