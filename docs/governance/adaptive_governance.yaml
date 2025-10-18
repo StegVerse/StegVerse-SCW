@@ -1,0 +1,23 @@
+module: "Adaptive Governance Parameters"
+version: 0.1
+bounded_params:
+  quorum_threshold:
+    base: 0.67
+    min: 0.60
+    max: 0.75
+    adapt_rule: "±0.01 per 30 stable days if drift<40"
+  timelock_hours_class_C:
+    base: 24
+    min: 12
+    max: 48
+    adapt_rule: "+6 if forecast_time_to_freeze<=3; -6 after 60 stable days"
+  domain_diversity_min:
+    base: 3
+    min: 3
+    max: 5
+    adapt_rule: "+1 when OD>0.4 for 14 days"
+guards:
+  change_class_required: "C"
+  proofs_required: [policy_diff, drift_report]
+audit:
+  record_param_history: true
