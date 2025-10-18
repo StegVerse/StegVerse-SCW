@@ -1,0 +1,35 @@
+module: "ModelOps Lifecycle Governance"
+version: 0.1
+entities:
+  - model_id
+  - owner_agent
+  - version
+  - training_data_refs   # hashed manifests/SBOM-like
+states:
+  - Active
+  - Candidate
+  - Deprecated
+  - Quarantined
+transitions:
+  - from: Candidate
+    to: Active
+    requires:
+      - eval_pass >= policy.thresholds.eval_pass
+      - bias_check_pass == true
+      - dual_species_signoff == true
+  - from: Active
+    to: Deprecated
+    requires: [ dual_species_signoff ]
+  - from: Active
+    to: Quarantined
+    requires: [ anomaly_triggered == true ]
+policy:
+  thresholds:
+    eval_pass: 0.80
+    drift_alert_freeze: 80
+  retrain:
+    allow: true
+    requires: [ reproducible_recipe, governance_ticket ]
+audit:
+  anchor_model_lineage: true
+  public_cards: true   # publish redacted eval info by default
