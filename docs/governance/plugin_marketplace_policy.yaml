@@ -1,0 +1,23 @@
+module: "StegCore Plugin Marketplace"
+version: 0.1
+submission:
+  requirements:
+    - signed_bundle
+    - sbom_present
+    - capability_manifest
+    - privacy_review_form
+review:
+  committee: ["HUMAN:sec", "AI:guardian", "HUMAN:privacy"]
+  sla_days: 7
+ratings:
+  dimensions: [security, privacy, usefulness, performance]
+  weight_security: 0.4
+  min_score_to_list: 3.5
+listing:
+  channels: [stable, beta, experimental]
+  egress_default: "deny"
+  scopes_default: ["read_local","log_emit"]
+economics:
+  revenue_share_pct: 20
+  payout_cadence_days: 30
+  audit_receipts: true
